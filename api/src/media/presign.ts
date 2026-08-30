@@ -2,44 +2,11 @@ import { randomBytes } from 'node:crypto';
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { Logger, MediaPresigner, PresignInput, PresignResult } from '../deps.ts';
+import { ALLOWED_CONTENT_TYPES, EXTENSIONS, MAX_UPLOAD_BYTES, MEDIA_KEY_PREFIX, PRESIGN_EXPIRES_IN_SECONDS } from './limits.ts';
 
-/**
- * メディアのキー接頭辞。
- *
- * **infra/lib/site-stack.ts の MEDIA_PATH_PATTERN（'/media/*'）から機械的に導出できる形。**
- * CloudFront のビヘイビア・S3 のキー空間・IAM のリソース ARN の 3 つが同じ接頭辞で
- * 揃っていないと動かない。test/unit/media-presign.test.ts が infra の定数と突き合わせている。
- */
-export const MEDIA_KEY_PREFIX = 'media/';
+// 既存の import 元を壊さないための再 export。実体は limits.ts にある。
+export { ALLOWED_CONTENT_TYPES, MAX_UPLOAD_BYTES, MEDIA_KEY_PREFIX, PRESIGN_EXPIRES_IN_SECONDS };
 
-/** 署名の有効期限。長くしても得が無く、漏れたときの窓が広がるだけ。 */
-export const PRESIGN_EXPIRES_IN_SECONDS = 900;
-
-/** 1 ファイルの上限。10 MiB。 */
-export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
-
-/**
- * 許可する content type。
- *
- * **text/html と image/svg+xml を入れないこと。** どちらもメディアバケットに置かれると
- * CloudFront 経由で実行可能なコンテンツになる（SVG は script を含められる）。
- */
-export const ALLOWED_CONTENT_TYPES: ReadonlySet<string> = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/webp',
-  'image/gif',
-  'image/avif',
-]);
-
-/** 拡張子は **content type から導出する**。ユーザが送ったファイル名の拡張子は信用しない。 */
-const EXTENSIONS: Readonly<Record<string, string>> = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/webp': 'webp',
-  'image/gif': 'gif',
-  'image/avif': 'avif',
-};
 
 export class MediaValidationError extends Error {
   readonly field: string;
