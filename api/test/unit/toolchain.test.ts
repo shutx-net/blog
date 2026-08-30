@@ -172,6 +172,20 @@ describe('api/tsconfig.json', () => {
     expect(apiTsConfig().compilerOptions?.['erasableSyntaxOnly']).toBe(true);
   });
 
+  it('skipLibCheck が true（astro の .d.ts を api の型検査に持ち込まないため）', () => {
+    // **infra には無い設定なので、理由をここに残す。**
+    // test/contract/frontmatter-schema.test.ts が site の postSchema を実物で import
+    // する結果、astro / shiki / unstorage の .d.ts が api の tsc に引きずり込まれる。
+    // それらは DOM lib と省略可能な peer 依存を前提に書かれており、api の
+    // lib:["ES2023"] / types:["node"] では 130 件超のエラーになる（実測）。
+    //
+    // **lib に "DOM" を足して解決してはいけない。** api は Lambda のコードで、
+    // window や HTMLElement が型として見えてよい理由が無い。skipLibCheck が
+    // 飛ばすのは .d.ts 自身の検査だけで、api 自身のコードの検査は一切緩まない。
+    expect(apiTsConfig().compilerOptions?.['skipLibCheck']).toBe(true);
+    expect(apiTsConfig().compilerOptions?.['lib'], 'DOM を足さない').toEqual(['ES2023']);
+  });
+
   it('infra と同じ厳しさ（strict / verbatimModuleSyntax / nodenext）である', () => {
     const options = apiTsConfig().compilerOptions ?? {};
     expect(options['strict']).toBe(true);

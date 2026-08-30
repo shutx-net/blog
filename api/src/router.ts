@@ -2,6 +2,8 @@ import { AUTH_NOT_CONFIGURED } from './auth.ts';
 import type { Deps } from './deps.ts';
 import type { ApiRequest, ApiResponse } from './http.ts';
 import { InvalidJsonBodyError, errorResponse, isJsonContentType, jsonResponse, parseJsonObject } from './http.ts';
+import { renderMarkdown } from './posts/frontmatter.ts';
+import { PostValidationError, validatePost } from './posts/validate.ts';
 
 export interface RouteContext {
   request: ApiRequest;
@@ -46,11 +48,23 @@ const githubAppHealth = async ({ request, deps }: RouteContext): Promise<ApiResp
 };
 
 const createPost = async ({ body, deps }: RouteContext): Promise<ApiResponse> => {
-  const slug = String(body['slug'] ?? '');
+  let post;
+  try {
+    post = validatePost(body, deps.now());
+  } catch (error) {
+    if (error instanceof PostValidationError) {
+      // どのフィールドが悪いかだけを返す。**入力値そのものは返さない。**
+      return jsonResponse(400, { error: 'invalid_post', field: error.field });
+    }
+    throw error;
+  }
+
   const result = await deps.publisher.publish({
-    slug,
-    markdown: String(body['body'] ?? ''),
-    message: `feat(site): 記事 ${slug} を追加`,
+    slug: post.slug,
+    markdown: renderMarkdown(post),
+    // AGENTS.md の Conventional Commits はリポジトリ規約なので、API 経由の
+    // コミットにも同じように適用する。
+    message: `feat(site): 記事 ${post.slug} を追加`,
   });
   return jsonResponse(201, result);
 };

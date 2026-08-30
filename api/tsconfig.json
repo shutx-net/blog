@@ -1,8 +1,13 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023"],
-    "types": ["node"],
+    "lib": [
+      "ES2023"
+    ],
+    "types": [
+      "node"
+    ],
+    "skipLibCheck": true,
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "strict": true,
@@ -12,5 +17,9 @@
     "allowImportingTsExtensions": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "vitest.config.ts"
+  ]
 }
