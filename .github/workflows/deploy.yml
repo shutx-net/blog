@@ -124,7 +124,7 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ap-northeast-1
 
-      # `${{ }}` を run に直接埋めず env: を経由する。GitHub のセキュリティ強化ガイドが
+      # GitHub の式を run に直接埋めず env: を経由する。セキュリティ強化ガイドが
       # "For inline scripts, the preferred approach to handling untrusted input is to
       # set the value of the expression to an intermediate environment variable" と
       # 明記している。Actions 変数を書けるのは管理者だけなので実リスクは低いが、

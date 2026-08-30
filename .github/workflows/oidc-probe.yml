@@ -36,7 +36,7 @@ jobs:
           set -euo pipefail
 
           # ACTIONS_ID_TOKEN_REQUEST_* はランナーが id-token: write のときだけ入れる。
-          # ${{ }} を使わないので、スクリプトインジェクションの経路が無い。
+          # GitHub の式を一切埋め込まないので、スクリプトインジェクションの経路が無い。
           token="$(curl -sS \
             -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')"
