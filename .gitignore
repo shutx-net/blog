@@ -1,0 +1,26 @@
+# Nix / direnv
+.direnv/
+result
+result-*
+
+# Node
+node_modules/
+*.tsbuildinfo
+
+# Astro
+site/dist/
+site/.astro/
+admin/dist/
+api/dist/
+
+# CDK
+infra/cdk.out/
+infra/.cdk.staging/
+
+# Local / personal
+.env
+.env.*
+!.env.example
+CLAUDE.local.md
+.envrc.local
+.DS_Store
