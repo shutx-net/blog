@@ -136,6 +136,55 @@ describe('cdk synth が出力した実テンプレート: BlogSiteStack 固有',
     expect(raw).not.toContain('CloudFrontOriginAccessIdentity');
     expect(raw).not.toContain('origin-access-identity');
   });
+
+  it('**実ファイル上でも Secret の Properties キーが ["Description"] のみ**', () => {
+    // Template.fromStack ではなく cdk CLI が書いたバイト列で確認する。
+    // フィーチャーフラグや cdk.json の context が合成結果を変えても検出できる。
+    //
+    // CDK の既定（GenerateSecretString: {}）に戻ると、デプロイ時に 32 文字の
+    // ランダムパスワードが AWSCURRENT に入る。**このアサーションと
+    // test/posting-api.test.ts の同等のものだけが検出できる**（実測）。
+    const secrets = Object.values(
+      asTemplate('BlogSiteStack').findResources('AWS::SecretsManager::Secret'),
+    ) as Array<{ Properties?: Record<string, unknown> }>;
+    expect(secrets).toHaveLength(1);
+    expect(Object.keys(secrets[0]?.Properties ?? {}).sort()).toEqual(['Description']);
+  });
+
+  it('**実ファイル上でも ManagedPolicyArns を持つ IAM::Role が 0 個**', () => {
+    // 上の『Resource が "*" の Allow 文が 1 つも無い』の穴を塞ぐ。
+    // マネージドポリシーは ARN 参照なのでポリシー文がテンプレートに現れず、
+    // AWSLambdaBasicExecutionRole（logs:* を Resource "*" に許可）が付いていても
+    // あちらは緑のまま通る。**実測で確認済み。**
+    const roles = Object.values(
+      asTemplate('BlogSiteStack').findResources('AWS::IAM::Role'),
+    ) as Array<{ Properties?: Record<string, unknown> }>;
+    expect(roles.length, 'ロールが 1 件以上あること').toBeGreaterThan(0);
+    expect(roles.filter((role) => role.Properties?.['ManagedPolicyArns'] !== undefined)).toEqual([]);
+  });
+
+  it('実ファイル上でも Lambda::Url の AuthType が AWS_IAM', () => {
+    const urls = Object.values(
+      asTemplate('BlogSiteStack').findResources('AWS::Lambda::Url'),
+    ) as Array<{ Properties?: { AuthType?: string } }>;
+    expect(urls).toHaveLength(1);
+    expect(urls[0]?.Properties?.AuthType).toBe('AWS_IAM');
+  });
+
+  it('実ファイル上でも AUTH_MODE が deny-all', () => {
+    const functions = Object.values(
+      asTemplate('BlogSiteStack').findResources('AWS::Lambda::Function'),
+    ) as Array<{ Properties?: { Environment?: { Variables?: Record<string, unknown> } } }>;
+    expect(functions).toHaveLength(1);
+    expect(functions[0]?.Properties?.Environment?.Variables?.['AUTH_MODE']).toBe('deny-all');
+  });
+
+  it('生バイト列にも -----BEGIN が現れない（collectStrings と二重化）', () => {
+    // 上の describe.each が collectStrings で走査しているのと同じことを、
+    // **文字列としての grep 相当**でもう一度行う。構造化された走査が
+    // 見落とす場所（キー名やコメント）に入っても落ちる。
+    expect(readRaw('BlogSiteStack')).not.toContain('-----BEGIN');
+  });
 });
 
 describe('cdk synth が出力した実テンプレート: BlogCicdStack 固有', () => {

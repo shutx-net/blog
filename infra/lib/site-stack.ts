@@ -6,6 +6,7 @@ import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 import { MediaBucket } from './media-bucket.ts';
+import { PostingApi } from './posting-api.ts';
 
 // cdk synth がどこから実行されるか分からないので、cwd 基準の相対パスにしない。
 // "type": "module" なので __dirname は存在しない。
@@ -125,6 +126,15 @@ export class SiteStack extends Stack {
     });
 
     this.distribution = distribution;
+
+    // 投稿 API。**Stack ではなく Construct にしている**（理由は README と
+    // posting-api.ts のコメント）。この時点では CloudFront には繋がない（step 3.11）。
+    new PostingApi(this, 'PostingApi', {
+      mediaBucket: this.mediaBucket,
+      githubOwner: 'shutx-net',
+      githubRepo: 'blog',
+      githubAppClientId: 'not-configured',
+    });
 
     new CfnOutput(this, 'SiteBucketName', {
       value: siteBucket.bucketName,
