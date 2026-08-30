@@ -203,6 +203,56 @@ URI 書き換えは「最後のスラッシュより後にドットがあれば�
 `cdk_best_practices` の「Model with constructs, deploy with stacks — Represent logical units as
 Construct, not Stack. Use stacks only for deployment composition」とも一致する。
 
+### 投稿 API も別 Stack にできない（ただし理由が上とは違う）
+
+`PostingApi` も `lib/posting-api.ts` の Construct として `SiteStack` の中にある。
+**同じ結論だが、原因はメディアバケットのときとは別物である。** ここを
+「OAC だから循環する」と丸めて覚えると、メディアバケットに触らない別の Lambda まで
+不要に `SiteStack` へ押し込むことになる。
+
+`FunctionUrlOrigin.withOriginAccessControl()` は `S3BucketOrigin` と **形が違う**。
+`s3-bucket-origin` はバケット側のリソースポリシーを書き換えるので、バケットのスタックに
+Distribution の `Ref` が入る。対して `function-url-origin` の `addInvokePermission()` は
+`new lambda.CfnPermission(scope, ...)` を **bind の scope（＝ Distribution 側のスタック）** に作る。
+実測でも `AWS::Lambda::Permission` は `BlogSiteStack` 側に生成され、参照は
+`SiteStack -> ApiStack` の一方向で済む。**つまり OAC だけなら別スタックにできる。**
+
+循環させているのは presigned URL 側の要件のほうである。
+
+- Lambda はメディアバケットの **名前** を環境変数で知る必要がある（Api -> Site）
+- Lambda の IAM は同バケットの ARN に `s3:PutObject` を必要とする（Api -> Site）
+- Distribution は Function URL を必要とする（Site -> Api）
+
+実測エラー（環境変数だけの版でも起きる）。
+
+```
+'BlogSiteStack' depends on 'BlogApiStack'
+ (BlogSiteStack -> BlogApiStack/Api/Function/FunctionUrl/Resource.FunctionArn).
+ Adding this dependency (BlogApiStack -> BlogSiteStack/MediaBucket/Bucket/Resource.Ref)
+ would create a cyclic reference.
+```
+
+正確な条件は「**Distribution が参照するリソースと、そのリソースが参照する `SiteStack` 内の
+リソースが両方存在すること**」。将来どうしても分けたくなったら、メディアバケットも
+Distribution も一緒に動かすしかない。
+
+### `additionalBehaviors` の宣言順が本番の差分になる
+
+`additionalBehaviors` のキー順は **`/media/*` -> `/api/*` から変えてはいけない。**
+
+CDK は `Object.entries` の順（＝挿入順）でオリジンに `Origin1` / `Origin2` / `Origin3` と
+番号を振り、OAC の論理 ID はその番号から作られる。実測で `/api/*` を先に書くと、
+メディア用 OAC の論理 ID がこう変わる。
+
+| 宣言順 | メディア用 OAC の論理 ID |
+| --- | --- |
+| `/media/*` -> `/api/*`（正） | `SiteDistributionOrigin2S3OriginAccessControlE0FE6FAA` |
+| `/api/*` -> `/media/*`（誤） | `SiteDistributionOrigin3S3OriginAccessControl4BE73D82` |
+
+機能は同じだが、デプロイ時に **OAC の置換とバケットポリシーの書き換え** が起きる。
+ソース上まったく見えない依存なので、`test/distribution-oac.test.ts` が OAC の論理 ID 集合を
+リテラルで固定している。
+
 ### OIDC プロバイダにサムプリントを書かない
 
 `iam.OidcProviderNative`（`AWS::IAM::OIDCProvider`）に `thumbprints` を **渡していない**。

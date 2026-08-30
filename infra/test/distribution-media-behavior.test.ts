@@ -1,7 +1,7 @@
 import { App } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
-import { MEDIA_PATH_PATTERN, SiteStack } from '../lib/site-stack.ts';
+import { API_PATH_PATTERN, MEDIA_PATH_PATTERN, SiteStack } from '../lib/site-stack.ts';
 
 interface CacheBehavior {
   PathPattern?: string;
@@ -27,15 +27,22 @@ const distributionConfig = (): DistributionConfig => {
 
 const cacheBehaviors = (): CacheBehavior[] => distributionConfig().CacheBehaviors ?? [];
 
-/** 件数を先に主張して非空ガードにしてから、唯一のビヘイビアを取る。 */
+/**
+ * PathPattern で **名指しして** 取る。
+ *
+ * Phase 2 までは「追加ビヘイビアはちょうど 1 件」で取っていたが、Phase 3 で /api/* が
+ * 増えて 6 件が赤くなった。件数で位置を特定する形は、ビヘイビアが増えるたびに壊れる。
+ * **名指しにすると、以後ビヘイビアが何本増えてもこのファイルは正しく効き続ける。**
+ * 総数は下の describe で別に固定しているので、緩めたことにはならない。
+ */
 const mediaBehavior = (): CacheBehavior => {
-  const behaviors = cacheBehaviors();
-  expect(behaviors, '追加ビヘイビアがちょうど 1 件であること').toHaveLength(1);
-  return behaviors[0] as CacheBehavior;
+  const found = cacheBehaviors().filter((behavior) => behavior.PathPattern === MEDIA_PATH_PATTERN);
+  expect(found, `${MEDIA_PATH_PATTERN} のビヘイビアがちょうど 1 件であること`).toHaveLength(1);
+  return found[0] as CacheBehavior;
 };
 
 describe('/media/* の追加ビヘイビア', () => {
-  it('CacheBehaviors がちょうど 1 件で、PathPattern が定数と一致する', () => {
+  it('PathPattern が定数と一致する', () => {
     expect(mediaBehavior().PathPattern).toBe(MEDIA_PATH_PATTERN);
   });
 
@@ -52,8 +59,18 @@ describe('/media/* の追加ビヘイビア', () => {
     expect(target).not.toBe(distributionConfig().DefaultCacheBehavior?.TargetOriginId);
   });
 
-  it('Origins がちょうど 2 件ある', () => {
-    expect(distributionConfig().Origins).toHaveLength(2);
+  it('Origins がちょうど 3 件ある（配信用 S3 / メディア S3 / Function URL）', () => {
+    expect(distributionConfig().Origins).toHaveLength(3);
+  });
+
+  it('CacheBehaviors がちょうど 2 件で、順序が /media/* -> /api/* である', () => {
+    // **順序に意味がある。** CDK はキーの挿入順でオリジンに番号を振り、
+    // OAC の論理 ID がその番号から作られる。/api/* を先に書くとメディア用 OAC が
+    // 置換される（distribution-oac.test.ts が論理 ID 集合を固定している）。
+    expect(cacheBehaviors().map((behavior) => behavior.PathPattern)).toEqual([
+      MEDIA_PATH_PATTERN,
+      API_PATH_PATTERN,
+    ]);
   });
 
   it('メディアビヘイビアの ViewerProtocolPolicy が redirect-to-https', () => {

@@ -21,6 +21,19 @@ const REWRITE_URI_PATH = fileURLToPath(new URL('../functions/rewrite-uri.js', im
 export const MEDIA_PATH_PATTERN = '/media/*';
 
 /**
+ * 投稿 API に振り分けるパス。
+ *
+ * **additionalBehaviors のキー順は /media/* -> /api/* から変えないこと。**
+ * CDK は Object.entries の順（＝挿入順）でオリジンに Origin1/Origin2/Origin3 と
+ * 番号を振り、OAC の論理 ID はその番号から作られる。実測で /api/* を先に書くと
+ * メディア用 OAC の論理 ID が SiteDistributionOrigin2S3OriginAccessControlE0FE6FAA から
+ * SiteDistributionOrigin3S3OriginAccessControl4BE73D82 に変わり、デプロイ時に
+ * **OAC の置換とバケットポリシーの書き換え**が起きる。機能は変わらないが差分が出る。
+ * test/distribution-oac.test.ts が論理 ID 集合を固定している。
+ */
+export const API_PATH_PATTERN = '/api/*';
+
+/**
  * 静的サイト配信スタック。
  *
  * env は意図的に指定しない（env-agnostic）。本フェーズは AWS 認証情報を
@@ -54,6 +67,16 @@ export class SiteStack extends Stack {
     // 落ちるため（media-bucket.ts のコメントと README を参照）。
     const media = new MediaBucket(this, 'MediaBucket');
     this.mediaBucket = media.bucket;
+
+    // 投稿 API。**Stack ではなく Construct にしている**（理由は README と
+    // posting-api.ts のコメント）。Distribution が functionUrl を参照するので
+    // ここで先に作る。
+    const postingApi = new PostingApi(this, 'PostingApi', {
+      mediaBucket: this.mediaBucket,
+      githubOwner: 'shutx-net',
+      githubRepo: 'blog',
+      githubAppClientId: 'not-configured',
+    });
 
     // runtime を省略すると既定は JS_1_0。1.0 は const / let / endsWith を保証しないので
     // 必ず 2.0 を明示する。ここが消えるとテンプレートは通るのにデプロイ後に壊れる。
@@ -96,6 +119,24 @@ export class SiteStack extends Stack {
           origin: origins.S3BucketOrigin.withOriginAccessControl(this.mediaBucket),
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         },
+        // 投稿 API。**/media/* より後に書く**（上の API_PATH_PATTERN のコメント）。
+        [API_PATH_PATTERN]: {
+          origin: origins.FunctionUrlOrigin.withOriginAccessControl(postingApi.functionUrl),
+          // **https-only。redirect-to-https ではない。**
+          // リダイレクトされると POST のボディが失われる。API へのプレーン HTTP は
+          // 曖昧に転送せず拒否する。
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+          // 既定は GET/HEAD だけ。指定を忘れると POST が 405 になる。
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          // API の応答をキャッシュさせない。Lambda 側も Cache-Control: no-store を返す
+          // （二重化。ポリシー ID を取り違えても API 側で守られる）。
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          // **Host を転送してはいけない。** 転送すると OAC の SigV4 署名が
+          // Lambda URL のホストと一致せず必ず失敗する。
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          // functionAssociations は付けない。URI 書き換え Function は拡張子の無いパスに
+          // /index.html を足すので、/api/posts が /api/posts/index.html になってしまう。
+        },
       },
       // 403 も入れるのが本質。OAC + S3 REST オリジンではバケットポリシーに
       // s3:ListBucket が無く、S3 が「存在しない」と「権限が無い」を区別しないため、
@@ -126,15 +167,6 @@ export class SiteStack extends Stack {
     });
 
     this.distribution = distribution;
-
-    // 投稿 API。**Stack ではなく Construct にしている**（理由は README と
-    // posting-api.ts のコメント）。この時点では CloudFront には繋がない（step 3.11）。
-    new PostingApi(this, 'PostingApi', {
-      mediaBucket: this.mediaBucket,
-      githubOwner: 'shutx-net',
-      githubRepo: 'blog',
-      githubAppClientId: 'not-configured',
-    });
 
     new CfnOutput(this, 'SiteBucketName', {
       value: siteBucket.bucketName,

@@ -15,6 +15,7 @@ interface CfnOrigin {
   DomainName?: unknown;
   OriginAccessControlId?: unknown;
   S3OriginConfig?: Record<string, unknown>;
+  CustomOriginConfig?: Record<string, unknown>;
 }
 
 const template = Template.fromStack(new SiteStack(new App(), 'TestStack'));
@@ -38,6 +39,19 @@ const distributionOrigins = (): CfnOrigin[] => {
     | { Properties?: { DistributionConfig?: { Origins?: CfnOrigin[] } } }
     | undefined;
   return dist?.Properties?.DistributionConfig?.Origins ?? [];
+};
+
+/**
+ * オリジンを S3 と非 S3 に分解する。
+ *
+ * **非 S3 を黙って除外しない。** 総数 = S3 の数 + Lambda の数 という内訳を
+ * 明示的に主張することで、分類漏れ（新種のオリジンが増えたのに誰も見ていない）が落ちる。
+ */
+const originsByKind = (): { all: CfnOrigin[]; s3: CfnOrigin[]; nonS3: CfnOrigin[] } => {
+  const all = distributionOrigins();
+  const s3 = all.filter((origin) => origin.S3OriginConfig !== undefined);
+  const nonS3 = all.filter((origin) => origin.S3OriginConfig === undefined);
+  return { all, s3, nonS3 };
 };
 
 const bucketPolicyStatements = (): PolicyStatement[] => {
@@ -67,12 +81,29 @@ describe('CloudFront Distribution と OAC の結線', () => {
     template.resourceCountIs('AWS::CloudFront::Distribution', 1);
   });
 
-  it('すべてのオリジンがバケットの RegionalDomainName（WebsiteURL ではない）を向いている', () => {
+  it('オリジンの内訳が S3 2 本 + 非 S3 1 本である', () => {
+    // Phase 3 で Function URL オリジンが増えた。**総数と内訳の両方を主張する**ことで、
+    // 「S3 だけ見て非 S3 を無視する」形にせず、分類漏れが出たら落ちるようにする。
+    const { all, s3, nonS3 } = originsByKind();
+    expect(all).toHaveLength(3);
+    expect(s3).toHaveLength(2);
+    expect(nonS3).toHaveLength(1);
+  });
+
+  it('非 S3 オリジンは Function URL（CustomOriginConfig を持ち https-only）である', () => {
+    const { nonS3 } = originsByKind();
+    const custom = nonS3[0]?.CustomOriginConfig as { OriginProtocolPolicy?: string } | undefined;
+    expect(custom, '非 S3 オリジンは CustomOriginConfig を持つこと').toBeDefined();
+    expect(custom?.OriginProtocolPolicy).toBe('https-only');
+    expect(JSON.stringify(nonS3[0]?.DomainName)).toContain('Fn::Select');
+  });
+
+  it('すべての **S3** オリジンがバケットの RegionalDomainName（WebsiteURL ではない）を向いている', () => {
     // [0] だけを見ると 2 本目のオリジンが S3 ウェブサイトエンドポイントを向いていても
-    // 検出できない。全件ループにしておくと 3 本目が足された日も自動的にカバーされる。
+    // 検出できない。全件ループにしておくと同種が足された日も自動的にカバーされる。
     const bucketIds = logicalIdsOf('AWS::S3::Bucket', 2);
-    const origins = distributionOrigins();
-    expect(origins.length).toBeGreaterThan(0);
+    const origins = originsByKind().s3;
+    expect(origins).toHaveLength(2);
     for (const [index, origin] of origins.entries()) {
       const domainName = origin.DomainName as { 'Fn::GetAtt'?: [string, string] } | undefined;
       const getAtt = domainName?.['Fn::GetAtt'];
@@ -103,10 +134,12 @@ describe('CloudFront Distribution と OAC の結線', () => {
     const allows = bucketPolicyStatements().filter(
       (s) => s.Effect === 'Allow' && isCloudFrontServicePrincipal(s),
     );
-    // オリジン 1 本につき 1 本の Allow が要る。件数を結線数に縛ることで、
-    // オリジンを足したのにバケットポリシーを付け忘れた状態を落とす。
-    expect(allows.length, 'CloudFront 向け Allow はオリジンと同数であること').toBe(
-      distributionOrigins().length,
+    // **S3 オリジン 1 本につき 1 本の Allow が要る。** バケットポリシーの Allow は
+    // S3 オリジンにしか対応しない（Lambda オリジンの対応物は AWS::Lambda::Permission で、
+    // 下の別ケースが主張している）。件数を結線数に縛ることで、S3 オリジンを足したのに
+    // バケットポリシーを付け忘れた状態を落とす。
+    expect(allows.length, 'CloudFront 向け Allow は S3 オリジンと同数であること').toBe(
+      originsByKind().s3.length,
     );
     expect(allows.length).toBeGreaterThan(0);
     for (const [index, allow] of allows.entries()) {
@@ -139,23 +172,68 @@ describe('CloudFront Distribution と OAC の結線', () => {
     }
   });
 
-  it('OAC がちょうど 2 個で、すべて s3 / always / sigv4 である', () => {
+  it('OAC がちょうど 3 個で、すべて always / sigv4 である', () => {
     // hasResourceProperties は 1 件一致で通るので、2 本目が sigv4 でなくても
     // 検出できない。件数ガード + allResourcesProperties で全件を縛る。
-    template.resourceCountIs('AWS::CloudFront::OriginAccessControl', 2);
+    //
+    // **OriginType は型ごとに分けて主張する（下のケース）。** ここで 's3' を
+    // 一括で要求すると Function URL 用の OAC が作れず、逆に型を見ないと
+    // lambda 用 OAC が s3 と書かれていても通ってしまう。
+    template.resourceCountIs('AWS::CloudFront::OriginAccessControl', 3);
     template.allResourcesProperties('AWS::CloudFront::OriginAccessControl', {
       OriginAccessControlConfig: Match.objectLike({
-        OriginAccessControlOriginType: 's3',
         SigningBehavior: 'always',
         SigningProtocol: 'sigv4',
       }),
     });
   });
 
-  it('2 つのオリジンがそれぞれ別の OAC を参照している（共有していない）', () => {
-    const oacIds = logicalIdsOf('AWS::CloudFront::OriginAccessControl', 2);
+  it('OAC の OriginAccessControlOriginType の内訳が s3 2 個・lambda 1 個である', () => {
+    const types = Object.values(
+      template.findResources('AWS::CloudFront::OriginAccessControl'),
+    ).map((oac) => {
+      const typed = oac as {
+        Properties?: { OriginAccessControlConfig?: { OriginAccessControlOriginType?: string } };
+      };
+      return typed.Properties?.OriginAccessControlConfig?.OriginAccessControlOriginType;
+    });
+    expect(types.filter((type) => type === 's3')).toHaveLength(2);
+    expect(types.filter((type) => type === 'lambda')).toHaveLength(1);
+    expect(types.filter((type) => type !== 's3' && type !== 'lambda')).toEqual([]);
+  });
+
+  it('**OAC の論理 ID 集合が固定されている**（宣言順という見えない依存を縛る）', () => {
+    // 実測: additionalBehaviors に /api/* を /media/* より **前** に書くと、
+    // メディア用 OAC の論理 ID が SiteDistributionOrigin2S3OriginAccessControlE0FE6FAA から
+    // SiteDistributionOrigin3S3OriginAccessControl4BE73D82 に変わり、デプロイ時に
+    // OAC の置換とバケットポリシーの書き換えが起きる。
+    // 既存 2 本が Phase 2 から 1 文字も変わっていないこと自体が「置換なし」の証拠になる。
+    expect(Object.keys(template.findResources('AWS::CloudFront::OriginAccessControl')).sort()).toEqual([
+      'SiteDistributionOrigin1S3OriginAccessControl7D960FE6',
+      'SiteDistributionOrigin2S3OriginAccessControlE0FE6FAA',
+      'SiteDistributionOrigin3FunctionUrlOriginAccessControl1ACDDE31',
+    ]);
+  });
+
+  it('Lambda オリジンの対応物は AWS::Lambda::Permission である', () => {
+    // S3 のバケットポリシーに相当するもの。**既存テストはバケットポリシーしか
+    // 走査していなかったので、これを一切見ていなかった。**
+    const permissions = Object.values(template.findResources('AWS::Lambda::Permission')) as Array<{
+      Properties?: { Principal?: string; Action?: string; SourceArn?: unknown };
+    }>;
+    expect(permissions).toHaveLength(1);
+    expect(permissions[0]?.Properties?.Principal).toBe('cloudfront.amazonaws.com');
+    expect(permissions[0]?.Properties?.Action).toBe('lambda:InvokeFunctionUrl');
+    // confused deputy 対策。バケットポリシーの AWS:SourceArn と同じ役割。
+    expect(JSON.stringify(permissions[0]?.Properties?.SourceArn)).toContain(
+      logicalIdOf('AWS::CloudFront::Distribution'),
+    );
+  });
+
+  it('3 つのオリジンがそれぞれ別の OAC を参照している（共有していない）', () => {
+    const oacIds = logicalIdsOf('AWS::CloudFront::OriginAccessControl', 3);
     const origins = distributionOrigins();
-    expect(origins).toHaveLength(2);
+    expect(origins).toHaveLength(3);
     const referenced = origins.map((origin) => {
       const attr = origin.OriginAccessControlId as { 'Fn::GetAtt'?: [string, string] } | undefined;
       const getAtt = attr?.['Fn::GetAtt'];
@@ -166,7 +244,7 @@ describe('CloudFront Distribution と OAC の結線', () => {
     for (const ref of referenced) {
       expect(oacIds).toContain(ref);
     }
-    expect(new Set(referenced).size, '2 本のオリジンが同じ OAC を共有していないこと').toBe(2);
+    expect(new Set(referenced).size, '3 本のオリジンが同じ OAC を共有していないこと').toBe(3);
   });
 
   it('バケットポリシーが 2 本あり、どちらも CloudFront への Allow がちょうど 1 文だけである', () => {
