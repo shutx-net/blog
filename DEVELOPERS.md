@@ -159,9 +159,55 @@ PEM ファイルはこのリポジトリの中に置かないこと（`.gitignor
 鍵を入れ替えるときは、GitHub App は秘密鍵を複数同時に有効化できるので無停止でいける。
 
 1. GitHub の App 設定で新しい鍵を生成（**API では作れない。Web UI のみ**）
-2. `--version-stages AWSPENDING` で新しい鍵を投入し、動作を確認
-3. `update-secret-version-stage` で `AWSCURRENT` に昇格
-4. GitHub 側で古い鍵を削除
+
+2. `AWSPENDING` として投入する。
+
+   ```sh
+   aws secretsmanager put-secret-value \
+     --secret-id "$SECRET_ID" \
+     --secret-binary fileb://blog-app.private-key.new.pem \
+     --version-stages AWSPENDING
+   ```
+
+3. **昇格する前に、その鍵で本当に installation token が取れるかを確かめる。**
+   API に検証用の経路がある。`?versionStage=AWSPENDING` を付けると
+   `AWSPENDING` の鍵だけを読んで（`AWSCURRENT` のキャッシュを使わずに）試す。
+
+   ```sh
+   curl -s "https://<distribution-domain>/api/health/github-app?versionStage=AWSPENDING"
+   # {"status":"ok","canMintInstallationToken":true,"versionStage":"AWSPENDING"}
+   ```
+
+   **この経路は秘密鍵も installation token も返さない。** 返るのは真偽値だけ。
+   `canMintInstallationToken` が `false` なら **昇格してはいけない** — 手順 2 に戻る。
+
+   > この経路は認証必須なので、`AUTH_MODE` が `deny-all` の間は 503 が返る。
+   > Cognito が入るまでは、代わりに Lambda をコンソールから直接テスト実行して同じ判定ができる。
+
+4. `AWSCURRENT` に昇格する。`--remove-from-version-id` には現在の
+   `AWSCURRENT` のバージョン ID を渡す。
+
+   ```sh
+   CURRENT_ID=$(aws secretsmanager describe-secret --secret-id "$SECRET_ID" \
+     --query "VersionIdsToStages | to_entries(@)[?contains(value, 'AWSCURRENT')] | [0].key" --output text)
+   PENDING_ID=$(aws secretsmanager describe-secret --secret-id "$SECRET_ID" \
+     --query "VersionIdsToStages | to_entries(@)[?contains(value, 'AWSPENDING')] | [0].key" --output text)
+   aws secretsmanager update-secret-version-stage \
+     --secret-id "$SECRET_ID" --version-stage AWSCURRENT \
+     --move-to-version-id "$PENDING_ID" --remove-from-version-id "$CURRENT_ID"
+   ```
+
+5. 昇格後にもう一度確認する（今度は `versionStage` を付けずに）。
+
+   ```sh
+   curl -s "https://<distribution-domain>/api/health/github-app"
+   ```
+
+   **Lambda の実行環境は鍵をキャッシュしている。** 昇格直後は古い鍵を掴んだままの
+   実行環境が残りうるので、確実に切り替えたいなら Lambda の設定を 1 つ更新して
+   実行環境を作り直すこと（環境変数の値を変える等）。
+
+6. GitHub 側で古い鍵を削除
 
 ## ツールチェーンの更新
 

@@ -4,6 +4,7 @@ import type { ApiRequest, ApiResponse } from './http.ts';
 import { InvalidJsonBodyError, errorResponse, isJsonContentType, jsonResponse, parseJsonObject } from './http.ts';
 import { renderMarkdown } from './posts/frontmatter.ts';
 import { PostValidationError, validatePost } from './posts/validate.ts';
+import { KeyNotProvisionedError } from './secret.ts';
 
 export interface RouteContext {
   request: ApiRequest;
@@ -136,5 +137,15 @@ export const dispatch = async (request: ApiRequest, deps: Deps): Promise<ApiResp
     }
   }
 
-  return route.handle({ request, body, deps });
+  try {
+    return await route.handle({ request, body, deps });
+  } catch (error) {
+    if (error instanceof KeyNotProvisionedError) {
+      // 鍵がまだ Secrets Manager に入っていない。呼び出し側の誤りではなく設定漏れなので
+      // 4xx にしない。**本フェーズの既定状態がこれ**（CDK は空のシークレットを作る）。
+      deps.logger.error('GitHub App private key is not provisioned');
+      return errorResponse(503, 'key_not_provisioned');
+    }
+    throw error;
+  }
 };

@@ -4,6 +4,7 @@ import { denyAllAuthorizer } from '../../src/auth.ts';
 import type { ApiRequest, ApiResponse } from '../../src/http.ts';
 import type { Deps } from '../../src/deps.ts';
 import { ROUTES, dispatch } from '../../src/router.ts';
+import { KeyNotProvisionedError } from '../../src/secret.ts';
 
 /**
  * すべてのコラボレータをスパイにした deps。
@@ -191,6 +192,56 @@ describe('拒否テストが空虚でないことの対照（同じ入力を許�
     const { deps, tokenProvider } = spyDeps(allowAuthorizer);
     await dispatch(request({ path: '/api/health/github-app' }), deps);
     expect(tokenProvider.getToken).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('鍵が未投入のとき', () => {
+  it('503 key_not_provisioned になる（4xx にしない）', async () => {
+    // CDK は空のシークレットを作るので、鍵を投入するまでこの状態が既定になる。
+    // 呼び出し側の誤りではなく設定漏れなので 4xx では意味が違う。
+    const { deps, tokenProvider } = spyDeps(allowAuthorizer);
+    tokenProvider.getToken = vi.fn(async () => {
+      throw new KeyNotProvisionedError();
+    });
+    const response = await dispatch(request({ path: '/api/health/github-app' }), deps);
+    // health は自前で捕まえて degraded を返す。
+    expect(response.statusCode).toBe(200);
+    expect(bodyOf(response)['canMintInstallationToken']).toBe(false);
+  });
+
+  it('書き込み経路では 503 key_not_provisioned になる', async () => {
+    const { deps, publisher } = spyDeps(allowAuthorizer);
+    publisher.publish = vi.fn(async () => {
+      throw new KeyNotProvisionedError();
+    });
+    const response = await dispatch(
+      jsonPost('/api/posts', {
+        slug: 'hello-world',
+        title: 'タイトル',
+        description: '説明',
+        body: '本文',
+      }),
+      deps,
+    );
+    expect(response.statusCode).toBe(503);
+    expect(bodyOf(response)['error']).toBe('key_not_provisioned');
+  });
+
+  it('503 の本文に例外メッセージが載らない', async () => {
+    const { deps, publisher } = spyDeps(allowAuthorizer);
+    publisher.publish = vi.fn(async () => {
+      throw new KeyNotProvisionedError();
+    });
+    const response = await dispatch(
+      jsonPost('/api/posts', {
+        slug: 'hello-world',
+        title: 'タイトル',
+        description: '説明',
+        body: '本文',
+      }),
+      deps,
+    );
+    expect(response.body).not.toContain('put-secret-value');
   });
 });
 
