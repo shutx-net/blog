@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   AUTH_FAILURE_REASONS,
   AUTH_FAILURE_RESPONSES,
@@ -44,16 +44,42 @@ describe('deny-all の Authorizer', () => {
 });
 
 describe('createAuthorizer', () => {
+  const deps = { logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } };
+
   it('deny-all で denyAllAuthorizer を返す', () => {
-    expect(createAuthorizer('deny-all')).toBe(denyAllAuthorizer);
+    expect(createAuthorizer({ mode: 'deny-all' }, deps)).toBe(denyAllAuthorizer);
   });
 
-  it.each(['off', 'none', '', 'allow-all', 'cognito'])(
-    '未知のモード %o では例外を投げる（Cognito フェーズが来るまで許容値は増えない）',
+  it('cognito で Authorizer を返す', () => {
+    const authorizer = createAuthorizer(
+      {
+        mode: 'cognito',
+        userPoolId: 'ap-northeast-1_TESTPOOL1',
+        clientId: '1example23456789testclientid',
+        allowedUsername: 'shutx',
+      },
+      deps,
+    );
+    expect(typeof authorizer.authorize).toBe('function');
+    expect(authorizer).not.toBe(denyAllAuthorizer);
+  });
+
+  it.each(['off', 'none', '', 'allow-all', 'Cognito', 'COGNITO', ' cognito', 'cognito '])(
+    '未知のモード %o では例外を投げる',
     (mode) => {
-      expect(() => createAuthorizer(mode as never)).toThrow(/AUTH_MODE/);
+      // **大文字小文字と空白を寛容に扱わない。** Phase 3 は deny-all についてしか
+      // 見ていなかったので、新しいモードについても同じ厳しさを固定する。
+      expect(() => createAuthorizer({ mode } as never, deps)).toThrow(/AUTH_MODE/);
     },
   );
+
+  it('**網羅性がコンパイル時に固定されている**（default 節が never を受け取る）', () => {
+    // ランタイムでも throw して二重化してある。モードを足して分岐を書き忘れると
+    // 型検査が落ちる（exhaustive(auth) に AuthConfig が渡らなくなる）。
+    expect(() => createAuthorizer({ mode: 'brand-new-mode' } as never, deps)).toThrow(
+      /AUTH_MODE has no authorizer implementation/,
+    );
+  });
 });
 
 describe('拒否理由から HTTP への写像', () => {

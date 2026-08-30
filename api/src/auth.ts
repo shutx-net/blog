@@ -1,5 +1,8 @@
-import { AUTH_MODE_DENY_ALL } from './config.ts';
-import type { AuthMode } from './config.ts';
+import { AUTH_MODE_COGNITO, AUTH_MODE_DENY_ALL } from './config.ts';
+import type { AuthConfig } from './config.ts';
+import { createCognitoAuthorizer } from './auth/cognito.ts';
+import type { TokenVerifier } from './auth/cognito.ts';
+import type { Logger } from './deps.ts';
 import type { ApiRequest } from './http.ts';
 
 /** deny-all のときの唯一の拒否理由。Phase 3 から不変。 */
@@ -93,9 +96,44 @@ export const denyAllAuthorizer: Authorizer = {
   authorize: async (): Promise<AuthResult> => ({ ok: false, reason: AUTH_NOT_CONFIGURED }),
 };
 
-export const createAuthorizer = (mode: AuthMode): Authorizer => {
-  if (mode === AUTH_MODE_DENY_ALL) return denyAllAuthorizer;
-  // loadConfig が先に弾くので通常ここには来ないが、Authorizer を増やしたときに
-  // 対応を書き忘れたまま「既定で通す」ことにならないよう、ここでも閉じる。
+export interface AuthorizerDeps {
+  logger: Logger;
+  /** cognito モードで注入する verifier。省略時は cognito.ts が本物を作る。 */
+  verifier?: TokenVerifier;
+}
+
+/**
+ * **網羅性をコンパイラに見張らせるための番人。**
+ *
+ * `AuthConfig` に新しい mode を足したのに分岐を書き忘れると、default 節に届く型が
+ * `never` にならないので **型検査が落ちる**。ランタイムでも throw して二重化する。
+ * `erasableSyntaxOnly: true` なので enum は使えず、この形で書く。
+ */
+const exhaustive = (_auth: never): never => {
   throw new Error('AUTH_MODE has no authorizer implementation');
+};
+
+/**
+ * 設定から Authorizer を組み立てる。
+ *
+ * **判別可能ユニオンを受け取るのが要点。** 「cognito なのに pool id が無い」という
+ * 引数は型として作れないので、この関数の中で欠損を気にする必要が無い。
+ */
+export const createAuthorizer = (auth: AuthConfig, deps: AuthorizerDeps): Authorizer => {
+  switch (auth.mode) {
+    case AUTH_MODE_DENY_ALL:
+      return denyAllAuthorizer;
+    case AUTH_MODE_COGNITO:
+      return createCognitoAuthorizer({
+        userPoolId: auth.userPoolId,
+        clientId: auth.clientId,
+        allowedUsername: auth.allowedUsername,
+        ...(deps.verifier === undefined ? {} : { verifier: deps.verifier }),
+        logger: deps.logger,
+      });
+    default:
+      // loadConfig が先に弾くので通常ここには来ないが、「既定で通す」ことに
+      // ならないよう、ランタイムでも閉じる。
+      return exhaustive(auth);
+  }
 };

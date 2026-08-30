@@ -45,7 +45,7 @@ const tokenProvider = createTokenProvider({
 });
 
 const deps: Deps = {
-  authorizer: createAuthorizer(config.authMode),
+  authorizer: createAuthorizer(config.auth, { logger }),
   publisher: createPostPublisher({
     tokenProvider,
     owner: config.githubOwner,
@@ -61,7 +61,7 @@ const deps: Deps = {
   secretReader,
   tokenProvider,
   logger,
-  authMode: config.authMode,
+  authMode: config.auth.mode,
   now: () => Date.now(),
 };
 
