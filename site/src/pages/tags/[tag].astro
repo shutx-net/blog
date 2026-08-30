@@ -1,0 +1,35 @@
+---
+import type { GetStaticPaths } from "astro";
+import { getCollection } from "astro:content";
+
+import Layout from "../../layouts/Layout.astro";
+import { byPubDateDesc, collectTags, isPublished } from "../../lib/posts.ts";
+
+export const getStaticPaths = (async () => {
+  // isPublished belongs here, not merely in the markup below. Tag names are taken
+  // from the posts themselves, so without it a draft-only tag would get its own
+  // page, be synced to S3 and be readable by anyone guessing the URL.
+  const posts = (await getCollection("posts", isPublished)).sort(byPubDateDesc);
+
+  return collectTags(posts).map((tag) => ({
+    params: { tag },
+    props: { posts: posts.filter((post) => post.data.tags.includes(tag)) },
+  }));
+}) satisfies GetStaticPaths;
+
+const { tag } = Astro.params;
+const { posts } = Astro.props;
+---
+
+<Layout title={`タグ: ${tag}`} description={`${tag} タグの付いた記事の一覧。`}>
+  <h1>タグ: {tag}</h1>
+  <ul>
+    {
+      posts.map((post) => (
+        <li>
+          <a href={`/posts/${post.id}/`}>{post.data.title}</a>
+        </li>
+      ))
+    }
+  </ul>
+</Layout>

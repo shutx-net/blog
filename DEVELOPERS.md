@@ -2,9 +2,8 @@
 
 ツールチェーンは Nix flake で固定している。ホストに Node や AWS CLI を入れる必要はない。
 
-> **スキャフォールド中。** dev shell と `flake.nix` は動作確認済み。
-> `site/` `admin/` `api/` `infra/` の各ワークスペースはこれから作るため、
-> 「ワークスペース」以降のコマンドはまだ通らない。
+> **`site/` と `infra/` は動く。** `admin/`（管理画面）と `api/`（投稿 Lambda）は未着手で、
+> ルート `package.json` の `workspaces` にもまだ入っていない。それらのコマンドは通らない。
 
 ## 必要なもの
 
@@ -72,24 +71,47 @@ npm workspaces のモノレポ。ルートで一度 `npm install` すれば全�
 npm install
 ```
 
-| ワークスペース | 中身 |
-| --- | --- |
-| `site/` | Astro。読者向けの本体 |
-| `admin/` | 管理画面（静的 SPA） |
-| `api/` | Lambda（投稿 API） |
-| `infra/` | AWS CDK |
+| ワークスペース | 中身 | 状態 |
+| --- | --- | --- |
+| `site/` | Astro。読者向けの本体 | 有効 |
+| `infra/` | AWS CDK | 有効 |
+| `admin/` | 管理画面（静的 SPA） | 未着手 |
+| `api/` | Lambda（投稿 API） | 未着手 |
 
 ```sh
 npm run -w site dev              # http://localhost:4321
 npm run -w site build            # site/dist/ に出力
 npm run -w site preview          # ビルド結果をローカル配信
+npm run -w site test             # unit + build 検証
+npm run -w site test:unit        # unit のみ（速い）
 
-npm run -w admin dev
-npm run -w api build             # esbuild で Lambda をバンドル
-
-npx -w infra cdk diff            # deploy の前に必ず
-npx -w infra cdk deploy BlogSiteStack
+npm run -w infra test            # pretest で cdk synth も走る
+npm run -w infra typecheck
+npx -w infra cdk synth           # 引数なしで全スタック。認証情報は不要
+npx -w infra cdk diff            # deploy の前に必ず（要 AWS 認証情報）
 ```
+
+## SITE_URL
+
+RSS と sitemap は絶対 URL を要求するため、`site/astro.config.mjs` は環境変数 `SITE_URL` を読む。
+
+| 値 | 挙動 |
+| --- | --- |
+| 未設定 | `https://blog.invalid/` を使う。RFC 2606 で絶対に解決しないドメインなので、漏れても目に見えて安全に失敗する |
+| 絶対 https URL | そのまま使う（オリジン + `/` に正規化） |
+| それ以外 | **ビルドを exit 1 で落とす。** 誤った URL の feed を配ってしまうより止めるほうがいい |
+
+```sh
+SITE_URL=https://blog.example.com npm run -w site build
+```
+
+**Astro は設定ファイルの評価時に `.env` を読まない。** `site/astro.config.mjs` は
+`process.env.SITE_URL` を直接見るので、`.env` に書いても効かない。シェルで渡すか、
+デプロイ時に GitHub Actions の変数から渡すこと。
+
+独自ドメインを決めるまで `https://blog.invalid/` のままで問題ない。`.invalid` を選んでいるのは、
+RSS の `<guid isPermaLink="true">` が記事の恒久 ID であり、ドメインを後から変えると
+購読者全員に全記事が再配信されて取り消せないため。プレースホルダは解決しないほうが安全。
 
 ## AWS
 

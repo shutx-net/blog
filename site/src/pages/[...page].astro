@@ -1,0 +1,60 @@
+---
+import type { GetStaticPaths } from "astro";
+import { getCollection } from "astro:content";
+
+import Layout from "../layouts/Layout.astro";
+import {
+  POSTS_PER_PAGE,
+  byPubDateDesc,
+  isPublished,
+  withTrailingSlash,
+} from "../lib/posts.ts";
+
+// Replaces the old index.astro rather than sitting beside it. Keeping both makes
+// astro warn `Could not render '' from route '/[...page]' as it conflicts with
+// higher priority route '/'` and then exit 0 anyway, leaving '/' on the old
+// unpaginated listing with only '/2/' paginated -- and test/setup/build-site.ts
+// runs at logLevel "error", so that warning is never printed.
+export const getStaticPaths = (async ({ paginate }) => {
+  const posts = (await getCollection("posts", isPublished)).sort(byPubDateDesc);
+
+  return paginate(posts, { pageSize: POSTS_PER_PAGE });
+}) satisfies GetStaticPaths;
+
+const { page } = Astro.props;
+---
+
+<Layout title="blog" description="shutx-net の個人ブログ。">
+  <h1>blog</h1>
+  <ul>
+    {
+      page.data.map((post) => (
+        <li>
+          <a href={`/posts/${post.id}/`}>{post.data.title}</a>
+        </li>
+      ))
+    }
+  </ul>
+  {
+    /* page.url.prev/next are absent on the first and last page respectively, so
+       both need guarding. They also arrive without a trailing slash ("/2", "/")
+       while the emitted files are /2/index.html and the sitemap's loc values do
+       carry one -- withTrailingSlash keeps both naming the same URL. Astro's
+       paginate `format` option is not usable for this: it turns page 1's "/"
+       into "//". */
+    (page.url.prev || page.url.next) && (
+      <nav>
+        {page.url.prev && (
+          <a rel="prev" href={withTrailingSlash(page.url.prev)}>
+            前のページ
+          </a>
+        )}
+        {page.url.next && (
+          <a rel="next" href={withTrailingSlash(page.url.next)}>
+            次のページ
+          </a>
+        )}
+      </nav>
+    )
+  }
+</Layout>
