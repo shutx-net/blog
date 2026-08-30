@@ -331,7 +331,7 @@ npx -w infra cdk diff BlogSiteStack
 メディアバケットの `CorsConfiguration` だけであること。**IAM ロール・Lambda 関数・
 `Custom::*` の数が増えていないこと**を目で確認する。
 
-### 2. デプロイ（1 回で完結する）
+### 2. デプロイ（1 回の `cdk deploy` で完結する）
 
 ```sh
 npx -w infra cdk deploy BlogSiteStack

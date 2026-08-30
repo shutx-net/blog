@@ -219,14 +219,28 @@ describe('infra/README.md が実装に追いついている', () => {
 
   it('**デプロイ手順に cdk diff・受け入れ確認・切り戻しが揃っている**', () => {
     const text = readme();
+    // AGENTS.md の規約: infra を変えたら先に差分を見る。
     expect(text).toContain('cdk diff');
-    // ユーザ作成が CDK ではなく CLI であること。
+    // **ユーザ作成が CDK ではなく CLI であること**（public リポジトリに個人情報を書かない）。
     expect(text).toContain('aws cognito-idp admin-create-user');
+    expect(text).toContain('admin-set-user-password');
     // 受け入れ確認のコマンドがそのまま貼れる形であること。
     expect(text).toContain('/api/health');
     expect(text).toContain('x-blog-authorization: Bearer');
+    expect(text).toContain('response_type=code');
+    // トークン無しの書き込みが 401 であること、404 HTML なら設計違反であること。
+    expect(text).toMatch(/401[^\n]*unauthenticated|unauthenticated[^\n]*401/);
+    // SITE_ORIGIN のドリフト確認。
+    expect(text).toContain("OutputKey=='DistributionDomainName'");
     // 切り戻し。
     expect(text).toContain("{ mode: 'deny-all' }");
+    expect(text).toContain('deletionProtection');
+  });
+
+  it('**デプロイ手順が「1 回の cdk deploy で完結する」と書いてある**', () => {
+    // AUTH_MODE=cognito の Lambda はユーザプールへの Ref を持つので、
+    // CloudFormation は Cognito を先に作る。2 段階に割る必要は無い。
+    expect(readme()).toMatch(/1 回[^\n]*deploy|deploy[^\n]*1 回/);
   });
 
   it('検証結果に W3005 と cfn-guard の記述があり、Phase 3 の件数が明記されている', () => {
