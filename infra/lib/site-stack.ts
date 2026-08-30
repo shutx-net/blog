@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import type { StackProps } from 'aws-cdk-lib';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
@@ -167,6 +168,34 @@ export class SiteStack extends Stack {
     });
 
     this.distribution = distribution;
+
+    // **CDK が作る permission だけでは CloudFront は Lambda を呼べない。**
+    //
+    // FunctionUrlOrigin.withOriginAccessControl が出すのは lambda:InvokeFunctionUrl の
+    // 1 文だけだが、CloudFront 開発者ガイド「Restrict access to an AWS Lambda function
+    // URL origin」は add-permission を **2 回** 実行するよう指示している
+    // （AllowCloudFrontServicePrincipal と AllowCloudFrontServicePrincipalInvokeFunction）。
+    // lambda:InvokeFunction が無いと Function URL の IAM 認可が 403 を返し、
+    // **関数が起動しないのでログも残らない。**
+    //
+    // 実測（2026-08-30, 初回デプロイ後）:
+    //   POST /api/posts -> 404, server: AmazonS3, ロググループは空のまま。
+    //   403 が CustomErrorResponses(403 -> /404.html) で 404 に化けるので、
+    //   症状だけ見ると「ルーティングが効いていない」ように誤読しやすい。
+    //
+    // AWS のブログ記事は InvokeFunctionUrl だけを示していてドキュメント間で
+    // 食い違うが、**実環境の挙動は開発者ガイドのほうと一致する。**
+    new lambda.CfnPermission(this, 'AllowCloudFrontInvokeFunction', {
+      action: 'lambda:InvokeFunction',
+      functionName: postingApi.handler.functionArn,
+      principal: 'cloudfront.amazonaws.com',
+      sourceArn: Stack.of(this).formatArn({
+        service: 'cloudfront',
+        region: '',
+        resource: 'distribution',
+        resourceName: distribution.distributionId,
+      }),
+    });
 
     new CfnOutput(this, 'SiteBucketName', {
       value: siteBucket.bucketName,

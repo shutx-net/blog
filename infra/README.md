@@ -3,6 +3,40 @@
 - `BlogSiteStack` — 非公開 S3 + CloudFront (OAC) による静的サイト配信。配信用とメディア用の 2 バケット。
 - `BlogCicdStack` — GitHub Actions が OIDC で assume する最小権限のデプロイロール。
 
+## CloudFront から Lambda への invoke permission（実デプロイで判明）
+
+`FunctionUrlOrigin.withOriginAccessControl` が出す permission は
+`lambda:InvokeFunctionUrl` の **1 文だけ**で、それだけでは CloudFront は関数を呼べない。
+CloudFront 開発者ガイド "Restrict access to an AWS Lambda function URL origin" は
+`add-permission` を **2 回**実行するよう明示している。
+
+| Action | 出所 |
+| --- | --- |
+| `lambda:InvokeFunctionUrl` | CDK が自動で作る |
+| `lambda:InvokeFunction` | **`site-stack.ts` で明示的に足している** |
+
+**症状が誤読しやすい。** 2026-08-30 の初回デプロイで実際に踏んだときの観測はこうだった。
+
+```
+POST /api/posts -> 404
+server: AmazonS3
+x-cache: Error from cloudfront
+```
+
+Function URL の IAM 認可が 403 を返し、それを `CustomErrorResponses(403 -> /404.html)` が
+404 に差し替えるので、S3 の 404 ページが返る。**「/api/* のルーティングが効いていない」
+ように見えるが、実際にはビヘイビアは正しく Lambda に向いている。**
+
+決め手はロググループが空であることだった。**認可は関数の起動前に行われるので、
+弾かれるとログが 1 行も出ない。** 逆に言えば、ログが空なら permission を疑う。
+
+AWS のブログ記事 "Secure your Lambda function URLs using Amazon CloudFront origin access
+control" は `InvokeFunctionUrl` だけを示しており開発者ガイドと食い違うが、
+**実環境の挙動は開発者ガイドのほうと一致する。**
+
+`test/distribution-media-behavior.test.ts` が 2 本あることと、どちらもこの
+ディストリビューションに限定されていることを固定している（片方を消すと 4 件が赤くなる）。
+
 ## コマンド
 
 ```sh

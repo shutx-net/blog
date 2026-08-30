@@ -186,10 +186,10 @@ describe('cdk synth が出力した実テンプレート: BlogSiteStack 固有',
     expect(readRaw('BlogSiteStack')).not.toContain('-----BEGIN');
   });
 
-  it('実ファイル上でも OAC が 3 個・Lambda::Permission が 1 個', () => {
+  it('実ファイル上でも OAC が 3 個・Lambda::Permission が 2 個', () => {
     const template = asTemplate('BlogSiteStack');
     template.resourceCountIs('AWS::CloudFront::OriginAccessControl', 3);
-    template.resourceCountIs('AWS::Lambda::Permission', 1);
+    template.resourceCountIs('AWS::Lambda::Permission', 2);
   });
 });
 

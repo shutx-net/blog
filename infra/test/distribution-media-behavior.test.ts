@@ -83,3 +83,53 @@ describe('/media/* の追加ビヘイビア', () => {
     expect(mediaBehavior().FunctionAssociations).toBeUndefined();
   });
 });
+
+/**
+ * CloudFront が Lambda を **実際に呼べる**ための permission。
+ *
+ * `FunctionUrlOrigin.withOriginAccessControl` が出すのは `lambda:InvokeFunctionUrl`
+ * の 1 文だけだが、それだけでは Function URL の IAM 認可が 403 を返し、
+ * **関数が起動しないのでログすら残らない。**
+ *
+ * 初回デプロイで実際に踏んだ（2026-08-30）。症状は `POST /api/posts` が
+ * `404` と `server: AmazonS3` を返すというもので、403 が
+ * `CustomErrorResponses(403 -> /404.html)` によって 404 に化けるため、
+ * 「ルーティングが効いていない」と誤読しやすい。**ロググループが空であることが
+ * 唯一の手がかりだった。**
+ *
+ * CloudFront 開発者ガイド "Restrict access to an AWS Lambda function URL origin" は
+ * `add-permission` を 2 回実行するよう明示している。AWS のブログ記事は 1 つしか
+ * 示しておらずドキュメント間で食い違うが、実環境は開発者ガイドと一致する。
+ */
+describe('CloudFront から Lambda への invoke permission', () => {
+  const permissions = (): Array<Record<string, unknown>> =>
+    Object.values(template.toJSON().Resources as Record<string, { Type: string; Properties: Record<string, unknown> }>)
+      .filter((r) => r.Type === 'AWS::Lambda::Permission')
+      .map((r) => r.Properties);
+
+  it('permission がちょうど 2 本ある（非空を先に確かめる）', () => {
+    expect(permissions()).toHaveLength(2);
+  });
+
+  it.each(['lambda:InvokeFunctionUrl', 'lambda:InvokeFunction'])(
+    '%s が cloudfront.amazonaws.com に対して付いている',
+    (action) => {
+      const hit = permissions().filter(
+        (p) => p.Action === action && p.Principal === 'cloudfront.amazonaws.com',
+      );
+      expect(
+        hit,
+        `${action} が無い。InvokeFunctionUrl だけだと Function URL が 403 を返し、` +
+          `関数が起動しないためログも残らない（初回デプロイで実際に踏んだ）`,
+      ).toHaveLength(1);
+    },
+  );
+
+  it('どちらの permission もこのディストリビューションに限定されている', () => {
+    for (const p of permissions()) {
+      const src = JSON.stringify(p.SourceArn ?? null);
+      expect(src, `SourceArn が無いと任意の配信元から invoke できてしまう`).toContain('distribution');
+      expect(src).not.toContain('*');
+    }
+  });
+});
