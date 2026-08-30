@@ -72,6 +72,16 @@ describe('npm workspaces のルート', () => {
     expect(root.workspaces).toContain('infra');
   });
 
+  it('workspaces 配列に "api" が含まれる', () => {
+    // infra の synth は api/dist のバンドルをアセットとして読む。api がワークスペースで
+    // なくなると pretest の `npm run build -w ../api` が 'No workspaces found' で落ちる。
+    // api 側（api/test/unit/toolchain.test.ts）からも同じことを主張している。**両方から
+    // 見るのは意図的**で、片方だけだと片方を消したときに気づけない。
+    const root = rootPkg();
+    expect(Array.isArray(root.workspaces)).toBe(true);
+    expect(root.workspaces).toContain('api');
+  });
+
   it('private: true である（誤って publish しないため）', () => {
     expect(rootPkg().private).toBe(true);
   });

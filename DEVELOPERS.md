@@ -2,8 +2,8 @@
 
 ツールチェーンは Nix flake で固定している。ホストに Node や AWS CLI を入れる必要はない。
 
-> **`site/` と `infra/` は動く。** `admin/`（管理画面）と `api/`（投稿 Lambda）は未着手で、
-> ルート `package.json` の `workspaces` にもまだ入っていない。それらのコマンドは通らない。
+> **`site/` と `infra/` と `api/` は動く。** `admin/`（管理画面）だけが未着手で、
+> ルート `package.json` の `workspaces` にもまだ入っていない。`npm run -w admin ...` は通らない。
 
 ## 必要なもの
 
@@ -76,7 +76,7 @@ npm install
 | `site/` | Astro。読者向けの本体 | 有効 |
 | `infra/` | AWS CDK | 有効 |
 | `admin/` | 管理画面（静的 SPA） | 未着手 |
-| `api/` | Lambda（投稿 API） | 未着手 |
+| `api/` | Lambda（投稿 API） | 有効（**`AUTH_MODE=deny-all` で fail-closed 出荷中**） |
 
 ```sh
 npm run -w site dev              # http://localhost:4321
@@ -85,7 +85,11 @@ npm run -w site preview          # ビルド結果をローカル配信
 npm run -w site test             # unit + build 検証
 npm run -w site test:unit        # unit のみ（速い）
 
-npm run -w infra test            # pretest で cdk synth も走る
+npm run -w api build             # esbuild で api/dist/index.mjs にバンドル
+npm run -w api test              # pretest で build も走る（build 成果物を読むテストがある）
+npm run -w api typecheck
+
+npm run -w infra test            # pretest で api のビルドと cdk synth も走る
 npm run -w infra typecheck
 npx -w infra cdk synth           # 引数なしで全スタック。認証情報は不要
 npx -w infra cdk diff            # deploy の前に必ず（要 AWS 認証情報）
