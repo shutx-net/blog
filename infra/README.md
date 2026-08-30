@@ -126,15 +126,14 @@ principal しか受け付けないので SSO からは assume できず、`act` 
 発行されない。ワークフローのテストは「YAML が契約を満たしている」ことしか言えず、
 「GitHub が実際にその `sub` を発行する」ことは言えない。**初回実行が唯一の実証である。**
 
-1. `.github/workflows/oidc-probe.yml` を作業ブランチのまま `workflow_dispatch` で 1 回回し、
-   実際の `sub` を目で見る。**IAM を deploy する前に。**
-   上の表に日付つきで記録し、`DEPLOY_SUBJECT` と食い違っていたら実測値のほうに合わせる
+1. 実際に発行される `sub` を確認する（**IAM を deploy する前に**）。
+   2026-08-30 に実測済みで下の表に記録がある。リポジトリを作り直した場合だけやり直すこと
 2. `npx -w infra cdk diff BlogCicdStack` を取り、**アカウント ID をマスクして** PR 本文に貼る
    （`AGENTS.md`）。信頼ポリシーの更新はロールの置換を伴わない
    （`AssumeRolePolicyDocument` は更新可能なプロパティ）ので、**ロール ARN は変わらない**
 3. `npx -w infra cdk deploy BlogCicdStack`
 4. 上の 3 つの変数を `gh variable set` で入れる
-5. probe ワークフローを削除して PR をマージする。`site/**` が変わっていなくても
+5. PR をマージする。`site/**` が変わっていなくても
    `.github/workflows/deploy.yml` がパスフィルタに入っているので deploy が起動する
    （起動しなければ `workflow_dispatch` で回す）
 6. 見るべき順に:
@@ -557,14 +556,24 @@ Phase 2 の時点の値（`repo:shutx-net/blog:ref:refs/heads/main`）のまま�
 `GITHUB_OWNER_ID` / `GITHUB_REPOSITORY_ID` を実測値で更新して deploy し直すこと
 （`AssumeRolePolicyDocument` は更新可能なプロパティなのでロールの置換は起きず、ARN も変わらない）。
 
-**`cdk deploy` の前に実トークンで確認すること。** `.github/workflows/oidc-probe.yml` を
-`workflow_dispatch` で 1 回だけ回すと、実際に発行される `sub` と `aud` だけを表示する。
-プレフィックスはどの ref で走らせても同じなので、`main` にマージする前の作業ブランチで確認できる。
-確認が済んだらこのワークフローは削除する。
+**実トークンで確認済み。** 一時的な probe ワークフロー（`workflow_dispatch` 限定、AWS 非依存、
+トークンをマスクして `sub` と `aud` だけを出力）を作業ブランチで 1 回回して実測し、
+役目を終えたので削除した。
 
 | 実測日 | 実際に発行された `sub` | 判定 |
 | --- | --- | --- |
-| （未実施） | — | probe を回したらここに記録する |
+| 2026-08-30 | `repo:shutx-net@169037737/blog@1351152011:ref:refs/heads/<branch>` | immutable 形式。`DEPLOY_SUBJECT` と一致 |
+
+**`gh api repos/shutx-net/blog/actions/oidc/customization/sub` が返す
+`use_immutable_subject: false` は誤導である。** 同じ応答の `sub_claim_prefix` は immutable 形式を
+返しており、実際に発行されるトークンも immutable 形式だった。この 2 つが食い違って見えるので、
+ドキュメントだけで判断してはいけない。
+
+再確認が必要になったら（リポジトリの作り直し、オーナー移管など）、probe を作り直すより
+`gh api .../actions/oidc/customization/sub` の `sub_claim_prefix` を見るのが速い。
+実測が要るときは `id-token: write` だけを持つ `workflow_dispatch` のジョブで
+`ACTIONS_ID_TOKEN_REQUEST_URL` を叩き、**JWT を即 `::add-mask::` してから**
+ペイロードの `sub` だけを出す。public リポジトリのログは誰でも読める。
 
 なぜここまで厳しくするかというと、**IAM 自身のガードが弱いから**である。AWS のドキュメントは
 「IAM checks the role trust policy condition to verify that the condition key
