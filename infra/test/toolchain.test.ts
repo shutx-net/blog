@@ -72,6 +72,13 @@ describe('npm workspaces のルート', () => {
     expect(root.workspaces).toContain('infra');
   });
 
+  it("workspaces が ['site','infra','api'] を含み、'admin' を含まない", () => {
+    // admin は次フェーズ。先走って足すと、ディレクトリが無い状態で npm install が壊れる。
+    const workspaces = rootPkg().workspaces ?? [];
+    expect(workspaces).toEqual(expect.arrayContaining(['site', 'infra', 'api']));
+    expect(workspaces).not.toContain('admin');
+  });
+
   it('workspaces 配列に "api" が含まれる', () => {
     // infra の synth は api/dist のバンドルをアセットとして読む。api がワークスペースで
     // なくなると pretest の `npm run build -w ../api` が 'No workspaces found' で落ちる。
@@ -105,6 +112,30 @@ describe('infra/package.json の pretest', () => {
 
   it('スタックを名指ししていない（名指しすると他スタックの synth 崩れを見逃す）', () => {
     expect(infraPkg().scripts?.pretest).not.toContain('BlogSiteStack');
+  });
+
+  it('**api のバンドルを先にビルドする**', () => {
+    // Code.fromAsset が api/dist を読むので、synth の前に api のバンドルが要る。
+    // ビルドせずに synth すると **テンプレートは通るのに中身が古い**。
+    expect(infraPkg().scripts?.pretest).toContain('npm run build -w ../api');
+  });
+
+  it("**'-w api' という（infra からは解決できない）形になっていない**", () => {
+    // 実測: infra を cwd にした `npm run -w api build` も
+    // `npm --prefix .. run -w api build` も 'No workspaces found: --workspace=api' で失敗する。
+    // **パス形式（-w ../api）だけが通る。**
+    const pretest = infraPkg().scripts?.pretest ?? '';
+    expect(pretest).not.toMatch(/-w\s+api(\s|$)/);
+    expect(pretest).not.toContain('--prefix ..');
+  });
+
+  it('api のビルドが cdk synth **より前** に来る', () => {
+    const pretest = infraPkg().scripts?.pretest ?? '';
+    const buildAt = pretest.indexOf('npm run build -w ../api');
+    const synthAt = pretest.indexOf('cdk synth');
+    expect(buildAt).toBeGreaterThanOrEqual(0);
+    expect(synthAt).toBeGreaterThanOrEqual(0);
+    expect(buildAt, 'api のビルドが synth より後ろにある').toBeLessThan(synthAt);
   });
 });
 
