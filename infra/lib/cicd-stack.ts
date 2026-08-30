@@ -11,8 +11,25 @@ export const GITHUB_OIDC_URL = 'https://token.actions.githubusercontent.com';
 /** STS を audience に固定する。増やすと信頼範囲が広がる。 */
 export const GITHUB_OIDC_AUDIENCE = 'sts.amazonaws.com';
 
+/** 信頼するリポジトリのオーナー。 */
+export const GITHUB_OWNER = 'shutx-net';
+
+/**
+ * オーナーの数値 ID（`gh api users/shutx-net --jq .id`）。
+ *
+ * **文字列で持つ。** number にすると template literal へ埋めるときに桁区切りや
+ * 指数表記の事故が理屈上あり得るし、そもそもこれは識別子であって数値ではない。
+ */
+export const GITHUB_OWNER_ID = '169037737';
+
+/** 信頼するリポジトリ名。 */
+export const GITHUB_REPOSITORY_NAME = 'blog';
+
+/** リポジトリの数値 ID（`gh api repos/shutx-net/blog --jq .id`）。文字列で持つ理由は上と同じ。 */
+export const GITHUB_REPOSITORY_ID = '1351152011';
+
 /** 信頼するリポジトリ。public なのでロール ARN は漏れる前提で考える。 */
-export const GITHUB_REPOSITORY = 'shutx-net/blog';
+export const GITHUB_REPOSITORY = `${GITHUB_OWNER}/${GITHUB_REPOSITORY_NAME}`;
 
 /**
  * 信頼ポリシーの sub。**StringEquals で完全一致固定する。**
@@ -23,20 +40,34 @@ export const GITHUB_REPOSITORY = 'shutx-net/blog';
  * ブランチ名もワイルドカードにした sub（どの GitHub リポジトリからでも assume できる）は
  * IAM の検査を通過してしまう。テストは IAM より厳しくなければならない。
  *
+ * **形式は immutable subject claim である。** GitHub は 2026-07-15 に既定の sub 形式を
+ * `repo:OWNER/REPO:...` から `repo:OWNER@OWNER-ID/REPO@REPO-ID:...` に変更した。
+ * 同日以降に作成されたリポジトリは既定で新形式を発行する（本リポジトリの created_at は
+ * 2026-08-30）。実測でも
+ * `gh api repos/shutx-net/blog/actions/oidc/customization/sub` が
+ * `sub_claim_prefix: "repo:shutx-net@169037737/blog@1351152011"` を返す。
+ * **旧形式のまま deploy すると初回の assume が
+ * `Not authorized to perform sts:AssumeRoleWithWebIdentity` で必ず落ちる。**
+ *
+ * 効能と限界: 名前ではなく ID で固定するので **リポジトリ名を変えても、オーナー名を
+ * 変えても壊れない**。逆に **リポジトリを作り直すと repo_id が変わって壊れる**
+ * （その場合は上の 2 つの ID 定数を実測値で更新して deploy し直す）。
+ *
  * **この文字列は GitHub 側の挙動と結合した契約である。** ワークフロー YAML を書く
- * フェーズでは次の制約が生じる（infra/README.md にも記載）:
+ * フェーズでは次の制約が生じる（infra/README.md にも記載。
+ * test/workflow-deploy-oidc.test.ts がこの定数から期待値を導出して機械的に固定している）:
  *
  * - トリガは main への push（または main を ref とする workflow_dispatch）であること。
- *   pull_request で走らせると sub は `repo:shutx-net/blog:pull_request` になり assume が失敗する
+ *   pull_request で走らせると sub は `...:pull_request` になり assume が失敗する
  * - ジョブに `environment:` を **付けない**。付けると sub は
- *   `repo:shutx-net/blog:environment:<name>` になり assume が失敗する
+ *   `...:environment:<name>` になり assume が失敗する
  * - ジョブに `permissions: { id-token: write, contents: read }` が要る
  * - ロール ARN は YAML に直書きせず GitHub Actions の変数から読む
  *   （public リポジトリに AWS アカウント ID を晒す必要は無い）
  *
  * **緩めて回避しないこと。** StringLike に落とした瞬間にこのスタックの主要な成果が失われる。
  */
-export const DEPLOY_SUBJECT = `repo:${GITHUB_REPOSITORY}:ref:refs/heads/main`;
+export const DEPLOY_SUBJECT = `repo:${GITHUB_OWNER}@${GITHUB_OWNER_ID}/${GITHUB_REPOSITORY_NAME}@${GITHUB_REPOSITORY_ID}:ref:refs/heads/main`;
 
 export interface CicdStackProps extends StackProps {
   /** `aws s3 sync` の宛先。デプロイロールの権限をここに絞る。 */

@@ -267,8 +267,11 @@ describe('cdk synth が出力した実テンプレート: BlogCicdStack 固有',
     expect(statements).toHaveLength(1);
     const condition = statements[0]?.Condition ?? {};
     expect(Object.keys(condition)).toEqual(['StringEquals']);
+    // **immutable subject claim 形式**（2026-07-15 以降に作成されたリポジトリの既定）。
+    // ここは意図的にリテラルだけで比較する — DEPLOY_SUBJECT を import すると
+    // 「定数と合成結果が一致する」ことしか言えず、実ファイルを読む意味が消える。
     expect(condition['StringEquals']?.['token.actions.githubusercontent.com:sub']).toBe(
-      'repo:shutx-net/blog:ref:refs/heads/main',
+      'repo:shutx-net@169037737/blog@1351152011:ref:refs/heads/main',
     );
   });
 

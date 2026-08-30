@@ -66,7 +66,7 @@ Phase 3 の `cdk diff` は新規 8 リソースと Distribution の in-place 更
 | リソース | 論理 ID | 要点 |
 | --- | --- | --- |
 | `AWS::IAM::OIDCProvider` | `GitHubOidcProvider7EBF861F` | `token.actions.githubusercontent.com` / `ClientIdList: [sts.amazonaws.com]` / **ThumbprintList なし** / `DeletionPolicy: Retain` |
-| `AWS::IAM::Role` | `GitHubActionsDeployRoleA6F4AD3D` | 信頼ポリシーは 1 文だけ。`sub` を `repo:shutx-net/blog:ref:refs/heads/main` に `StringEquals` で完全一致固定 |
+| `AWS::IAM::Role` | `GitHubActionsDeployRoleA6F4AD3D` | 信頼ポリシーは 1 文だけ。`sub` を `repo:shutx-net@169037737/blog@1351152011:ref:refs/heads/main` に `StringEquals` で完全一致固定（**immutable subject claim 形式**。下の「`sub` の完全一致固定…」を参照） |
 | `AWS::IAM::Policy` | `GitHubActionsDeployRoleDefaultPolicy3AC475A7` | 6 アクションのみ。ワイルドカードも `Resource: "*"` も 0 件 |
 
 デプロイロールに与えているのはこの 6 つだけ。
@@ -79,6 +79,84 @@ Phase 3 の `cdk diff` は新規 8 リソースと Distribution の in-place 更
 | `s3:AbortMultipartUpload` | 同上 | 既定で 8MB 超はマルチパート。Abort できないと課金対象の未完了パートが残る |
 | `cloudfront:CreateInvalidation` | このディストリビューションの ARN | デプロイ後のキャッシュ無効化 |
 | `cloudfront:GetInvalidation` | 同上 | 無効化の完了待ち |
+
+#### GitHub Actions の変数（secret ではなく variable）
+
+`.github/workflows/deploy.yml` はこの 3 つを読む。**3 つとも秘密ではない**ので variable でよい
+（漏れても assume は `sub` 条件で守られる）。secret にするとログで `***` にマスクされて
+失敗時の切り分けが無駄に難しくなるだけ。
+
+| 変数名 | 値の取得元（`aws cloudformation describe-stacks`） |
+| --- | --- |
+| `AWS_DEPLOY_ROLE_ARN` | `BlogCicdStack` の Output `DeployRoleArn` |
+| `SITE_BUCKET` | `BlogSiteStack` の Output `SiteBucketName` |
+| `CLOUDFRONT_DISTRIBUTION_ID` | `BlogSiteStack` の Output `DistributionId` |
+
+```sh
+gh variable set AWS_DEPLOY_ROLE_ARN -R shutx-net/blog --body "$(aws cloudformation \
+  describe-stacks --stack-name BlogCicdStack \
+  --query 'Stacks[0].Outputs[?OutputKey==`DeployRoleArn`].OutputValue' --output text)"
+gh variable set SITE_BUCKET -R shutx-net/blog --body "$(aws cloudformation \
+  describe-stacks --stack-name BlogSiteStack \
+  --query 'Stacks[0].Outputs[?OutputKey==`SiteBucketName`].OutputValue' --output text)"
+gh variable set CLOUDFRONT_DISTRIBUTION_ID -R shutx-net/blog --body "$(aws cloudformation \
+  describe-stacks --stack-name BlogSiteStack \
+  --query 'Stacks[0].Outputs[?OutputKey==`DistributionId`].OutputValue' --output text)"
+```
+
+**実行時に Output を読ませることはできない。** デプロイロールの権限は下の 6 アクションだけで
+`cloudformation:DescribeStacks` は入っていない（IAM ポリシーシミュレータで `implicitDeny` を実測）。
+足せば `test/cicd-deploy-permissions.test.ts` の `EXPECTED_ACTIONS` が落ちるし、public リポジトリから
+assume できるロールにアカウント全体のスタック構成の読み取りを与えることになる。
+そもそも鶏と卵がある — CFN を読むには先に assume が要り、assume にはロール ARN が要る。
+**ARN だけは絶対に外から渡すしかない。**
+
+いずれの Output にも `ExportName` は無い（`ExportsOutput*` の 2 つだけが CDK のクロススタック
+Export）。つまり `Fn::ImportValue` では取れず、`DescribeStacks` でしか読めない。
+
+変数が未設定でも `${{ vars.X }}` は**空文字に展開されるだけでエラーにならない**ので、
+deploy.yml の最初のステップに 3 つの名前を名指しする preflight ガードを置いてある。
+`test/workflow-deploy-steps.test.ts` が「ガードが 3 つを名指ししている」「checkout より前にある」
+「ワークフローが参照する `vars.` の集合がちょうどこの 3 つ」を機械的に固定している。
+
+#### 初回デプロイの手順（人間が実行する）
+
+**assume が成功することはローカルでは一切証明できない。** 信頼ポリシーが GitHub の OIDC
+principal しか受け付けないので SSO からは assume できず、`act` を使っても OIDC トークンは
+発行されない。ワークフローのテストは「YAML が契約を満たしている」ことしか言えず、
+「GitHub が実際にその `sub` を発行する」ことは言えない。**初回実行が唯一の実証である。**
+
+1. `.github/workflows/oidc-probe.yml` を作業ブランチのまま `workflow_dispatch` で 1 回回し、
+   実際の `sub` を目で見る。**IAM を deploy する前に。**
+   上の表に日付つきで記録し、`DEPLOY_SUBJECT` と食い違っていたら実測値のほうに合わせる
+2. `npx -w infra cdk diff BlogCicdStack` を取り、**アカウント ID をマスクして** PR 本文に貼る
+   （`AGENTS.md`）。信頼ポリシーの更新はロールの置換を伴わない
+   （`AssumeRolePolicyDocument` は更新可能なプロパティ）ので、**ロール ARN は変わらない**
+3. `npx -w infra cdk deploy BlogCicdStack`
+4. 上の 3 つの変数を `gh variable set` で入れる
+5. probe ワークフローを削除して PR をマージする。`site/**` が変わっていなくても
+   `.github/workflows/deploy.yml` がパスフィルタに入っているので deploy が起動する
+   （起動しなければ `workflow_dispatch` で回す）
+6. 見るべき順に:
+   - preflight ガードが通ったか（変数 3 つが入っているか）
+   - `Configure AWS Credentials` が成功したか。**ここが唯一ローカルで検証できなかった箇所。**
+     失敗するなら `Not authorized to perform sts:AssumeRoleWithWebIdentity` が出る
+   - `aws s3 sync` が AccessDenied を出さないか（**下の TODO の答え**）
+   - `aws cloudfront wait invalidation-completed` が 600 秒以内に返るか
+7. 結果を日付つきでここに記録し、TODO から「`aws s3 sync` の最小権限は未検証」を消す。
+   **同時に `test/toolchain.test.ts` の「TODO に『実デプロイ未検証』が残っている」という
+   アサーションを、「もう無い」側に反転させること**（宿題が閉じたことをテストで固定する）
+8. 事後確認: `aws iam get-role --role-name ... --query 'Role.RoleLastUsed'` が空でなくなっている
+   （現在は `{}`）。`https://d8gsxbwzr6ft8.cloudfront.net/rss.xml` に `blog.invalid` が
+   **1 度も現れない**こと
+
+AccessDenied が出た場合は `s3:GetObject` → `s3:ListBucketMultipartUploads` →
+`s3:ListMultipartUploadParts` の順に **1 つずつ**足し、そのつど `EXPECTED_ACTIONS` と
+上の権限表を同時に更新する。**まとめて `s3:*` にしないこと。**
+
+**失敗しても慌てないための性質**: assume に失敗した場合、ワークフローは
+`Configure AWS Credentials` で止まる。S3 には何も書かれず、バケットは前の状態のまま。
+**ビルドを assume より前に置いているので、壊れたビルドが公開される経路も無い。**
 
 **メディアバケットには一切触れない。** `BlogCicdStack` のテンプレート全文に `MediaBucket` という
 文字列が 1 度も現れないことを `test/cicd-deploy-permissions.test.ts` が機械的に確認している。
@@ -432,21 +510,61 @@ instead」と明記されている。実装を読むと、レガシー版は `Cu
 
 ### `sub` の完全一致固定がワークフロー YAML に課す制約
 
-信頼ポリシーの `sub` を `repo:shutx-net/blog:ref:refs/heads/main` に `StringEquals` で
-**完全一致固定** している。これは GitHub 側の挙動と結合した契約なので、ワークフロー YAML を書く
-フェーズでは次を必ず守ること。
+信頼ポリシーの `sub` を `repo:shutx-net@169037737/blog@1351152011:ref:refs/heads/main` に
+`StringEquals` で **完全一致固定** している。これは GitHub 側の挙動と結合した契約なので、
+ワークフロー YAML では次を必ず守ること。
 
 - **トリガは `main` への push**（または `main` を ref とする `workflow_dispatch`）。
-  `pull_request` で走らせると `sub` は `repo:shutx-net/blog:pull_request` になって assume が失敗する
+  `pull_request` で走らせると `sub` は `...:pull_request` になって assume が失敗する
 - **ジョブに `environment:` を付けない。** 付けると `sub` は
-  `repo:shutx-net/blog:environment:<name>` になって assume が失敗する
+  `...:environment:<name>` になって assume が失敗する
 - ジョブに `permissions: { id-token: write, contents: read }` が要る
 - **ロール ARN は YAML に直書きせず、GitHub Actions の変数（secret ではなく variable でよい）から読む。**
   public リポジトリに AWS アカウント ID を晒す必要は無い。ARN は `DeployRoleArn` の CfnOutput で出る
 
+これらは `test/workflow-deploy-oidc.test.ts` が `DEPLOY_SUBJECT` から期待値を**導出**して
+機械的に固定している。定数を書き換えたらワークフロー YAML も直さないと落ちる。
+
 **緩めて回避しないこと。** `StringLike` に落とした瞬間にこのスタックの主要な成果が失われる。
-ワークフローを書くフェーズの最初のタスクは、`DEPLOY_SUBJECT` と実際の `sub` が一致することを
-失敗したジョブの OIDC トークンのデバッグ出力で確認することにする。
+
+#### immutable subject claim（2026-07-15 の変更への追随。実測 2026-08-30）
+
+GitHub は 2026-07-15 に OIDC の subject claim の既定形式を変更した。
+同日以降に**作成された**リポジトリは、オプトインの有無に関わらず既定で
+`repo:OWNER@OWNER-ID/REPO@REPO-ID:ref:refs/heads/BRANCH` という **immutable 形式**を発行する
+（同日以降のリネームや移管も同様に移行する）。区切りに `@` が選ばれているのは、
+GitHub のユーザ名にもリポジトリ名にも `@` が現れ得ないため。
+
+本リポジトリの実測値（2026-08-30 に `gh` で取得）:
+
+| 取得コマンド | 値 |
+| --- | --- |
+| `gh api repos/shutx-net/blog --jq .created_at` | `2026-08-30T06:14:14Z`（**カットオフの 46 日後**） |
+| `gh api users/shutx-net --jq .id` | `169037737` |
+| `gh api repos/shutx-net/blog --jq .id` | `1351152011` |
+| `gh api repos/shutx-net/blog/actions/oidc/customization/sub` | `{"use_default":true,"use_immutable_subject":false,"sub_claim_prefix":"repo:shutx-net@169037737/blog@1351152011"}` |
+
+`use_immutable_subject: false` は「**明示的にオプトインしていない**」の意味であって
+「legacy を使う」の意味ではない。カットオフ後に作られたリポジトリは既定が immutable なので、
+オプトインの有無に関わらず immutable になる。API が返す `sub_claim_prefix` がまさに
+immutable 形式そのものであることが、この読み方を裏づけている。
+
+Phase 2 の時点の値（`repo:shutx-net/blog:ref:refs/heads/main`）のままだと、**初回デプロイが
+`Not authorized to perform sts:AssumeRoleWithWebIdentity` で必ず落ちる。**
+
+**効能と限界。** 名前ではなく ID で固定するので、リポジトリ名もオーナー名も変えて構わない。
+逆に **リポジトリを作り直すと `repo_id` が変わって壊れる**。その場合は `cicd-stack.ts` の
+`GITHUB_OWNER_ID` / `GITHUB_REPOSITORY_ID` を実測値で更新して deploy し直すこと
+（`AssumeRolePolicyDocument` は更新可能なプロパティなのでロールの置換は起きず、ARN も変わらない）。
+
+**`cdk deploy` の前に実トークンで確認すること。** `.github/workflows/oidc-probe.yml` を
+`workflow_dispatch` で 1 回だけ回すと、実際に発行される `sub` と `aud` だけを表示する。
+プレフィックスはどの ref で走らせても同じなので、`main` にマージする前の作業ブランチで確認できる。
+確認が済んだらこのワークフローは削除する。
+
+| 実測日 | 実際に発行された `sub` | 判定 |
+| --- | --- | --- |
+| （未実施） | — | probe を回したらここに記録する |
 
 なぜここまで厳しくするかというと、**IAM 自身のガードが弱いから**である。AWS のドキュメントは
 「IAM checks the role trust policy condition to verify that the condition key

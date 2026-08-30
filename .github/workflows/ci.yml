@@ -1,0 +1,62 @@
+# Pull request 用。**AWS の資格情報を一切持たない。**
+#
+# `npx -w infra cdk synth` は env-agnostic な Stack しか無く fromLookup も使っていないので
+# 資格情報なしで通る（実測済み）。そして pull_request で走るワークフローに OIDC の
+# トークンを要求させないのは防御の二重化である。デプロイロールの sub 条件は
+# `ref:refs/heads/main` に固定されているので PR からはそもそも assume できないが、
+# 「トークンを要求できるジョブが PR 経路に存在しない」ことを固定しておけば、
+# 将来ロールが増えたときの事故も防げる。infra/test/workflow-ci.test.ts が機械的に見ている。
+#
+# **パスフィルタは付けない。** GitHub のドキュメントは
+# 「path filtering で skip されたワークフローの check は Pending のままマージをブロックする」
+# 「required なワークフローを path filter で skip すべきでない」と明記している。
+# main は現在未保護だが、保護を入れるのは自然な次の一手であり、そのとき原因が分からない形で詰まる。
+# public リポジトリの Actions は分数無料なので、節約の実利も無い。
+# どうしても要るならジョブレベルの `if:`（skip しても Success を報告する）で実装すること。
+name: CI
+
+on:
+  pull_request:
+
+# ここを空にしておくと、ジョブ側で明示しない限り何も渡らない。
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # `cdk synth` を独立のステップにはしない。infra/package.json の pretest が
+  # 全スタックに対して `cdk synth > /dev/null` を実行しており、それは
+  # test/toolchain.test.ts が機械的に固定している。重ねて書くと同じ合成を 2 回やるだけ。
+  site:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # nix の node と完全一致させる。ずれた日に落として原因を名指しするのが目的なので、
+          # ここを緩めないこと（infra/test/workflow-ci.test.ts が process.version と比較する）。
+          node-version: 24.19.0
+          cache: npm
+      - run: npm ci
+      - run: npm run -w site test
+
+  infra:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+      - run: npm ci
+      # 型エラーは tsc のほうが読みやすく、数秒で終わる。失敗を早く安く出す。
+      - run: npm run -w infra typecheck
+      - run: npm run -w infra test

@@ -6,7 +6,11 @@ import {
   DEPLOY_SUBJECT,
   GITHUB_OIDC_AUDIENCE,
   GITHUB_OIDC_URL,
+  GITHUB_OWNER,
+  GITHUB_OWNER_ID,
   GITHUB_REPOSITORY,
+  GITHUB_REPOSITORY_ID,
+  GITHUB_REPOSITORY_NAME,
 } from '../lib/cicd-stack.ts';
 import { SiteStack } from '../lib/site-stack.ts';
 
@@ -188,24 +192,80 @@ describe('デプロイロールの信頼ポリシー', () => {
     expect(stringEquals()[OIDC_CLAIM_AUD]).toBe('sts.amazonaws.com');
   });
 
-  it('【誤り(e)】sub が repo:shutx-net/blog:ref:refs/heads/main と完全一致する', () => {
+  it('【誤り(e)】sub が immutable subject claim 形式で完全一致する', () => {
     // 定数だけで比較すると、定数を緩めたときテストが一緒に動いてしまう。
-    // リテラルとの一致も主張して、実際に信頼するブランチを固定する。
+    // リテラルとの一致も主張して、実際に信頼するリポジトリとブランチを固定する。
+    //
+    // **この形式は 2026-07-15 の GitHub の変更に追随したものである。**
+    // 同日以降に作られたリポジトリの sub は既定で
+    // `repo:OWNER@OWNER-ID/REPO@REPO-ID:ref:refs/heads/BRANCH` になる。
+    // 本リポジトリの created_at は 2026-08-30 で、実測した
+    // `gh api repos/shutx-net/blog/actions/oidc/customization/sub` の
+    // sub_claim_prefix も `repo:shutx-net@169037737/blog@1351152011` を返す。
+    // 旧形式（名前だけ）のままにすると assume が必ず失敗する。
     expect(stringEquals()[OIDC_CLAIM_SUB]).toBe(DEPLOY_SUBJECT);
-    expect(stringEquals()[OIDC_CLAIM_SUB]).toBe('repo:shutx-net/blog:ref:refs/heads/main');
+    expect(stringEquals()[OIDC_CLAIM_SUB]).toBe(
+      'repo:shutx-net@169037737/blog@1351152011:ref:refs/heads/main',
+    );
   });
 
-  it('【誤り(e)】sub がこのリポジトリで始まる（別リポジトリに差し替わっていない）', () => {
-    expect(String(stringEquals()[OIDC_CLAIM_SUB]).startsWith(`repo:${GITHUB_REPOSITORY}:`)).toBe(
-      true,
+  it('【誤り(e)】sub が このリポジトリの immutable なプレフィックスで始まる', () => {
+    // 旧 `startsWith(\`repo:${GITHUB_REPOSITORY}:\`)` は immutable 形式では成立しない
+    // （`repo:shutx-net/blog` の直後に `:` ではなく `@` が来るため）。置き換えを忘れると赤のまま残る。
+    const prefix = `repo:${GITHUB_OWNER}@${GITHUB_OWNER_ID}/${GITHUB_REPOSITORY_NAME}@${GITHUB_REPOSITORY_ID}:`;
+    expect(prefix, '定数から組んだプレフィックスが実測値と一致すること').toBe(
+      'repo:shutx-net@169037737/blog@1351152011:',
     );
+    expect(String(stringEquals()[OIDC_CLAIM_SUB]).startsWith(prefix)).toBe(true);
+    expect(String(stringEquals()[OIDC_CLAIM_SUB])).toMatch(
+      /^repo:shutx-net@169037737\/blog@1351152011:/,
+    );
+
+    // GITHUB_REPOSITORY は `owner/name` のまま残す（ワークフロー側のテストが
+    // 「どのリポジトリの話か」を確認するのに使う）。ID を混ぜないこと。
+    expect(GITHUB_REPOSITORY).toBe('shutx-net/blog');
+    expect(GITHUB_REPOSITORY).toBe(`${GITHUB_OWNER}/${GITHUB_REPOSITORY_NAME}`);
+  });
+
+  it('【誤り(e)】sub を分解すると owner / repo / ref の 3 セグメントが揃う', () => {
+    // 「immutable 形式の文字列を組み立てているつもりで `@` を 1 個書き忘れた」を捕まえる。
+    // 完全一致だけだと差分が 1 文字でもメッセージが読みにくいので、セグメント単位でも見る。
+    const parts = DEPLOY_SUBJECT.split(':');
+    expect(parts.length, `DEPLOY_SUBJECT が repo:<owner/repo>:ref:<ref> の形であること`)
+      .toBeGreaterThanOrEqual(3);
+    expect(parts[0]).toBe('repo');
+
+    const ownerAndRepo = String(parts[1]).split('/');
+    expect(ownerAndRepo, 'owner と repo が / で 2 つに分かれること').toHaveLength(2);
+    expect(ownerAndRepo[0], 'owner セグメントは <name>@<owner-id>').toBe('shutx-net@169037737');
+    expect(ownerAndRepo[0]).toBe(`${GITHUB_OWNER}@${GITHUB_OWNER_ID}`);
+    expect(ownerAndRepo[1], 'repo セグメントは <name>@<repo-id>').toBe('blog@1351152011');
+    expect(ownerAndRepo[1]).toBe(`${GITHUB_REPOSITORY_NAME}@${GITHUB_REPOSITORY_ID}`);
+
+    // ID は数値ではなく識別子として文字列で持つ（template literal に埋めたときに
+    // 桁区切りや指数表記へ化ける経路を作らない）。
+    for (const [name, value] of [
+      ['GITHUB_OWNER_ID', GITHUB_OWNER_ID],
+      ['GITHUB_REPOSITORY_ID', GITHUB_REPOSITORY_ID],
+    ] as const) {
+      expect(typeof value, `${name} は string であること`).toBe('string');
+      expect(value, `${name} は数字だけからなること`).toMatch(/^\d+$/);
+    }
+
+    // `ref:refs/heads/main` 自体に `:` を含むので join で戻す。
+    expect(parts.slice(2).join(':')).toBe('ref:refs/heads/main');
   });
 
   it('【誤り(b) 二重の網】信頼ポリシー全文にワイルドカード文字が 1 つも無い', () => {
     // 演算子が StringEquals でも、値にワイルドカードを入れれば無意味になる。
     // 値の側からも塞ぐ。
+    //
+    // **`@` は禁止しない。** GitHub のドキュメントは「`@` は GitHub のユーザ名にも
+    // リポジトリ名にも現れ得ないので区切り文字に選んだ」と明記しており、immutable
+    // 形式では区切りとして必ず現れる。ワイルドカードは `*` と `?` の 2 文字だけ。
     const raw = JSON.stringify(deployRole().Properties?.['AssumeRolePolicyDocument']);
     expect(raw.includes('*'), `信頼ポリシーに * がある: ${raw}`).toBe(false);
     expect(raw.includes('?'), `信頼ポリシーに ? がある: ${raw}`).toBe(false);
+    expect(raw.includes('@'), 'immutable 形式なら @ が区切りとして現れる').toBe(true);
   });
 });
