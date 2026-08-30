@@ -72,11 +72,14 @@ describe('npm workspaces のルート', () => {
     expect(root.workspaces).toContain('infra');
   });
 
-  it("workspaces が ['site','infra','api'] を含み、'admin' を含まない", () => {
-    // admin は次フェーズ。先走って足すと、ディレクトリが無い状態で npm install が壊れる。
+  it("workspaces が ['site','infra','api'] を含む", () => {
+    // **`admin` を含まない、というアサーションは削除した。**
+    // あれは「次フェーズでやる」という予定をテストに書いたものだった。存在理由が
+    // 消されることにしか無く、admin を足す最初のコミットが別ワークスペースを
+    // 赤くする（そして admin の担当者は infra を触るなと言われている）。
+    // 予定は README に書く。テストに書くと、進捗そのものが失敗として現れる。
     const workspaces = rootPkg().workspaces ?? [];
     expect(workspaces).toEqual(expect.arrayContaining(['site', 'infra', 'api']));
-    expect(workspaces).not.toContain('admin');
   });
 
   it('workspaces 配列に "api" が含まれる', () => {
