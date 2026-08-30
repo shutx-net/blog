@@ -35,13 +35,33 @@ const only = (type: string): Record<string, unknown> => {
   return (found[0]?.Properties ?? {}) as Record<string, unknown>;
 };
 
-const policyStatements = (): PolicyStatement[] =>
-  resourcesOf('AWS::IAM::Policy').flatMap((policy) => {
+/**
+ * 実行ロールのインラインポリシー文。
+ *
+ * **件数ガードを入れてある（修復 5）。** ガードが無いと、ポリシーが 2 本目に
+ * 増えた瞬間に以降の『アクションがちょうど 4 つ』等が **黙って
+ * 「全ポリシーの合併」についての主張に意味が変わる**。
+ * Cognito が SMS ロールなどを持ち込むと現実に起きうる。
+ */
+const policyStatements = (): PolicyStatement[] => {
+  const policies = resourcesOf('AWS::IAM::Policy');
+  expect(policies, 'AWS::IAM::Policy はちょうど 1 本（増えたら以降の主張の意味が変わる）').toHaveLength(1);
+  return policies.flatMap((policy) => {
     const document = policy.Properties?.['PolicyDocument'] as
       | { Statement?: PolicyStatement[] }
       | undefined;
-    return document?.Statement ?? [];
+    const statements = document?.Statement ?? [];
+    expect(statements.length, 'ポリシー文が 0 件だと以降のループが素通りする').toBeGreaterThan(0);
+    return statements;
   });
+};
+
+/** ロググループの論理 ID。**件数 1 を先に主張してから取る（修復 3・4）。** */
+const onlyLogGroupId = (): string => {
+  const ids = Object.keys(template.findResources('AWS::Logs::LogGroup'));
+  expect(ids, 'AWS::Logs::LogGroup はちょうど 1 個').toHaveLength(1);
+  return ids[0] as string;
+};
 
 const actionsOf = (statement: PolicyStatement): string[] =>
   typeof statement.Action === 'string' ? [statement.Action] : (statement.Action ?? []);
@@ -82,12 +102,18 @@ describe('GitHub App の秘密鍵シークレット', () => {
   it('DeletionPolicy が Retain である', () => {
     // **GitHub App の秘密鍵は Web UI で生成した瞬間に 1 度しか表示されない。**
     // スタックを消して鍵を失うと、新しい鍵を作り直す以外に復旧手段がない。
-    const secrets = Object.values(template.findResources('AWS::SecretsManager::Secret')) as Array<{
-      DeletionPolicy?: string;
-      UpdateReplacePolicy?: string;
-    }>;
-    expect(secrets[0]?.DeletionPolicy).toBe('Retain');
-    expect(secrets[0]?.UpdateReplacePolicy).toBe('Retain');
+    // **修復 1**: 以前は secrets[0] というガード無しの添字だった。0 件でも
+    // `undefined?.DeletionPolicy` が undefined になるだけ…ではなく toBe で落ちるが、
+    // **2 件目が増えたときに 1 件目だけ見て通ってしまう**。件数を先に主張し、
+    // 全件ループに変える（infra/README.md の型 2）。
+    const secrets = Object.entries(template.findResources('AWS::SecretsManager::Secret')) as Array<
+      [string, { DeletionPolicy?: string; UpdateReplacePolicy?: string }]
+    >;
+    expect(secrets, 'AWS::SecretsManager::Secret はちょうど 1 個').toHaveLength(1);
+    for (const [logicalId, secret] of secrets) {
+      expect(secret.DeletionPolicy, `${logicalId} の DeletionPolicy`).toBe('Retain');
+      expect(secret.UpdateReplacePolicy, `${logicalId} の UpdateReplacePolicy`).toBe('Retain');
+    }
   });
 
   it('Description に鍵らしき文字列が入っていない', () => {
@@ -124,18 +150,27 @@ describe('実行ロール', () => {
     expect(withManaged).toEqual([]);
   });
 
-  it('lambda.amazonaws.com が assume する', () => {
-    template.hasResourceProperties('AWS::IAM::Role', {
-      AssumeRolePolicyDocument: Match.objectLike({
-        Statement: Match.arrayWith([
-          Match.objectLike({
-            Effect: 'Allow',
-            Principal: { Service: 'lambda.amazonaws.com' },
-            Action: 'sts:AssumeRole',
-          }),
-        ]),
-      }),
-    });
+  it('**すべての** Role が lambda.amazonaws.com だけに assume される', () => {
+    // **修復 2**: 以前は hasResourceProperties で、**1 件でも一致すれば通った**。
+    // 現在ロールは 1 個だが、Cognito が SMS ロール等を持ち込むと
+    // 「どれか 1 つが lambda を assume する」に静かに退化する。
+    // findResources を全件走査する形に変える（infra/README.md の型 1/4）。
+    const roles = Object.entries(template.findResources('AWS::IAM::Role')) as Array<
+      [string, { Properties?: Record<string, unknown> }]
+    >;
+    expect(roles, 'AWS::IAM::Role はちょうど 1 個').toHaveLength(1);
+    for (const [logicalId, role] of roles) {
+      const document = role.Properties?.['AssumeRolePolicyDocument'] as {
+        Statement?: Array<{ Effect?: string; Principal?: unknown; Action?: unknown }>;
+      };
+      const statements = document?.Statement ?? [];
+      expect(statements, `${logicalId} の AssumeRolePolicyDocument が空`).toHaveLength(1);
+      for (const statement of statements) {
+        expect(statement.Effect, logicalId).toBe('Allow');
+        expect(statement.Principal, logicalId).toEqual({ Service: 'lambda.amazonaws.com' });
+        expect(statement.Action, logicalId).toBe('sts:AssumeRole');
+      }
+    }
   });
 });
 
@@ -172,9 +207,9 @@ describe('実行ロールのインラインポリシー', () => {
       actionsOf(s).some((a) => a.startsWith('logs:')),
     );
     expect(logStatements).toHaveLength(1);
-    const logGroupId = Object.keys(template.findResources('AWS::Logs::LogGroup'))[0];
-    expect(logGroupId).toBeDefined();
-    expect(JSON.stringify(logStatements[0]?.Resource)).toContain(logGroupId as string);
+    // **修復 3**: 以前は Object.keys(...)[0] というガード無しの添字だった。
+    // onlyLogGroupId() が件数 1 を先に主張する。
+    expect(JSON.stringify(logStatements[0]?.Resource)).toContain(onlyLogGroupId());
   });
 
   it('logs:CreateLogGroup を持っていない（LogGroup は CDK が作る）', () => {
@@ -239,8 +274,8 @@ describe('Lambda 関数', () => {
       | { LogGroup?: unknown }
       | undefined;
     expect(logging?.LogGroup).toBeDefined();
-    const logGroupId = Object.keys(template.findResources('AWS::Logs::LogGroup'))[0];
-    expect(JSON.stringify(logging?.LogGroup)).toContain(logGroupId as string);
+    // **修復 4**: 修復 3 と同じガード無し添字。
+    expect(JSON.stringify(logging?.LogGroup)).toContain(onlyLogGroupId());
   });
 
   it('**Environment.Variables.AUTH_MODE が "cognito" である**', () => {

@@ -115,6 +115,36 @@ describe('メディア用バケット固有の主張（論理 ID で名指しす
   it('物理名をハードコードしていない（BucketName が無い）', () => {
     expect(mediaBucket().Properties?.['BucketName']).toBeUndefined();
   });
+
+  /**
+   * **修復 6（finding 3）。**
+   *
+   * このファイルにはメディアバケットの Properties に対する **キー集合の等価
+   * アサーションが無かった**。実測で `CorsConfiguration` を足しても 1 件も
+   * 赤くならなかった — つまり本フェーズの変更を検出する能力がゼロだった。
+   *
+   * posting-api.test.ts が Secret に対してやっているのと同じ形（キー集合の等価）で
+   * 締める。**プロパティの追加も削除もここで赤くなる。**
+   */
+  it('**Properties のキー集合が固定されている**（プロパティの増減を検出する）', () => {
+    expect(Object.keys(mediaBucket().Properties ?? {}).sort()).toEqual(
+      [
+        'BucketEncryption',
+        'CorsConfiguration',
+        'LifecycleConfiguration',
+        'PublicAccessBlockConfiguration',
+        'VersioningConfiguration',
+      ].sort(),
+    );
+  });
+
+  it('**配信用バケットの Properties キー集合も固定する**（CORS が紛れ込んだら赤くなる）', () => {
+    const site = buckets()[SITE_BUCKET_LOGICAL_ID];
+    expect(site, `${SITE_BUCKET_LOGICAL_ID} が存在すること`).toBeDefined();
+    expect(Object.keys(site?.Properties ?? {}).sort()).toEqual(
+      ['BucketEncryption', 'PublicAccessBlockConfiguration'].sort(),
+    );
+  });
 });
 
 describe('配信用バケット固有の主張（メディアとの非対称が意図的であること）', () => {
