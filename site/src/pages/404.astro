@@ -1,0 +1,21 @@
+---
+import Layout from "../layouts/Layout.astro";
+
+// Emitted as dist/404.html (astro special-cases the status pages -- build.format
+// "directory" does NOT turn this into 404/index.html).
+//
+// This is the site half of the OAC problem: an S3 REST origin behind OAC has no
+// s3:ListBucket permission, so a missing key comes back 403 rather than 404. The
+// CloudFront errorResponses that map 403 and 404 onto this file live in the CDK
+// workspace; neither half does anything useful alone.
+---
+
+<Layout
+  title="404 — ページが見つかりません"
+  description="お探しのページは見つかりませんでした。"
+  noindex
+>
+  <h1>404</h1>
+  <p>お探しのページは見つかりませんでした。</p>
+  <p><a href="/">トップページへ戻る</a></p>
+</Layout>

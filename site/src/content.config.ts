@@ -14,7 +14,15 @@ export const postSchema = z.object({
   // quoted ones; downstream code sorts on pubDate.valueOf().
   pubDate: z.coerce.date(),
   draft: z.boolean().default(false),
-  tags: z.array(z.string()).default([]),
+  // A tag becomes a directory name verbatim -- tags: ["Two Words"] would emit
+  // dist/tags/Two Words/index.html, with a raw space in the path, and a Japanese
+  // tag would emit a non-ASCII one. Neither can be verified end to end from here
+  // (an S3 key plus the CloudFront Function URI rewrite, with no AWS credentials
+  // available), so unroutable tags fail the build instead. Splitting a tag into a
+  // display label and a slug is the change to make when Japanese tags are wanted.
+  tags: z
+    .array(z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/))
+    .default([]),
 });
 
 const posts = defineCollection({

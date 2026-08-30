@@ -2,10 +2,13 @@
 import type { GetStaticPaths } from "astro";
 import { getCollection, render } from "astro:content";
 
+import Layout from "../../layouts/Layout.astro";
+import { isPublished } from "../../lib/posts.ts";
+
 export const getStaticPaths = (async () => {
   // Filtering here as well as in the listing is what actually keeps drafts
   // unpublished: an unlisted page would still be built, synced to S3 and served.
-  const posts = await getCollection("posts", ({ data }) => !data.draft);
+  const posts = await getCollection("posts", isPublished);
 
   // Content Layer API: the entry identifier is `id`, not `slug`, and the body is
   // rendered with `render(entry)` imported from astro:content -- not entry.render().
@@ -19,16 +22,22 @@ const { post } = Astro.props;
 const { Content } = await render(post);
 ---
 
-<html lang="ja">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width" />
-    <title>{post.data.title}</title>
-  </head>
-  <body>
-    <article>
-      <h1>{post.data.title}</h1>
-      <Content />
-    </article>
-  </body>
-</html>
+<Layout title={post.data.title} description={post.data.description}>
+  <article>
+    <h1>{post.data.title}</h1>
+    <Content />
+    {
+      /* Without these links the tag pages would be generated but orphaned --
+         reachable only by typing the URL. */
+      post.data.tags.length > 0 && (
+        <ul>
+          {post.data.tags.map((tag) => (
+            <li>
+              <a href={`/tags/${tag}/`}>{tag}</a>
+            </li>
+          ))}
+        </ul>
+      )
+    }
+  </article>
+</Layout>

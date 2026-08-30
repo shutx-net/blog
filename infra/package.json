@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "pretest": "cdk synth BlogSiteStack > /dev/null",
+    "pretest": "cdk synth > /dev/null",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "synth": "cdk synth"

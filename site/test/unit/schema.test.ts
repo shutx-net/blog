@@ -72,6 +72,28 @@ describe("postSchema", () => {
       postSchema.safeParse({ ...minimalFrontmatter, tags: ["astro", 42] }).success,
     ).toBe(false);
   });
+
+  // A tag name becomes a directory name verbatim: tags: ["Two Words"] emits
+  // dist/tags/Two Words/index.html, with a raw space in the path. Whether that
+  // survives an S3 key plus the CloudFront Function URI rewrite cannot be checked
+  // from here (no AWS credentials), so the schema refuses to create such a path at
+  // all rather than shipping a route nobody can verify.
+  it.each(["Two Words", "設計メモ", "UPPER", "trailing-"])(
+    "rejects the non-slug tag %j",
+    (tag) => {
+      expect(
+        postSchema.safeParse({ ...minimalFrontmatter, tags: [tag] }).success,
+      ).toBe(false);
+    },
+  );
+
+  // Pinned next to the rejections on purpose: a pattern tightened by accident
+  // would otherwise start failing real posts with nothing here to notice.
+  it("accepts lowercase hyphenated slugs", () => {
+    expect(
+      postSchema.safeParse({ ...minimalFrontmatter, tags: ["astro", "aws-cdk"] }).success,
+    ).toBe(true);
+  });
 });
 
 describe("post fixtures", () => {

@@ -1,0 +1,29 @@
+---
+import BaseHead from "../components/BaseHead.astro";
+import "../styles/global.css";
+
+// The single owner of the <html>/<head>/<body> boilerplate. Every page goes
+// through here, which is what makes "does this page emit a canonical link?" a
+// meaningful assertion in the build-layer tests.
+interface Props {
+  title: string;
+  description: string;
+  noindex?: boolean;
+}
+
+const { title, description, noindex = false } = Astro.props;
+---
+
+<html lang="ja">
+  <head>
+    <BaseHead title={title} description={description} noindex={noindex} />
+  </head>
+  <body>
+    <header>
+      <a href="/">blog</a>
+    </header>
+    <main>
+      <slot />
+    </main>
+  </body>
+</html>

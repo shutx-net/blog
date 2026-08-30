@@ -1,0 +1,31 @@
+---
+// Everything that belongs in <head> on every page. Kept separate from Layout so
+// the per-page metadata decisions live in one readable place.
+interface Props {
+  title: string;
+  description: string;
+  noindex?: boolean;
+}
+
+const { title, description, noindex = false } = Astro.props;
+
+// Built from Astro.url, never from paginate()'s page.url.current: paginate hands
+// back "/2" with no trailing slash while build.format is "directory", so the two
+// disagree on every page after the first.
+// Skipped entirely when noindex is set -- a 404 is served for every URL that does
+// not exist, so naming one of them canonical would be a lie.
+const canonical = noindex ? undefined : new URL(Astro.url.pathname, Astro.site);
+---
+
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width" />
+<title>{title}</title>
+<meta name="description" content={description} />
+{noindex && <meta name="robots" content="noindex" />}
+{canonical && <link rel="canonical" href={canonical} />}
+<link
+  rel="alternate"
+  type="application/rss+xml"
+  title="blog"
+  href={new URL("rss.xml", Astro.site)}
+/>
