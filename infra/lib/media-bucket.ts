@@ -5,6 +5,23 @@ import { Construct } from 'constructs';
 /** 非現行バージョンを保持する日数。旧版が無限に溜まるのを防ぐ。 */
 const NONCURRENT_VERSION_EXPIRATION_DAYS = 90;
 
+/** preflight の結果をブラウザにキャッシュさせる秒数。毎回 OPTIONS を飛ばさない。 */
+const CORS_MAX_AGE_SECONDS = 3600;
+
+export interface MediaBucketProps {
+  /**
+   * CORS で許可する唯一のオリジン。
+   *
+   * **`distribution.distributionDomainName` を渡してはいけない。**
+   * `CorsConfiguration` は `AWS::S3::Bucket` **本体**のプロパティなので、
+   * Distribution の GetAtt を入れると
+   *   Media.CorsConfiguration -> GetAtt[Dist] と Dist.Origins -> GetAtt[Media]
+   * の循環参照になる。**`cdk synth` はこれを検出せず成功し**、cfn-lint の E3004 だけが
+   * 捕まえる。呼び出し側は site-stack.ts の `SITE_ORIGIN` 定数を渡すこと。
+   */
+  readonly siteOrigin: string;
+}
+
 /**
  * 記事に貼る画像などのメディア用バケット。
  *
@@ -24,7 +41,7 @@ const NONCURRENT_VERSION_EXPIRATION_DAYS = 90;
 export class MediaBucket extends Construct {
   readonly bucket: s3.Bucket;
 
-  constructor(scope: Construct, id: string) {
+  constructor(scope: Construct, id: string, props: MediaBucketProps) {
     super(scope, id);
 
     this.bucket = new s3.Bucket(this, 'Bucket', {
@@ -42,6 +59,24 @@ export class MediaBucket extends Construct {
         {
           id: 'expire-noncurrent-versions',
           noncurrentVersionExpiration: Duration.days(NONCURRENT_VERSION_EXPIRATION_DAYS),
+        },
+      ],
+      // **CORS はメディアバケットにだけ入れる。**
+      //
+      // ブラウザから presigned PUT で画像を上げるために要る。**読み取り用の GET は
+      // 入れない** — 画像は CloudFront 経由で読むので、バケット側の CORS は関与しない。
+      //
+      // AllowedOrigins は CloudFront のドメイン 1 本だけ。`*` にすると、任意のサイトの
+      // JavaScript が（presigned URL さえ手に入れば）このバケットに書けるようになる。
+      cors: [
+        {
+          allowedOrigins: [props.siteOrigin],
+          allowedMethods: [s3.HttpMethods.PUT],
+          // presigned PUT は content-type と content-length を署名済みヘッダとして送る
+          // （api/src/media/presign.ts の requiredHeaders）。ブラウザに送らせるには
+          // preflight で許可されている必要がある。
+          allowedHeaders: ['content-type', 'content-length'],
+          maxAge: CORS_MAX_AGE_SECONDS,
         },
       ],
       // bucketName は指定しない（物理名をハードコードしない）。実名は CfnOutput で出す。

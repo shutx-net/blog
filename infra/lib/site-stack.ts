@@ -108,7 +108,10 @@ export class SiteStack extends Stack {
     // メディアは配信用と別バケットにする。同居させると sync --delete が巻き込んで消す。
     // 別 Stack ではなく Construct なのは、別 Stack だと synth が DependencyCycle で
     // 落ちるため（media-bucket.ts のコメントと README を参照）。
-    const media = new MediaBucket(this, 'MediaBucket');
+    // **siteOrigin に distribution.distributionDomainName を渡してはいけない。**
+    // CorsConfiguration は S3::Bucket 本体のプロパティなので循環参照になる
+    // （SITE_ORIGIN の定義のコメントを参照）。
+    const media = new MediaBucket(this, 'MediaBucket', { siteOrigin: SITE_ORIGIN });
     this.mediaBucket = media.bucket;
 
     // 管理画面のログイン（単一著者の Cognito ユーザプール）。

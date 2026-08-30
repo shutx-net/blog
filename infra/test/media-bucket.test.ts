@@ -1,7 +1,7 @@
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
-import { SiteStack } from '../lib/site-stack.ts';
+import { SITE_ORIGIN, SiteStack } from '../lib/site-stack.ts';
 
 /**
  * ステートフル資源の論理 ID は固定する。変わると置換になるため。
@@ -145,5 +145,170 @@ describe('バケットポリシー（enforceSSL は両方のバケットに生�
         ]),
       },
     });
+  });
+});
+
+/**
+ * **CORS はメディアバケットにだけ入れる。**
+ *
+ * ブラウザから presigned PUT で画像を上げるために要る。読み取りは CloudFront 経由なので
+ * バケット側の CORS は要らない（だから GET も入れない）。
+ */
+describe('メディアバケットの CORS（ブラウザからの presigned PUT）', () => {
+  const mediaCors = (): Record<string, unknown>[] => {
+    const found = buckets()[MEDIA_BUCKET_LOGICAL_ID];
+    expect(found, `${MEDIA_BUCKET_LOGICAL_ID} が存在すること`).toBeDefined();
+    const cors = found?.Properties?.['CorsConfiguration'] as
+      | { CorsRules?: Record<string, unknown>[] }
+      | undefined;
+    expect(cors, 'メディアバケットに CorsConfiguration が必要').toBeDefined();
+    const rules = cors?.CorsRules ?? [];
+    // 件数アサーションが非空ガードを兼ねる。
+    expect(rules, 'CorsRules はちょうど 1 本').toHaveLength(1);
+    return rules;
+  };
+
+  it('CorsRules がちょうど 1 本ある', () => {
+    expect(mediaCors()).toHaveLength(1);
+  });
+
+  it('**AllowedOrigins がちょうど 1 本で、SITE_ORIGIN 定数と完全一致する**', () => {
+    // CORS と Cognito の CallbackURLs が **同じ 1 定数**を指していること。
+    // 2 か所に別々の文字列を書くと「ログインはできるが画像が上がらない」という
+    // デバッグしにくい壊れ方をする。
+    expect(mediaCors()[0]?.['AllowedOrigins']).toEqual([SITE_ORIGIN]);
+  });
+
+  it('**AllowedOrigins に "*" が含まれない**', () => {
+    // 一番やりがちな緩め方を名指しで禁止する。
+    const origins = mediaCors()[0]?.['AllowedOrigins'] as string[];
+    expect(origins).not.toContain('*');
+    for (const origin of origins) expect(origin).not.toContain('*');
+  });
+
+  it('AllowedOrigins の唯一の値が https:// で始まる', () => {
+    const origins = mediaCors()[0]?.['AllowedOrigins'] as string[];
+    expect(origins).toHaveLength(1);
+    expect(origins[0]?.startsWith('https://')).toBe(true);
+    expect(origins[0]).not.toContain('http://');
+  });
+
+  it('**AllowedMethods が ["PUT"] ちょうど**（POST / GET / DELETE を含まない）', () => {
+    // presigned PUT しか使わない。GET は CloudFront 経由で読むのでバケットに CORS は要らない。
+    expect(mediaCors()[0]?.['AllowedMethods']).toEqual(['PUT']);
+    for (const method of ['GET', 'POST', 'DELETE', 'HEAD']) {
+      expect(mediaCors()[0]?.['AllowedMethods'] as string[]).not.toContain(method);
+    }
+  });
+
+  it('MaxAge が設定されている（preflight を毎回飛ばさない）', () => {
+    expect(mediaCors()[0]?.['MaxAge'] as number).toBeGreaterThan(0);
+  });
+
+  it('**CORS を持つバケットはちょうど 1 個で、それはメディア用である**', () => {
+    // hasResourceProperties の「1 件でも一致すれば通る」を避けるため、
+    // 両バケットを走査して集合として主張する。
+    const found = buckets();
+    expect(Object.keys(found)).toHaveLength(2);
+    const withCors = Object.entries(found)
+      .filter(([, r]) => r.Properties?.['CorsConfiguration'] !== undefined)
+      .map(([id]) => id);
+    expect(withCors).toEqual([MEDIA_BUCKET_LOGICAL_ID]);
+  });
+
+  it('配信用バケットには CorsConfiguration が無い', () => {
+    const site = buckets()[SITE_BUCKET_LOGICAL_ID];
+    expect(site, `${SITE_BUCKET_LOGICAL_ID} が存在すること`).toBeDefined();
+    expect(site?.Properties?.['CorsConfiguration']).toBeUndefined();
+  });
+});
+
+/**
+ * **本 step で一番価値のあるテスト。**
+ *
+ * `CorsConfiguration` は `AWS::S3::Bucket` **本体**のプロパティなので、
+ * `AllowedOrigins` に `distribution.distributionDomainName` を入れると
+ *
+ *   Media.Properties.CorsConfiguration...AllowedOrigins = Fn::GetAtt [Dist, DomainName]
+ *   Dist.Properties...Origins[0].DomainName            = Fn::GetAtt [Media, RegionalDomainName]
+ *
+ * という循環参照になる。
+ *
+ * **実測（本ブランチで実際に循環を作って確認した）:**
+ *
+ * - `npx cdk synth BlogSiteStack` は **exit 0 で成功する。** CLI は同一スタック内の
+ *   リソース間循環を検出しない。これだけを回していると `cdk deploy` で初めて分かる。
+ * - `Template.fromStack()` は検出して **throw する**:
+ *   `Template is undeployable, these resources have a dependency cycle:
+ *    SiteBucketPolicy3AC1D0F8 -> SiteDistribution3FF9535D -> MediaBucketE52FC6E4
+ *    -> SiteDistribution3FF9535D`
+ *   ただし **テストファイルの読み込み時点で落ちる**ので、
+ *   「どのアサーションが何を言っているか」は分からない（全 it が消える）。
+ * - cfn-lint は **E3004** で 2 件検出する。
+ *
+ * **だから下の名指しのテストに意味がある。** 落ち方が読めることと、
+ * cfn-lint を回していない状況でも原因が 1 行で分かることの 2 つが価値である。
+ *
+ * バケットポリシー（別リソース）が Distribution を参照するのは問題ない。
+ * ここで見るのは **S3::Bucket の Properties の中だけ**である。
+ */
+describe('循環参照の回帰テスト', () => {
+  /** 値の中に現れる Fn::GetAtt の参照先論理 ID を全部集める。 */
+  const collectGetAttTargets = (value: unknown, out: string[] = []): string[] => {
+    if (Array.isArray(value)) {
+      for (const item of value) collectGetAttTargets(item, out);
+      return out;
+    }
+    if (value !== null && typeof value === 'object') {
+      for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+        if (key === 'Fn::GetAtt' && Array.isArray(child) && typeof child[0] === 'string') {
+          out.push(child[0]);
+        }
+        if (key === 'Ref' && typeof child === 'string') out.push(child);
+        collectGetAttTargets(child, out);
+      }
+    }
+    return out;
+  };
+
+  const resources = (): Record<string, CfnResource> =>
+    template.toJSON()['Resources'] as Record<string, CfnResource>;
+
+  it('Distribution がちょうど 1 個ある（以降のテストの非空ガード）', () => {
+    template.resourceCountIs('AWS::CloudFront::Distribution', 1);
+  });
+
+  it('**S3::Bucket の Properties から Distribution を参照している箇所が 1 つも無い**', () => {
+    const all = resources();
+    const distributionIds = Object.entries(all)
+      .filter(([, r]) => r.Type === 'AWS::CloudFront::Distribution')
+      .map(([id]) => id);
+    expect(distributionIds).toHaveLength(1);
+
+    const bucketIds = Object.entries(all)
+      .filter(([, r]) => r.Type === 'AWS::S3::Bucket')
+      .map(([id]) => id);
+    expect(bucketIds).toHaveLength(2);
+
+    for (const id of bucketIds) {
+      const referenced = collectGetAttTargets(all[id]?.Properties ?? {});
+      for (const target of distributionIds) {
+        expect(
+          referenced,
+          `${id} の Properties が Distribution ${target} を参照している（循環参照。cfn-lint E3004）`,
+        ).not.toContain(target);
+      }
+    }
+  });
+
+  it('Distribution が両方のバケットを参照している（向きが片方向であることの確認）', () => {
+    const all = resources();
+    const distribution = Object.entries(all).find(
+      ([, r]) => r.Type === 'AWS::CloudFront::Distribution',
+    );
+    expect(distribution).toBeDefined();
+    const referenced = collectGetAttTargets(distribution?.[1]?.Properties ?? {});
+    expect(referenced).toContain(SITE_BUCKET_LOGICAL_ID);
+    expect(referenced).toContain(MEDIA_BUCKET_LOGICAL_ID);
   });
 });
