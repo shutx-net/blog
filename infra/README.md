@@ -33,9 +33,33 @@ npx -w infra cdk diff        # deploy の前に必ず。PR 本文に貼る（AGE
 | `AWS::CloudFront::OriginAccessControl` | `SiteDistributionOrigin2S3OriginAccessControlE0FE6FAA` | メディア用オリジン。同上（**OAC はオリジンごとに別**） |
 | `AWS::CloudFront::Distribution` | `SiteDistribution3FF9535D` | `redirect-to-https` / `DefaultRootObject: index.html` / `/media/*` の追加ビヘイビア / 403・404 を `/404.html` にマップ |
 | `AWS::CloudFront::Function` | `RewriteUriFunctionF5D8A5AC` | `cloudfront-js-2.0` / viewer-request（デフォルトビヘイビアのみ） |
+| `AWS::SecretsManager::Secret` | `PostingApiGitHubAppPrivateKeyBB7A7648` | **`PostingApi`**。GitHub App の秘密鍵。**Properties は `Description` のみ**（空のシークレット）/ `DeletionPolicy: Retain` |
+| `AWS::Logs::LogGroup` | `PostingApiFunctionLogGroupCAC55A4B` | `RetentionInDays: 30`。Lambda に作らせず先に作る（実行ロールに `logs:CreateLogGroup` が要らなくなる） |
+| `AWS::IAM::Role` | `PostingApiExecutionRoleC51CD7D8` | **`ManagedPolicyArns` を持たない**。マネージドポリシーは 1 つも付けない |
+| `AWS::IAM::Policy` | `PostingApiExecutionRoleDefaultPolicy9EF9FB76` | 4 アクションのみ（`logs:CreateLogStream` / `logs:PutLogEvents` / `s3:PutObject` / `secretsmanager:GetSecretValue`）。ワイルドカードも `Resource: "*"` も 0 件 |
+| `AWS::Lambda::Function` | `PostingApiFunctionEFE83FA3` | `nodejs24.x` / `ReservedConcurrentExecutions: 2` / **`AUTH_MODE=deny-all`** / `Code` は `api/dist` のアセット |
+| `AWS::Lambda::Url` | `PostingApiFunctionFunctionUrlCB228805` | **`AuthType: AWS_IAM`**（`NONE` は完全公開になる） |
+| `AWS::CloudFront::OriginAccessControl` | `SiteDistributionOrigin3FunctionUrlOriginAccessControl1ACDDE31` | 投稿 API オリジン。`lambda` / `always` / `sigv4` |
+| `AWS::Lambda::Permission` | `SiteDistributionOrigin3InvokeFromApi...D7364C80` | `cloudfront.amazonaws.com` に `lambda:InvokeFunctionUrl`。`SourceArn` をこのディストリビューションに限定（confused deputy 対策） |
 
 配信用バケット・バケットポリシー・ディストリビューション・Function・Origin1 の OAC の論理 ID は
 **Phase 1 から 1 文字も変わっていない**（＝既存リソースの置換は起きない）。
+メディア用 OAC（`...Origin2S3OriginAccessControlE0FE6FAA`）も **Phase 2 から変わっていない**。
+Phase 3 の `cdk diff` は新規 8 リソースと Distribution の in-place 更新だけで、**置換も削除も 0 件**。
+
+#### 投稿 API のエンドポイント
+
+| メソッド | パス | 認証 | 備考 |
+| --- | --- | --- | --- |
+| `GET` | `/api/health` | 不要 | `authMode` を返す。**デプロイ後に fail-closed 状態を確認できる** |
+| `GET` | `/api/health/github-app` | 必要 | 鍵で installation token を取れるかの **真偽だけ** を返す。`?versionStage=AWSPENDING` で鍵ローテーションを検証できる |
+| `POST` | `/api/posts` | 必要 | Git Data API で 1 記事 1 コミット |
+| `POST` | `/api/media/presign` | 必要 | presigned PUT URL の発行 |
+
+**`AUTH_MODE=deny-all` で出荷している。** エンドユーザ認証（Cognito）は次フェーズなので、
+認証が必要な 3 経路は **すべて 503 を返し、GitHub にも S3 にも Secrets Manager にも到達しない**。
+`api/test/unit/router.test.ts` が「503 が返る」ではなく **「コラボレータの呼び出し回数が 0」** を
+主張しており、`test/posting-api.test.ts` が環境変数の値を固定している。
 
 ### BlogCicdStack
 
@@ -68,7 +92,26 @@ npx -w infra cdk diff        # deploy の前に必ず。PR 本文に貼る（AGE
 
 ### cfn-lint
 
-`validate_cloudformation_template` — **両スタックとも 0 error / 0 warning / 0 info**。
+`validate_cloudformation_template` — Phase 3 時点の実測。
+
+| スタック | 結果 |
+| --- | --- |
+| `BlogCicdStack` | **0 error / 0 warning / 0 info** |
+| `BlogSiteStack` | **0 error / 1 warning / 0 info**（Phase 2 の 0/0/0 から warning が 1 件増えた） |
+
+唯一の指摘は **`W3005`**。
+
+```
+W3005 'PostingApiExecutionRoleC51CD7D8' dependency already enforced by a 'GetAtt'
+      at 'Resources/PostingApiFunctionEFE83FA3/Properties/Role'
+```
+
+**トリアージ: 受容する。** これは CDK が `AWS::Lambda::Function` に自動で付ける
+`DependsOn: [<Role>DefaultPolicy, <Role>]` のうち、`Role` のほうが `Fn::GetAtt` で
+既に暗黙の依存になっているという指摘である。しかし **`DefaultPolicy` への依存は暗黙にはならず、
+消すとポリシー添付前に関数が作られて実行時に権限不足になりうる**ため、CDK は意図的に両方を書いている。
+ユーザコードから片方だけ削るにはエスケープハッチが要り、得られるのは lint の 1 行、
+失うのはデプロイ順序の保証である。割に合わない。
 
 ### cfn-guard（bundled `aws-security` ルールセット）
 
@@ -80,6 +123,19 @@ npx -w infra cdk diff        # deploy の前に必ず。PR 本文に貼る（AGE
 **Phase 2 が新しく増やした指摘はゼロ。** 6 件は Phase 1 と同一で、ルール ID も同じ。
 IAM ロール・IAM ポリシー・OIDC プロバイダ・CloudFront の追加ビヘイビア・`CustomErrorResponses` の
 いずれに対しても指摘は出なかった。
+
+**Phase 3 が新しく増やした指摘も 0 件。** 件数は 6 件のままで、ルール ID も完全に同一。
+次に誰かが同じ検証をしたとき「6 件のまま＝ツールが動いていない」と誤解しないよう、
+**Phase 3 で追加したどのリソースが 1 件も指摘を生まなかったかを列挙しておく。**
+
+- `AWS::Lambda::Function`（`nodejs24.x` / 予約同時実行あり）
+- `AWS::Lambda::Url`（`AuthType: AWS_IAM`）
+- `AWS::Lambda::Permission`
+- `AWS::SecretsManager::Secret`（値の無い空シークレット）
+- `AWS::Logs::LogGroup`
+- `AWS::IAM::Role` / `AWS::IAM::Policy`（`PostingApi` の実行ロール）
+- 3 本目の `AWS::CloudFront::OriginAccessControl`（`lambda` タイプ）
+- `/api/*` の追加ビヘイビア
 
 このルールセットはこの構成では原理的に 0 件にできない（指摘どおりに直すと、ログ用バケットが
 新たな違反を生んで 6 件 → 8 件に増える）。したがって受け入れ条件は「0 件」ではなく
@@ -119,6 +175,20 @@ IAM ロール・IAM ポリシー・OIDC プロバイダ・CloudFront の追加�
   直接 S3 に上げるには CORS が要るが、`admin/` も `api/` も無い現時点では許可すべき Origin が
   決まらず（カスタムドメインも未定）、正しい値を書けないうえテストで検証もできない。
   CORS の追加はバケットの置換を伴わない更新なので、後から安全に足せる
+- **エンドユーザ認証（Cognito）が入っていない。** 本フェーズは `AUTH_MODE=deny-all` で
+  fail-closed 出荷している。**`AUTH_MODE` を緩める変更と Cognito の実装は同一 PR でなければならない。**
+  `AWS_IAM` + OAC はエンドユーザ認証ではないため（下の「`AWS_IAM` + OAC はエンドユーザ認証ではない」を参照）、
+  この 1 行を緩めた瞬間に公開の書き込みエンドポイントになる
+- **`lambda:InvokeFunction` が要るかは初回デプロイまで未検証。** AWS のドキュメントは Lambda function URL への
+  OAC アクセスに `lambda:InvokeFunctionUrl` と `lambda:InvokeFunction` の **2 つ**を
+  `add-permission` する例を示しているが、CDK が生成する `AWS::Lambda::Permission` は
+  `InvokeFunctionUrl` の 1 つだけ。本フェーズは deploy しないので実地未検証。初回デプロイ後に
+  `/api/health` がアクセス拒否で返るようなら `lambda:InvokeFunction` を足し、README と
+  `test/distribution-oac.test.ts` のアサーションを更新すること（症状は下の
+  「`AWS_IAM` + OAC はエンドユーザ認証ではない」の末尾を参照）。**まとめて `lambda:*` にしないこと**
+- **GitHub App がまだ存在しない。** `GITHUB_APP_CLIENT_ID` は `not-configured` というプレースホルダで、
+  シークレットも空。App の作成は Web UI でしかできず、鍵の投入は `DEVELOPERS.md` の手順で行う。
+  `AUTH_MODE=deny-all` の間は GitHub を呼ぶ経路に到達しないので、この状態で deploy しても安全
 - **`env` を明示するのは ACM のフェーズで。** 下の「`env` を明示しない」を参照
 - **`aws s3 sync` に必要な IAM アクションの最小集合は実デプロイ未検証。** 下の
   「デプロイロールに S3 の grant メソッドを使わない」を参照
@@ -202,6 +272,75 @@ URI 書き換えは「最後のスラッシュより後にドットがあれば�
 `SiteStack` のバケット ARN とディストリビューションを読むだけで、`SiteStack` 側に何も書き込まない）。
 `cdk_best_practices` の「Model with constructs, deploy with stacks — Represent logical units as
 Construct, not Stack. Use stacks only for deployment composition」とも一致する。
+
+### `AWS_IAM` + OAC はエンドユーザ認証ではない
+
+**これを取り違えると、公開の書き込みエンドポイントをデプロイすることになる。**
+
+`AWS::Lambda::Url` の `AuthType` は `AWS_IAM` で、Function URL に直接アクセスしても
+SigV4 署名が無ければ 403 になる。しかしそれが防いでいるのは **Function URL への直接アクセスだけ**である。
+
+OAC の `SigningBehavior` は `always`。CloudFront は **到達したすべてのリクエストに自分で署名を付けて**
+オリジンに渡す。つまり `https://<distribution>/api/posts` に **誰が POST しても Lambda は起動する。**
+匿名でも起動する。`AWS_IAM` は CloudFront 経由の匿名アクセスを一切止めない。
+
+書き込みを止めているのは Lambda 側の `AUTH_MODE=deny-all` のほうである。
+
+- 環境変数 `AUTH_MODE` は **必須**。未設定・未知の値ならコールドスタートで例外になり、
+  CloudFront には 502 が返る。「黙って全許可」にならないための設計
+- 認可判定は **ルータのディスパッチ前**にある。拒否時に GitHub クライアント・presigner・
+  SecretReader を **一切呼ばない**（`api/test/unit/router.test.ts` が呼び出し回数 0 を主張）
+- `test/posting-api.test.ts` が `Environment.Variables.AUTH_MODE == 'deny-all'` を固定しているので、
+  緩めるときは必ずテストを直すことになる
+
+さらに本フェーズでは GitHub App 自体が存在せずシークレットも空なので、仮に上を全部すり抜けても
+書き込みは成立しない。**この状態でのデプロイは安全である。**
+
+> **初回デプロイ後の確認。** AWS のドキュメントは OAC から Lambda function URL を叩くのに
+> `lambda:InvokeFunctionUrl` と `lambda:InvokeFunction` の 2 つを `add-permission` する例を示しているが、
+> CDK が生成する `AWS::Lambda::Permission` は `InvokeFunctionUrl` の 1 つだけである。
+> 初回デプロイ後に `GET /api/health` が **HTTP 403 (AccessDenied)** で返るなら、
+> 不足しているのは後者。`lambda:InvokeFunction` を明示的に足すこと（`lambda:*` にはしない）。
+
+### POST / PUT では呼び出し側が `x-amz-content-sha256` を付ける必要がある
+
+CloudFront + Lambda Function URL の OAC 構成では、**呼び出し側（＝ブラウザ / 管理画面）が
+ボディの SHA256 を `x-amz-content-sha256` ヘッダに入れなければならない。** AWS のドキュメントの原文:
+
+> If you use PUT or POST methods with your Lambda function URL, your users must compute the SHA256
+> of the body and include the payload hash value of the request body in the `x-amz-content-sha256`
+> header when sending the request to CloudFront. **Lambda doesn't support unsigned payloads.**
+
+**この制約は API 側では吸収できない**（署名は CloudFront が行い、Lambda が検証する）。
+知らずに管理画面を書くと、原因の分かりにくい署名エラーに時間を溶かす。
+**admin フェーズの最初のタスクを「fetch ラッパで `x-amz-content-sha256` を必ず付ける」にすること。**
+本フェーズは deploy しないので実地検証はできていない。
+
+### 閲覧者の `Authorization` ヘッダは CloudFront に上書きされる
+
+OAC の `SigningBehavior` が `always` である帰結として、CloudFront は自分の SigV4 署名を
+`Authorization` ヘッダに書く。**閲覧者が送った `Authorization` は失われる。**
+
+したがって Cognito フェーズで ID トークンを `Authorization: Bearer` で送る一般的な設計は
+**そのままでは使えない**。独自ヘッダ（例 `X-Blog-Id-Token`）か Cookie で運ぶこと。
+`/api/*` のオリジンリクエストポリシーは `ALL_VIEWER_EXCEPT_HOST_HEADER` なので、
+独自ヘッダも Cookie もそのまま転送される（追加設定は不要）。
+
+`no-override` に切り替える手もあるが、そうすると今度は **ブラウザ側が Lambda URL のホストに対して
+SigV4 署名を行う必要**が生じ、SPA では現実的でない。
+
+### `/api/*` のビヘイビアで既定に任せてはいけない 4 つ
+
+| 設定 | 既定 | 既定のままだと |
+| --- | --- | --- |
+| `allowedMethods` | `GET` / `HEAD` | **POST が 405 になる** |
+| `cachePolicy` | `CACHING_OPTIMIZED` | API の応答がキャッシュされる |
+| `originRequestPolicy` | なし | — （`ALL_VIEWER` にすると `Host` が転送され、**OAC の署名が必ず失敗する**） |
+| `viewerProtocolPolicy` | — | `redirect-to-https` にすると **リダイレクトで POST のボディが失われる**。`https-only` で拒否する |
+
+`functionAssociations` は **付けない**。URI 書き換え Function は拡張子の無いパスに `/index.html` を
+足すので、`/api/posts` が `/api/posts/index.html` になって 404 になる。
+`test/distribution-api-behavior.test.ts` が 4 つとも固定している。
 
 ### 投稿 API も別 Stack にできない（ただし理由が上とは違う）
 

@@ -148,11 +148,22 @@ npx -w infra cdk bootstrap aws://<account-id>/ap-northeast-1
 Secrets Manager に置く。**CDK には値を書かない** — CloudFormation テンプレートに平文が残るため、
 空のシークレットを CDK で作り、値だけを CLI で流し込む。
 
+**シークレットの物理名は CDK が付けない**（物理名をハードコードしない方針）。名前は
+`BlogSiteStack` の CfnOutput `GitHubAppSecretName` から取る。
+
 ```sh
+SECRET_ID=$(aws cloudformation describe-stacks --stack-name BlogSiteStack \
+  --query "Stacks[0].Outputs[?ends_with(OutputKey, 'GitHubAppSecretName')].OutputValue" \
+  --output text)
+
 aws secretsmanager put-secret-value \
-  --secret-id blog/github-app-private-key \
+  --secret-id "$SECRET_ID" \
   --secret-binary fileb://blog-app.private-key.pem
 ```
+
+`--secret-binary` を使うので、API からは `SecretBinary`（`Uint8Array`）として返る。
+`api/src/secret.ts` は **`SecretBinary` を先に見る**（コンソールから貼った場合の
+`SecretString` にもフォールバックする）。
 
 PEM ファイルはこのリポジトリの中に置かないこと（`.gitignore` はしているが、そもそも持ち込まない）。
 
