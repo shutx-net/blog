@@ -74,6 +74,17 @@ export const SITE_ORIGIN = 'https://d8gsxbwzr6ft8.cloudfront.net';
 export const ADMIN_LOGIN_DOMAIN_PREFIX = 'shutx-blog-admin';
 
 /**
+ * 投稿を許可する唯一の Cognito ユーザ名。
+ *
+ * **`@` を含めないこと。** メールアドレスを入れても、`usernameAttributes` を設定して
+ * いないこのプールでは `cognito:username` に一致しない。public リポジトリに個人の
+ * メールアドレスを書かないという方針とも合う（AGENTS.md）。
+ *
+ * ユーザの作成は帯域外（`aws cognito-idp admin-create-user`）。CDK は作らない。
+ */
+export const ADMIN_USERNAME = 'shutx';
+
+/**
  * 静的サイト配信スタック。
  *
  * env は意図的に指定しない（env-agnostic）。本フェーズは AWS 認証情報を
@@ -128,6 +139,20 @@ export class SiteStack extends Stack {
     // ここで先に作る。
     const postingApi = new PostingApi(this, 'PostingApi', {
       mediaBucket: this.mediaBucket,
+      // **Phase 4 でここが deny-all から cognito に変わった。**
+      // 型が判別可能ユニオンなので、userPool / userPoolClient / allowedUsername を
+      // 揃えずに mode: 'cognito' にすることは **できない**。
+      //
+      // **切り戻しは `{ mode: 'deny-all' }` に戻して deploy し直すだけ。**
+      // Cognito のリソースは消えない（deletionProtection + RemovalPolicy.RETAIN）し、
+      // api 側の deny-all は COGNITO_* を 1 つも読まないので、
+      // **壊れた Cognito 設定を抱えたまま安全側に倒せる。**
+      auth: {
+        mode: 'cognito',
+        userPool: adminAuth.userPool,
+        userPoolClient: adminAuth.userPoolClient,
+        allowedUsername: ADMIN_USERNAME,
+      },
       githubOwner: 'shutx-net',
       githubRepo: 'blog',
       githubAppClientId: 'not-configured',

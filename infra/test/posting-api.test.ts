@@ -1,7 +1,21 @@
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
-import { SiteStack } from '../lib/site-stack.ts';
+// **api の定数を実物で import する。** infra が書く文字列と api が受け付ける文字列が
+// ずれると synth もテストも通ったうえでコールドスタートだけが落ちる。
+import {
+  ALLOWED_AUTH_MODES,
+  AUTH_MODE_COGNITO,
+  AUTH_MODE_DENY_ALL,
+} from '../../api/src/config.ts';
+import { ADMIN_USERNAME, SiteStack } from '../lib/site-stack.ts';
+
+/** cognito モードのときだけ現れる環境変数。 */
+const COGNITO_ENV_NAMES = [
+  'COGNITO_USER_POOL_ID',
+  'COGNITO_CLIENT_ID',
+  'COGNITO_ALLOWED_USERNAME',
+] as const;
 
 interface PolicyStatement {
   Effect?: string;
@@ -31,6 +45,17 @@ const policyStatements = (): PolicyStatement[] =>
 
 const actionsOf = (statement: PolicyStatement): string[] =>
   typeof statement.Action === 'string' ? [statement.Action] : (statement.Action ?? []);
+
+const lambdaEnvironment = (): Record<string, unknown> => {
+  const environment = only('AWS::Lambda::Function')['Environment'] as
+    | { Variables?: Record<string, unknown> }
+    | undefined;
+  const variables = environment?.Variables;
+  // 非空ガード。Environment ごと消えたときに全アサーションが素通りするのを防ぐ。
+  expect(variables, 'Lambda に環境変数が必要').toBeDefined();
+  expect(Object.keys(variables ?? {}).length).toBeGreaterThan(0);
+  return variables ?? {};
+};
 
 describe('GitHub App の秘密鍵シークレット', () => {
   it('**Properties のキー集合が ["Description"] ちょうどである**', () => {
@@ -218,13 +243,96 @@ describe('Lambda 関数', () => {
     expect(JSON.stringify(logging?.LogGroup)).toContain(logGroupId as string);
   });
 
-  it('**Environment.Variables.AUTH_MODE が "deny-all" である**', () => {
-    // **この 1 行が「認証なしの書き込みエンドポイントをデプロイしない」の infra 側の担保。**
-    // 変えるときに必ずこのテストを直させる。Cognito の実装と同じ PR でなければならない。
-    const environment = only('AWS::Lambda::Function')['Environment'] as
-      | { Variables?: Record<string, unknown> }
-      | undefined;
-    expect(environment?.Variables?.['AUTH_MODE']).toBe('deny-all');
+  it('**Environment.Variables.AUTH_MODE が "cognito" である**', () => {
+    expect(lambdaEnvironment()['AUTH_MODE']).toBe(AUTH_MODE_COGNITO);
+  });
+
+  it('AUTH_MODE の値が api 側の定数と一致する（ずれるとコールドスタートで落ちる）', () => {
+    // infra が書く文字列と api/src/config.ts が受け付ける文字列がずれると、
+    // **synth もテストも通ったうえで**本番のコールドスタートだけが落ちる。
+    // 既存の media-presign.test.ts が MEDIA_PATH_PATTERN を import しているのと同じ手口。
+    expect([AUTH_MODE_DENY_ALL, AUTH_MODE_COGNITO]).toContain(lambdaEnvironment()['AUTH_MODE']);
+    expect(ALLOWED_AUTH_MODES).toContain(lambdaEnvironment()['AUTH_MODE'] as string);
+  });
+
+  /**
+   * **本 step で最も重要な主張。条件付きの不変条件として書く。**
+   *
+   * 将来 deny-all に戻しても緑のまま通り、**cognito にしたのに COGNITO_* が
+   * 欠けている状態だけが赤くなる。**
+   */
+  it('**AUTH_MODE=cognito なら COGNITO_* が 3 つ揃っていて、いずれも空でない**', () => {
+    const variables = lambdaEnvironment();
+    if (variables['AUTH_MODE'] !== AUTH_MODE_COGNITO) return;
+    for (const name of COGNITO_ENV_NAMES) {
+      const value = variables[name];
+      expect(value, `${name} が無い`).toBeDefined();
+      expect(JSON.stringify(value), `${name} が空`).not.toBe('""');
+      expect(JSON.stringify(value).length, `${name} が空`).toBeGreaterThan(2);
+    }
+  });
+
+  it('**AUTH_MODE=deny-all なら COGNITO_* を 1 つも渡さない**（切り戻しの逃げ道）', () => {
+    const variables = lambdaEnvironment();
+    if (variables['AUTH_MODE'] !== AUTH_MODE_DENY_ALL) return;
+    for (const name of COGNITO_ENV_NAMES) {
+      expect(variables[name], `deny-all なのに ${name} がある`).toBeUndefined();
+    }
+  });
+
+  it('COGNITO_USER_POOL_ID が Ref でユーザプールを指している（物理 ID の直書きでない）', () => {
+    const value = lambdaEnvironment()['COGNITO_USER_POOL_ID'] as Record<string, unknown>;
+    expect(Object.keys(value)).toEqual(['Ref']);
+    const pools = Object.keys(template.findResources('AWS::Cognito::UserPool'));
+    expect(pools).toHaveLength(1);
+    expect(value['Ref']).toBe(pools[0]);
+  });
+
+  it('COGNITO_CLIENT_ID が Ref でアプリクライアントを指している', () => {
+    const value = lambdaEnvironment()['COGNITO_CLIENT_ID'] as Record<string, unknown>;
+    expect(Object.keys(value)).toEqual(['Ref']);
+    const clients = Object.keys(template.findResources('AWS::Cognito::UserPoolClient'));
+    expect(clients).toHaveLength(1);
+    expect(value['Ref']).toBe(clients[0]);
+  });
+
+  it('**COGNITO_ALLOWED_USERNAME がリテラルで、空でなく、@ を含まない**', () => {
+    // メールアドレスを入れると usernameAttributes 無しのプールでは一致しない。
+    // public リポジトリに個人のメールを書かないという方針とも合う。
+    const value = lambdaEnvironment()['COGNITO_ALLOWED_USERNAME'];
+    expect(typeof value).toBe('string');
+    expect(value).toBe(ADMIN_USERNAME);
+    expect((value as string).length).toBeGreaterThan(0);
+    expect(value).not.toContain('@');
+  });
+
+  it('**環境変数のキー集合が固定されている**（増えたこと自体を検出する）', () => {
+    // 既存の「秘密が入っていない」走査は自動的に COGNITO_* も見るが、
+    // **キーが増えたこと自体**を検出する主張が無かった。
+    expect(Object.keys(lambdaEnvironment()).sort()).toEqual(
+      [
+        'AUTH_MODE',
+        'COGNITO_ALLOWED_USERNAME',
+        'COGNITO_CLIENT_ID',
+        'COGNITO_USER_POOL_ID',
+        'GITHUB_APP_CLIENT_ID',
+        'GITHUB_APP_SECRET_ID',
+        'GITHUB_OWNER',
+        'GITHUB_REPO',
+        'MEDIA_BUCKET',
+      ].sort(),
+    );
+  });
+
+  it('**cognito-idp の IAM 権限を 1 つも足していない**', () => {
+    // JWKS の取得は認証不要な公開 HTTPS GET なので IAM 権限は要らない。
+    // 「赤くなったから権限を足す」をしないための名指しの主張。
+    expect(templateJson).not.toContain('cognito-idp:');
+    for (const statement of policyStatements()) {
+      for (const action of actionsOf(statement)) {
+        expect(action, 'cognito の権限は要らない').not.toMatch(/^cognito/);
+      }
+    }
   });
 
   it('環境変数に秘密が入っていない', () => {
