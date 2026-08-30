@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- 認証が入るまで /admin/ の外殻は公開状態で見える。クロールはさせない。 -->
+    <meta name="robots" content="noindex, nofollow" />
+    <title>記事を書く — blog admin</title>
+  </head>
+  <body>
+    <main id="editor">
+      <h1>記事を書く</h1>
+
+      <form id="post-form" autocomplete="off">
+        <div class="field">
+          <label for="slug">slug</label>
+          <input id="slug" name="slug" type="text" required />
+          <p class="hint">小文字・数字・ハイフンのみ。ドットは使えない（URL 書き換えが効かなくなる）。</p>
+        </div>
+
+        <div class="field">
+          <label for="title">title</label>
+          <input id="title" name="title" type="text" required />
+        </div>
+
+        <div class="field">
+          <label for="description">description</label>
+          <input id="description" name="description" type="text" required />
+        </div>
+
+        <div class="field">
+          <label for="pubDate">pubDate</label>
+          <input id="pubDate" name="pubDate" type="datetime-local" />
+          <p class="hint">空にすると送信時刻になる。</p>
+        </div>
+
+        <div class="field">
+          <label for="tags">tags</label>
+          <input id="tags" name="tags" type="text" />
+          <p class="hint">カンマ区切り。小文字・数字・ハイフンのみ。</p>
+        </div>
+
+        <div class="field field-inline">
+          <input id="draft" name="draft" type="checkbox" checked />
+          <label for="draft">draft（下書きとして公開しない）</label>
+        </div>
+
+        <div class="field">
+          <label for="body">本文</label>
+          <textarea id="body" name="body" rows="24" spellcheck="false"></textarea>
+        </div>
+
+        <div class="field">
+          <label for="image">画像を追加</label>
+          <input id="image" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" />
+          <p class="hint">S3 に直接上げて、本文に <code>/media/...</code> の Markdown を挿入する。</p>
+        </div>
+
+        <ul id="problems" class="problems"></ul>
+        <p id="status" class="status" role="status"></p>
+
+        <button id="submit" type="submit">公開する</button>
+      </form>
+
+      <section class="preview-pane">
+        <h2>プレビュー</h2>
+        <!-- site が @astrojs/markdown-remark の unified() で描くのと同じ HTML。 -->
+        <article id="preview"></article>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
