@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "site",
+    "infra"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

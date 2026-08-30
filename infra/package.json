@@ -1,0 +1,22 @@
+{
+  "name": "infra",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "pretest": "cdk synth BlogSiteStack > /dev/null",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "synth": "cdk synth"
+  },
+  "dependencies": {
+    "constructs": "^10.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "aws-cdk": "2.1139.0",
+    "aws-cdk-lib": "2.267.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}

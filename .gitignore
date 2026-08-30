@@ -1,3 +1,6 @@
+# Claude Code agent worktrees (checked out inside the repo)
+.claude/worktrees/
+
 # Nix / direnv
 .direnv/
 result
