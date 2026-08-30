@@ -9,6 +9,10 @@ import type { APIContext } from "astro";
 export function GET(context: APIContext): Response {
   const body = [
     "User-agent: *",
+    // The admin UI is served from the same distribution under /admin/. It is
+    // protected by Cognito, so this is not the access control -- it only keeps
+    // the login screen out of search results, where it is noise at best.
+    "Disallow: /admin/",
     "Allow: /",
     "",
     `Sitemap: ${new URL("sitemap-index.xml", context.site)}`,

@@ -2,8 +2,9 @@
 
 ツールチェーンは Nix flake で固定している。ホストに Node や AWS CLI を入れる必要はない。
 
-> **`site/` と `infra/` と `api/` は動く。** `admin/`（管理画面）だけが未着手で、
-> ルート `package.json` の `workspaces` にもまだ入っていない。`npm run -w admin ...` は通らない。
+> **4 つのワークスペースすべてが動く。** ただし `admin/` は**ログインが未実装**で、
+> エディタとプレビューは使えるが投稿はできない（api は `AUTH_MODE=cognito` なので
+> トークンの無いリクエストに 401 を返す。これは正しい挙動）。
 
 ## 必要なもの
 
@@ -75,7 +76,7 @@ npm install
 | --- | --- | --- |
 | `site/` | Astro。読者向けの本体 | 有効 |
 | `infra/` | AWS CDK | 有効 |
-| `admin/` | 管理画面（静的 SPA） | 未着手 |
+| `admin/` | 管理画面（静的 SPA） | 有効。ただしログイン未実装 |
 | `api/` | Lambda（投稿 API） | 有効（**`AUTH_MODE=cognito`**。Cognito の ID トークンで認証する） |
 
 ```sh

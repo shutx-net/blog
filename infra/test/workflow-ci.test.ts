@@ -167,8 +167,8 @@ describe('ci.yml の骨格', () => {
 });
 
 describe('ci.yml が回すコマンド', () => {
-  it('ジョブのキー集合が site と infra ちょうど 2 つ', () => {
-    expect(Object.keys(jobsOf(ci())).sort()).toEqual(['infra', 'site']);
+  it('ジョブのキー集合が 4 ワークスペースちょうどである', () => {
+    expect(Object.keys(jobsOf(ci())).sort()).toEqual(['admin', 'api', 'infra', 'site']);
   });
 
   it('site ジョブが npm run -w site test を実行する', () => {
@@ -190,7 +190,7 @@ describe('ci.yml が回すコマンド', () => {
 
   it('両ジョブに npm ci があり、npm install は 1 つも無い', () => {
     // npm install は package-lock.json を書き換えうる。CI では使わない。
-    for (const name of ['site', 'infra']) {
+    for (const name of ['site', 'infra', 'api', 'admin']) {
       expect(runTextOf(jobsOf(ci())[name]), `${name} ジョブの npm ci`).toContain('npm ci');
     }
     expect(ciText()).not.toContain('npm install');

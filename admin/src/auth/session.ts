@@ -58,8 +58,22 @@ export interface AuthTransport {
  *
  * 他のテストはこのスタブに依存していない（すべて偽の transport を注入する）。
  */
+/**
+ * **api 側の定数を import する。文字列を書き写さないこと。**
+ * ヘッダ名が片方だけ変わると、admin は送っているのに api は読まない
+ * （そして 401 になる）という、原因の見えない壊れ方をする。
+ */
 export const createStubAuthTransport = (): AuthTransport => ({
+  // ログインの実装が入るまでヘッダは空。api 側は AUTH_MODE=cognito なので
+  // **この状態では 401 が返る。これは正しい挙動である**（トークンが無いのだから）。
   authHeaders: async () => ({}),
   credentials: 'same-origin',
   isAuthenticated: () => false,
 });
+
+/**
+ * 輸送の契約。**api/src/auth/transport.ts が唯一の出所。**
+ * ここで再 export しておくと、実装が入るときに import 先を探さずに済み、
+ * test/unit/auth-session.test.ts が両者の一致を固定できる。
+ */
+export { AUTH_HEADER, AUTH_SCHEME } from '@blog/api/src/auth/transport.ts';

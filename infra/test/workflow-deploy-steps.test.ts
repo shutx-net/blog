@@ -129,10 +129,28 @@ const WAITER_MAX_MINUTES = (20 * 30) / 60;
 const BUILD_ALLOWANCE_MINUTES = 5;
 
 describe('S3 への publish', () => {
-  it('aws s3 sync を実行するステップがちょうど 1 つあり、--delete を含む', () => {
-    const steps = stepsRunning(S3_SYNC);
-    expect(steps, `${S3_SYNC} のステップ`).toHaveLength(1);
-    expect(String(steps[0]?.run)).toContain('--delete');
+  it('aws s3 sync を実行するステップがちょうど 2 つ（site と admin）ある', () => {
+    // **site 側は --exclude 'admin/*' が要る。** 無いとサイトを 1 回デプロイした
+    // だけで管理画面が消える。AGENTS.md がメディアを別バケットにした理由と同じ罠で、
+    // ここは同一バケットのプレフィックス分離なので、除外の 1 行が唯一の防壁になる。
+    const steps = stepsRunning(S3_SYNC).map((step) => String(step.run));
+    expect(steps, `${S3_SYNC} のステップ`).toHaveLength(2);
+
+    const site = steps.find((run) => run.includes('site/dist'));
+    const admin = steps.find((run) => run.includes('admin/dist'));
+    expect(site, 'site/dist を配る sync が無い').toBeDefined();
+    expect(admin, 'admin/dist を配る sync が無い').toBeDefined();
+
+    for (const run of steps) expect(run).toContain('--delete');
+
+    expect(
+      site,
+      "site の sync に --exclude 'admin/*' が無い。1 回デプロイすると管理画面が消える",
+    ).toContain("--exclude 'admin/*'");
+
+    // admin 側は admin/ プレフィックス配下にしか --delete を効かせない。
+    expect(admin).toContain('/admin');
+    expect(admin, 'admin の sync がサイト本体まで消しうる').not.toContain("--exclude");
   });
 
   it('sync のソースが site/dist である', () => {

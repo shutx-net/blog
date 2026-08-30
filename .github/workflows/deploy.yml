@@ -28,6 +28,7 @@ on:
     # デプロイの取りこぼしにはならない。
     paths:
       - 'site/**'
+      - 'admin/**'
       # 依存を上げるとビルド成果物が変わる。
       - 'package.json'
       - 'package-lock.json'
@@ -113,6 +114,9 @@ jobs:
           SITE_URL: https://d8gsxbwzr6ft8.cloudfront.net/
         run: npm run -w site build
 
+      - name: Build the admin UI
+        run: npm run -w admin build
+
       # **ビルドより後、S3 に触れるより前。** 資格情報が無くてもビルドはできるべきだし、
       # ビルドが壊れているのに credentials を取りに行く理由が無い。
       # この順序のおかげで、assume に失敗してもバケットは前の状態のまま残る。
@@ -145,6 +149,14 @@ jobs:
         # 上げた復元不能なデータだが、管理画面は Git から再生成できるビルド成果物
         # なので、失われても再デプロイで戻る。分離のコストに見合わない。
         run: aws s3 sync site/dist "s3://$SITE_BUCKET" --delete --exclude 'admin/*' --only-show-errors
+
+      # **管理画面は別 sync。** サイト側が --exclude 'admin/*' で除外しているので、
+      # ここが唯一 admin/ を書き換える経路になる。--delete はプレフィックス配下
+      # にしか効かないので、サイト本体を巻き込まない。
+      - name: Publish admin/dist to S3
+        env:
+          SITE_BUCKET: ${{ vars.SITE_BUCKET }}
+        run: aws s3 sync admin/dist "s3://$SITE_BUCKET/admin" --delete --only-show-errors
 
       # **順序は sync -> invalidate -> wait。** 先に無効化すると、無効化が伝播していく
       # 最中に、まだ古いオブジェクトを返しているオリジンからキャッシュが再充填される。
