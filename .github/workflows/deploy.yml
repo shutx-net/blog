@@ -1,0 +1,166 @@
+# main への push でサイトをビルドし、OIDC でデプロイロールを assume して S3 へ publish する。
+#
+# **ここに書いてある形は IAM の信頼ポリシーと結合した契約である。**
+# infra/lib/cicd-stack.ts の DEPLOY_SUBJECT は
+# `repo:shutx-net@169037737/blog@1351152011:ref:refs/heads/main` に StringEquals で
+# 完全一致固定されており、GitHub が発行する sub がこれと 1 文字でも違えば
+# `Not authorized to perform sts:AssumeRoleWithWebIdentity` で落ちる。
+# 次の 3 つはどれも YAML として妥当なまま契約を破るので、
+# infra/test/workflow-deploy-oidc.test.ts が機械的に禁止している。
+#
+#   1. pull_request をトリガに足す      -> sub が `...:pull_request` になる
+#   2. ジョブに GitHub の環境を指定する -> sub が `...:environment:<name>` になる
+#   3. タグ push で走らせる             -> sub が `ref:refs/tags/...` になる
+name: Deploy site
+
+on:
+  push:
+    branches: [main]
+    # **infra/ だけの変更でサイトを再デプロイしない。** 同じ入力から同じ出力を
+    # ビルドして同じものを sync し、5 分待つだけで得るものが無い。
+    # ここにパスフィルタを置けるのは、このワークフローが main への push で走るので
+    # **required status check になり得ない**から（ci.yml には同じ理由で付けない。
+    # skip されたワークフローの check は Pending のままマージをブロックする）。
+    #
+    # GitHub の注意点: タグ push はパスフィルタを評価しない（本ワークフローは
+    # branches: [main] なのでタグでは走らないが、両方を同時に外さないこと）。
+    # 1,000 コミット超の push と差分生成のタイムアウトは「常に走る」側に倒れるので、
+    # デプロイの取りこぼしにはならない。
+    paths:
+      - 'site/**'
+      # 依存を上げるとビルド成果物が変わる。
+      - 'package.json'
+      - 'package-lock.json'
+      # SITE_URL をここに直書きしている以上、この 1 行の変更がそのまま
+      # 再デプロイのトリガであるべき（独自ドメイン移行が 1 手で完結する）。
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+# **固定グループ + キャンセルしない。**
+# `aws s3 sync --delete` を 2 本同時に走らせてはならないし、走行中のものを
+# 止めてもならない（途中で SIGKILL されると新旧が混ざったバケットのまま残る。
+# 配信バケットはバージョニング無効で巻き戻せない）。
+# group に `${{ github.ref }}` を混ぜると main 以外の workflow_dispatch が
+# 別グループになって並走しうるので、式を入れないこと。
+#
+# 既定の待ち行列は queue: single。A(実行中)/B(待機) に C が来ると B が捨てられる。
+# **各デプロイは差分ではなくサイト全体を publish するので、中間の待機ぶんを
+# 飛ばしても最終状態は最新コミットのサイトになる。**
+concurrency:
+  group: deploy-site
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # id-token: write が OIDC トークンの発行に要る。リポジトリの既定の
+    # workflow permissions は read なので、明示しないと発行できない。
+    # **キーを増やさないこと**（テストがキー集合の完全一致を見ている）。
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      # **最初に置くこと。** `${{ vars.X }}` は未設定のとき空文字に展開されるだけで
+      # エラーにならない。ガードが無いと、npm ci とビルドを終えたあとに
+      # 「role-to-assume が空」や「s3://（バケット名なし）」という読みにくい形で落ちる。
+      # 変数が無いなら 10 秒で落とす。checkout すら要らない。
+      #
+      # 値の入れ方は infra/README.md と DEVELOPERS.md を参照（CloudFormation の
+      # Output から取る。デプロイロールには DescribeStacks が無いので実行時には読めない）。
+      - name: Require the deploy variables to be set
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          SITE_BUCKET: ${{ vars.SITE_BUCKET }}
+          CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+        run: |
+          missing=''
+          [ -n "$AWS_DEPLOY_ROLE_ARN" ] || missing="$missing AWS_DEPLOY_ROLE_ARN"
+          [ -n "$SITE_BUCKET" ] || missing="$missing SITE_BUCKET"
+          [ -n "$CLOUDFRONT_DISTRIBUTION_ID" ] || missing="$missing CLOUDFRONT_DISTRIBUTION_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::unset repository variables:$missing"
+            echo 'set them with: gh variable set <NAME> -R shutx-net/blog'
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build the site
+        env:
+          # **これは設定ではなく恒久 ID の決定である。** RSS の
+          # <guid isPermaLink="true"> は購読者側の恒久 ID なので、この値を変えると
+          # 全記事が再配信される。取り消せない。だから GitHub の設定 UI で
+          # クリック 1 つ・差分なし・履歴なしで変えられる場所には置かず、
+          # コードとして扱い、変更が PR の差分とコミットログに残るようにする。
+          #
+          # Actions 変数にしないもう 1 つの理由: `${{ vars.SITE_URL }}` は未設定でも
+          # 空文字に展開されるだけで、resolveSiteUrl の「未設定」経路に入り
+          # `https://blog.invalid/` を返す。**ビルドは exit 0 で成功し、
+          # .invalid のフィードがそのまま本番に配られる。**
+          #
+          # site/test/unit/deploy-workflow.test.ts が resolveSiteUrl を実際に通して
+          # 「絶対 https」「プレースホルダではない」「正規化済み」を機械的に見ている。
+          SITE_URL: https://d8gsxbwzr6ft8.cloudfront.net/
+        run: npm run -w site build
+
+      # **ビルドより後、S3 に触れるより前。** 資格情報が無くてもビルドはできるべきだし、
+      # ビルドが壊れているのに credentials を取りに行く理由が無い。
+      # この順序のおかげで、assume に失敗してもバケットは前の状態のまま残る。
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          # secret ではなく variable。ARN は秘密ではないが、直書きすると
+          # public リポジトリに AWS アカウント ID が載る。
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-northeast-1
+
+      # `${{ }}` を run に直接埋めず env: を経由する。GitHub のセキュリティ強化ガイドが
+      # "For inline scripts, the preferred approach to handling untrusted input is to
+      # set the value of the expression to an intermediate environment variable" と
+      # 明記している。Actions 変数を書けるのは管理者だけなので実リスクは低いが、
+      # この習慣を機械的に固定しておけば、後から github.event.* を run に埋める事故が起きない。
+      #
+      # `--only-show-errors` は、既定の sync がアップロードしたキーを 1 行ずつ出して
+      # 記事が増えるとログが数百行になり、本当に見たいエラーが埋もれるため。
+      # （初回デプロイのときだけ外して全アップロードを目視するのは有用。）
+      - name: Publish site/dist to S3
+        env:
+          SITE_BUCKET: ${{ vars.SITE_BUCKET }}
+        run: aws s3 sync site/dist "s3://$SITE_BUCKET" --delete --only-show-errors
+
+      # **順序は sync -> invalidate -> wait。** 先に無効化すると、無効化が伝播していく
+      # 最中に、まだ古いオブジェクトを返しているオリジンからキャッシュが再充填される。
+      #
+      # 完了まで待つ理由: (1) 待つための cloudfront:GetInvalidation をロールに
+      # わざわざ付けてある（使わないなら削るべき権限になる）。(2) 記事を 1 本足すと
+      # 一覧・タグ・ページネーション・RSS・sitemap が全部作り直しになるので、待たないと
+      # 「一覧は新しいのに記事ページが 404」が最大 24 時間見える（オブジェクトに
+      # Cache-Control を付けておらず CachingOptimized の既定 TTL は 86400 秒）。
+      # (3) 無効化は月 1,000 パスまで無料で `/*` は 1 パスとして数える。
+      # (4) 待ちは有界（botocore の waiter は 20 秒 x 30 回 = 最大 600 秒）。
+      #
+      # `--paths '/*'` の 1 本にするのは、変更キーの列挙を間違えると
+      # 「古いページが残る」という静かな失敗になるため。単純さを取る。
+      - name: Invalidate CloudFront and wait for it to complete
+        env:
+          DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+        run: |
+          set -euo pipefail
+          invalidation_id="$(aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --paths '/*' \
+            --query 'Invalidation.Id' --output text)"
+          echo "invalidation: $invalidation_id"
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --id "$invalidation_id"

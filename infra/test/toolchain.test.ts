@@ -132,4 +132,29 @@ describe('infra/README.md が実装に追いついている', () => {
     expect(text).toContain('MediaBucketE52FC6E4');
     expect(text).toContain('GitHubActionsDeployRole');
   });
+
+  it('TODO に「s3 sync の最小権限が実デプロイ未検証」が残っている', () => {
+    // **初回デプロイを終えるまで閉じてはいけない宿題である。**
+    // 実際に GitHub Actions が assume して sync するまで、6 アクションで足りるかは
+    // 誰も知らない（信頼ポリシーが GitHub OIDC の principal しか受け付けないので
+    // SSO からは assume できず、ローカルでは検証できない）。
+    // 初回デプロイが済んだらこのテストを「もう無い」側に反転させる。
+    expect(todoSection()).toContain('実デプロイ未検証');
+  });
+
+  it('GitHub Actions の変数 3 つと、その値の取得元が書かれている', () => {
+    // ワークフローは vars.* を読むだけで、未設定でも空文字に展開される。
+    // 「どこから値を持ってくるか」が README に無いと、preflight ガードが
+    // 落ちたときに次の一手が分からない。
+    const text = readme();
+    for (const name of ['AWS_DEPLOY_ROLE_ARN', 'SITE_BUCKET', 'CLOUDFRONT_DISTRIBUTION_ID']) {
+      expect(text, `README に ${name} の記載が必要`).toContain(name);
+    }
+    // 値は CloudFormation の Output からしか取れない（デプロイロールには
+    // cloudformation:DescribeStacks が無いので、実行時に読むことはできない）。
+    expect(text).toContain('describe-stacks');
+    for (const output of ['DeployRoleArn', 'SiteBucketName', 'DistributionId']) {
+      expect(text, `README に Output 名 ${output} の記載が必要`).toContain(output);
+    }
+  });
 });

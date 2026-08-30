@@ -113,6 +113,73 @@ SITE_URL=https://blog.example.com npm run -w site build
 RSS の `<guid isPermaLink="true">` が記事の恒久 ID であり、ドメインを後から変えると
 購読者全員に全記事が再配信されて取り消せないため。プレースホルダは解決しないほうが安全。
 
+## GitHub Actions
+
+ワークフローは 2 本ある。**どちらも AWS のアクセスキーを持たない。**
+
+| ファイル | いつ走るか | すること |
+| --- | --- | --- |
+| `.github/workflows/ci.yml` | pull request | `npm run -w site test` / `npm run -w infra typecheck` / `npm run -w infra test`。**AWS には一切触らない** |
+| `.github/workflows/deploy.yml` | `main` への push（`site/**` などに変更があったとき）と `workflow_dispatch` | Astro をビルドし、OIDC でロールを assume して `aws s3 sync --delete`、CloudFront を無効化して完了まで待つ |
+
+### 一度だけ入れる変数
+
+`deploy.yml` は次の 3 つを読む。**secret ではなく variable**（3 つとも秘密ではない。
+secret にするとログで `***` にマスクされて失敗時の切り分けが難しくなるだけ）。
+値の取り方は `infra/README.md` の「GitHub Actions の変数」を参照。
+
+| 変数名 | 値 |
+| --- | --- |
+| `AWS_DEPLOY_ROLE_ARN` | `BlogCicdStack` の Output `DeployRoleArn` |
+| `SITE_BUCKET` | `BlogSiteStack` の Output `SiteBucketName` |
+| `CLOUDFRONT_DISTRIBUTION_ID` | `BlogSiteStack` の Output `DistributionId` |
+
+```sh
+gh variable list -R shutx-net/blog     # 3 つ入っているか確認
+```
+
+未設定のまま走らせても `${{ vars.X }}` は空文字に展開されるだけでエラーにならないので、
+`deploy.yml` の**最初のステップ**が 3 つの有無を確認して落とす。落ちたときは上のコマンドで確認する。
+
+### `cdk deploy` は CI から実行しない（意図的）
+
+インフラの変更は手元の SSO セッションからのみ行う。理由は 3 つ。
+
+1. デプロイロールは S3 と CloudFront の 6 アクションしか持たず、CloudFormation を触れない。
+   CDK デプロイ用のロールを CI に渡すには実質 AdministratorAccess 相当が要り、
+   **public リポジトリから assume できるロールとしては危険すぎる**
+2. `AGENTS.md` が「`infra/` を変えた PR では `cdk diff` の出力を本文に貼る」と定めており、
+   差分を人間が読む前提の運用になっている
+3. CDK bootstrap のロール群（`cdk-hnb659fds-*`）を信頼させる設計は、
+   `CicdStack` の最小権限という主題と正面から衝突する
+
+### ツールチェーンが Nix と一致しない箇所（意図的な例外）
+
+- **`aws` CLI はランナー同梱のものを使う**（nix の 2.34.24 ではない）。使うのは `s3 sync` と
+  `cloudfront create-invalidation` / `wait` だけで、どちらも極めて安定した API。
+  CI に nix を入れるコスト（サードパーティ action への信頼が増える + 毎回クロージャを取得）と
+  釣り合わない
+- **`node` のバージョンは `actions/setup-node` に完全一致で書く**（現在 `24.19.0`）。
+  `nix flake update` で nixpkgs の node が動くと `infra/test/workflow-ci.test.ts` が
+  `process.version` と比較して**ローカルで落ちる。**これは意図した挙動で、
+  修正は `ci.yml` と `deploy.yml` の `node-version` を直すだけ。
+  **この摩擦が嫌になったときは、比較を緩めるのではなく flake.lock を上げないほうが方針として一貫している**
+
+### ワークフローを編集するときに壊しやすいところ
+
+`deploy.yml` は IAM の信頼ポリシーと結合している。次はどれも YAML として妥当なまま
+assume を壊すので、`infra/test/workflow-deploy-oidc.test.ts` が機械的に禁止している。
+
+- `pull_request` をトリガに足す → `sub` が `...:pull_request` になる
+- ジョブに GitHub の環境（`environment`）を指定する → `sub` が `...:environment:<name>` になる
+- タグ push で走らせる → `sub` が `ref:refs/tags/...` になる
+- `id-token: write` を消す・綴りを間違える → トークンが発行されない
+- action を SHA ピンから外す / ARN やアカウント ID を YAML に直書きする
+
+**`gh` のトークンに `workflow` スコープが要る場合がある。** `.github/workflows/*` を含む push は
+HTTPS リモートだと拒否される（このリポジトリは ssh なので通常は通る）。
+詰まったら `gh auth refresh -h github.com -s workflow`。
+
 ## AWS
 
 ### 認証情報
