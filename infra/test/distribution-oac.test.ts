@@ -221,13 +221,19 @@ describe('CloudFront Distribution と OAC の結線', () => {
     const permissions = Object.values(template.findResources('AWS::Lambda::Permission')) as Array<{
       Properties?: { Principal?: string; Action?: string; SourceArn?: unknown };
     }>;
-    expect(permissions).toHaveLength(1);
-    expect(permissions[0]?.Properties?.Principal).toBe('cloudfront.amazonaws.com');
-    expect(permissions[0]?.Properties?.Action).toBe('lambda:InvokeFunctionUrl');
-    // confused deputy 対策。バケットポリシーの AWS:SourceArn と同じ役割。
-    expect(JSON.stringify(permissions[0]?.Properties?.SourceArn)).toContain(
-      logicalIdOf('AWS::CloudFront::Distribution'),
-    );
+    // **2 本必要。** InvokeFunctionUrl だけでは Function URL の IAM 認可が 403 を返し、
+    // 関数が起動しないのでログも残らない（2026-08-30 の初回デプロイで実際に踏んだ）。
+    // CloudFront 開発者ガイドは add-permission を 2 回実行するよう明示している。
+    expect(permissions).toHaveLength(2);
+    const actions = permissions.map((p) => p.Properties?.Action).sort();
+    expect(actions).toEqual(['lambda:InvokeFunction', 'lambda:InvokeFunctionUrl']);
+    for (const permission of permissions) {
+      expect(permission.Properties?.Principal).toBe('cloudfront.amazonaws.com');
+      // confused deputy 対策。バケットポリシーの AWS:SourceArn と同じ役割。
+      expect(JSON.stringify(permission.Properties?.SourceArn)).toContain(
+        logicalIdOf('AWS::CloudFront::Distribution'),
+      );
+    }
   });
 
   it('3 つのオリジンがそれぞれ別の OAC を参照している（共有していない）', () => {
