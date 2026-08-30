@@ -76,7 +76,7 @@ npm install
 | `site/` | Astro。読者向けの本体 | 有効 |
 | `infra/` | AWS CDK | 有効 |
 | `admin/` | 管理画面（静的 SPA） | 未着手 |
-| `api/` | Lambda（投稿 API） | 有効（**`AUTH_MODE=deny-all` で fail-closed 出荷中**） |
+| `api/` | Lambda（投稿 API） | 有効（**`AUTH_MODE=cognito`**。Cognito の ID トークンで認証する） |
 
 ```sh
 npm run -w site dev              # http://localhost:4321
@@ -210,6 +210,102 @@ aws sts get-caller-identity      # 疎通確認
 npx -w infra cdk bootstrap aws://<account-id>/ap-northeast-1
 ```
 
+### Cognito（管理画面のログイン）
+
+単一著者用のユーザプールを `BlogSiteStack` の中に持っている。
+**ユーザは CDK では作らない**（このリポジトリは public なので、個人のメールアドレスも
+ユーザ名以外の情報もテンプレートに書かない）。GitHub App の秘密鍵と同じく帯域外で行う。
+
+#### 値の取り方
+
+物理名はハードコードしていないので、CfnOutput から拾う。**Construct の中で作った Output は
+論理 ID にハッシュが付く**ので `ends_with` で引く。
+
+```sh
+POOL_ID=$(aws cloudformation describe-stacks --stack-name BlogSiteStack \
+  --query "Stacks[0].Outputs[?ends_with(OutputKey,'AdminUserPoolId')].OutputValue" --output text)
+CLIENT_ID=$(aws cloudformation describe-stacks --stack-name BlogSiteStack \
+  --query "Stacks[0].Outputs[?ends_with(OutputKey,'AdminUserPoolClientId')].OutputValue" --output text)
+LOGIN=$(aws cloudformation describe-stacks --stack-name BlogSiteStack \
+  --query "Stacks[0].Outputs[?ends_with(OutputKey,'AdminLoginDomain')].OutputValue" --output text)
+```
+
+#### ユーザを作る（初回だけ）
+
+```sh
+aws cognito-idp admin-create-user --user-pool-id "$POOL_ID" \
+  --username shutx --message-action SUPPRESS
+
+aws cognito-idp admin-set-user-password --user-pool-id "$POOL_ID" \
+  --username shutx --password '<16 文字以上・大小英字と数字と記号>' --permanent
+```
+
+**`--username` は `infra/lib/site-stack.ts` の `ADMIN_USERNAME` と完全一致でなければならない。**
+プールは `UsernameConfiguration.CaseSensitive: true` なので大文字小文字も区別する。
+一致しないトークンは API が **401 `{"error":"not_authorized"}`** で弾く。
+
+`--message-action SUPPRESS` はメールを送らせないため。`selfSignUpEnabled: false` なので
+このコマンド以外にユーザが増える経路は無い。
+
+MFA（TOTP）は任意で、Managed Login から後で登録できる。
+
+#### ID トークンを取る
+
+```
+$LOGIN/login?client_id=$CLIENT_ID&response_type=code&scope=openid&redirect_uri=https://<distribution-domain>/admin/
+```
+
+をブラウザで開いてログインし、リダイレクト先の `?code=` を `/oauth2/token` で交換する
+（authorization code grant。**implicit は無効にしてある**。client secret は無い public client）。
+
+```sh
+curl -s -X POST "$LOGIN/oauth2/token" \
+  -H 'content-type: application/x-www-form-urlencoded' \
+  -d grant_type=authorization_code -d "client_id=$CLIENT_ID" \
+  -d "code=$CODE" -d "redirect_uri=https://<distribution-domain>/admin/" | jq -r .id_token
+```
+
+#### API に付けるヘッダ
+
+```
+x-blog-authorization: Bearer <ID token>
+```
+
+**`Authorization` ではない。** CloudFront の OAC が `SigningBehavior: always` で
+viewer の `Authorization` を上書きするため（理由と実測は `infra/README.md`）。
+**access トークンではなく ID トークンを送ること**（API は `token_use: 'id'` を要求する）。
+
+ボディがある POST / PUT には **`x-amz-content-sha256: <ボディの SHA-256 を小文字 hex で>`**
+も必須。付け忘れると 403 になり、CloudFront の `CustomErrorResponses` で
+**404 の HTML に化ける**（認証の失敗と紛らわしいので注意）。
+
+### `AUTH_MODE` の運用（切り戻し手順）
+
+`AUTH_MODE` は Lambda の環境変数で、**CDK が唯一の変更経路**である
+（コンソールで直接書き換えると次の deploy で戻る）。許容値は `deny-all` と `cognito` の
+**2 つだけ**で、それ以外・空文字・未設定はすべて **コールドスタートで例外**になり、
+Lambda の初期化が落ちて CloudFront には 502 が返る。
+**「打ち間違いが黙って全許可になる」経路は存在しない。**
+
+いま何で動いているかは無認証で確認できる。
+
+```sh
+curl -s https://<distribution-domain>/api/health
+# {"status":"ok","authMode":"cognito"}
+```
+
+Cognito 側で問題が起きたときの切り戻しは、`infra/lib/site-stack.ts` の `PostingApi` の
+`auth` を戻して deploy し直すだけ。
+
+```ts
+auth: { mode: 'deny-all' },
+```
+
+- **Cognito のリソースは消えない**（`deletionProtection: true` / `RemovalPolicy.RETAIN`）
+- **`deny-all` は `COGNITO_*` を 1 つも読まない**ので、
+  **壊れた Cognito 設定を抱えたまま安全側に倒せる**
+- 戻すと認証が必要な 3 経路はすべて `503 {"error":"auth_not_configured"}` になる
+
 ### GitHub App の秘密鍵
 
 Secrets Manager に置く。**CDK には値を書かない** — CloudFormation テンプレートに平文が残るため、
@@ -259,8 +355,15 @@ PEM ファイルはこのリポジトリの中に置かないこと（`.gitignor
    **この経路は秘密鍵も installation token も返さない。** 返るのは真偽値だけ。
    `canMintInstallationToken` が `false` なら **昇格してはいけない** — 手順 2 に戻る。
 
-   > この経路は認証必須なので、`AUTH_MODE` が `deny-all` の間は 503 が返る。
-   > Cognito が入るまでは、代わりに Lambda をコンソールから直接テスト実行して同じ判定ができる。
+   > **この経路は認証必須なので、Cognito の ID トークンを付ける必要がある。**
+   > 取り方は下の「Cognito（管理画面のログイン）」を参照。
+   > `AUTH_MODE` を `deny-all` に戻している間はトークンの有無によらず 503 が返るので、
+   > その場合は Lambda をコンソールから直接テスト実行して同じ判定ができる。
+   >
+   > ```sh
+   > curl -s -H "x-blog-authorization: Bearer $ID_TOKEN" \
+   >   "https://<distribution-domain>/api/health/github-app?versionStage=AWSPENDING"
+   > ```
 
 4. `AWSCURRENT` に昇格する。`--remove-from-version-id` には現在の
    `AWSCURRENT` のバージョン ID を渡す。
