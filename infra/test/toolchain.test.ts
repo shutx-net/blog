@@ -215,13 +215,24 @@ describe('infra/README.md が実装に追いついている', () => {
   it('TODO セクションに Cognito が含まれる（意図的に開けたまま残した穴）', () => {
     expect(todoSection()).toContain('Cognito');
   });
-  it('TODO に「s3 sync の最小権限が実デプロイ未検証」が残っている', () => {
-    // **初回デプロイを終えるまで閉じてはいけない宿題である。**
-    // 実際に GitHub Actions が assume して sync するまで、6 アクションで足りるかは
-    // 誰も知らない（信頼ポリシーが GitHub OIDC の principal しか受け付けないので
-    // SSO からは assume できず、ローカルでは検証できない）。
-    // 初回デプロイが済んだらこのテストを「もう無い」側に反転させる。
-    expect(todoSection()).toContain('実デプロイ未検証');
+  it('実デプロイで解決した宿題が TODO に残っていない', () => {
+    // **反転済み。** 2026-08-30 の deploy ワークフロー実走で
+    // 「6 アクションで足りるか」と「lambda:InvokeFunction が要るか」が確定した。
+    // 前者は足り、後者は要った。宿題として残し続けると、次に読む人が
+    // 「まだ分かっていない」と誤解する。
+    expect(todoSection()).not.toContain('実デプロイ未検証');
+    expect(todoSection()).not.toContain('lambda:InvokeFunction` が要るか');
+  });
+
+  it('解決した宿題は結果と確かめ方つきで記録されている', () => {
+    // 結論だけ書いて消すと、次に同じ疑問を持った人が同じ調査をやり直す。
+    // **ローカルでは原理的に確かめられなかった項目なので、確かめ方こそが価値である。**
+    const text = readme();
+    expect(text).toContain('実デプロイで解決した宿題');
+    expect(text).toContain('Assuming role with OIDC');
+    for (const needle of ['s3:GetObject', 'lambda:InvokeFunction', 'workflow_dispatch']) {
+      expect(text, `解決記録に ${needle} が無い`).toContain(needle);
+    }
   });
 
   it('GitHub Actions の変数 3 つと、その値の取得元が書かれている', () => {

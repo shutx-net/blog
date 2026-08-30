@@ -290,19 +290,33 @@ IAM ロール・IAM ポリシー・OIDC プロバイダ・CloudFront の追加�
   fail-closed 出荷している。**`AUTH_MODE` を緩める変更と Cognito の実装は同一 PR でなければならない。**
   `AWS_IAM` + OAC はエンドユーザ認証ではないため（下の「`AWS_IAM` + OAC はエンドユーザ認証ではない」を参照）、
   この 1 行を緩めた瞬間に公開の書き込みエンドポイントになる
-- **`lambda:InvokeFunction` が要るかは初回デプロイまで未検証。** AWS のドキュメントは Lambda function URL への
-  OAC アクセスに `lambda:InvokeFunctionUrl` と `lambda:InvokeFunction` の **2 つ**を
-  `add-permission` する例を示しているが、CDK が生成する `AWS::Lambda::Permission` は
-  `InvokeFunctionUrl` の 1 つだけ。本フェーズは deploy しないので実地未検証。初回デプロイ後に
-  `/api/health` がアクセス拒否で返るようなら `lambda:InvokeFunction` を足し、README と
-  `test/distribution-oac.test.ts` のアサーションを更新すること（症状は下の
-  「`AWS_IAM` + OAC はエンドユーザ認証ではない」の末尾を参照）。**まとめて `lambda:*` にしないこと**
 - **GitHub App がまだ存在しない。** `GITHUB_APP_CLIENT_ID` は `not-configured` というプレースホルダで、
   シークレットも空。App の作成は Web UI でしかできず、鍵の投入は `DEVELOPERS.md` の手順で行う。
   `AUTH_MODE=deny-all` の間は GitHub を呼ぶ経路に到達しないので、この状態で deploy しても安全
 - **`env` を明示するのは ACM のフェーズで。** 下の「`env` を明示しない」を参照
-- **`aws s3 sync` に必要な IAM アクションの最小集合は実デプロイ未検証。** 下の
-  「デプロイロールに S3 の grant メソッドを使わない」を参照
+
+## 実デプロイで解決した宿題（2026-08-30）
+
+初回デプロイと deploy ワークフローの実走で確定したもの。**ローカルでは原理的に確かめられなかった
+項目ばかりなので、結論だけでなく確かめ方も残す。**
+
+| 宿題 | 結果 |
+| --- | --- |
+| `lambda:InvokeFunction` は要るか | **要った。** 無いと関数が一度も起動しない。`site-stack.ts` で明示的に足した |
+| `aws s3 sync` の最小 IAM アクション | **6 アクションで足りた。`s3:GetObject` は不要。** 意図的に外した判断が正しかった |
+| `workflow_dispatch` の `sub` 形式 | **`:ref:refs/heads/main`。** AWS/GitHub のドキュメントに記載が無く推測だったが、assume が成功したので確定 |
+| immutable subject 形式 | **実際に発行される。** probe と本番 assume の両方で確認 |
+| node のバージョン固定 | CI の実行ログで `v24.19.0`。nix shell と一致 |
+
+確かめ方（同じことを再検証するとき）:
+
+```sh
+gh run view <run-id> --log | grep -iE 'Assuming role|upload:|invalidation'
+```
+
+`Assuming role with OIDC` が出れば信頼ポリシーは通っている。`upload:` が出れば
+`s3 sync` の権限は足りている。**どちらもローカルからは確認できない**
+（信頼ポリシーが GitHub OIDC の principal しか受け付けないため、SSO からは assume できない）。
 
 ## 設計上の約束ごと
 
