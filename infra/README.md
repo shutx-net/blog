@@ -423,9 +423,32 @@ CloudFront + Lambda Function URL の OAC 構成では、**呼び出し側（＝�
 > header when sending the request to CloudFront. **Lambda doesn't support unsigned payloads.**
 
 **この制約は API 側では吸収できない**（署名は CloudFront が行い、Lambda が検証する）。
-知らずに管理画面を書くと、原因の分かりにくい署名エラーに時間を溶かす。
 **admin フェーズの最初のタスクを「fetch ラッパで `x-amz-content-sha256` を必ず付ける」にすること。**
-本フェーズは deploy しないので実地検証はできていない。
+
+**実地検証済み（2026-08-30）。症状が極めて分かりにくいので観測を残す。**
+
+| リクエスト | 応答 |
+| --- | --- |
+| `GET /api/health`（ボディ無し） | `200 {"status":"ok","authMode":"deny-all"}` |
+| `GET /api/health/github-app` | `503 {"error":"auth_not_configured"}` |
+| `POST /api/posts`（ボディ無し） | `503` |
+| `POST /api/posts` + ボディ + `x-amz-content-sha256` | `503` |
+| **`POST /api/posts` + ボディ + ヘッダ無し** | **`404` + HTML の 404 ページ** |
+
+最後の行が罠である。**署名の失敗はオリジンで 403 になり、それを
+`CustomErrorResponses(403 -> /404.html)` が拾って S3 の 404 ページに差し替える。**
+`CustomErrorResponses` はディストリビューション単位でしか設定できず、`/api/*` の
+ビヘイビアだけ除外することはできない。したがって API の署名エラーが
+**JSON の 403 ではなく HTML の 404 として返る。**
+
+さらに `server: AmazonS3` が付くので、**「/api/* のルーティングが効いていない」と
+誤読しやすい。** 実際にはビヘイビアは正しく Lambda に向いている。
+
+切り分け方:
+
+1. **ボディ無しの `GET /api/health` を叩く。** 200 が返れば経路は通っている
+2. Lambda のロググループを見る。**空なら permission、記録があれば署名かルーティング**
+3. `POST` で 404 が返るなら、まず `x-amz-content-sha256` を疑う
 
 ### 閲覧者の `Authorization` ヘッダは CloudFront に上書きされる
 
