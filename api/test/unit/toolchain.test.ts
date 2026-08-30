@@ -22,21 +22,47 @@ interface TsConfig {
  */
 const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
 
-/** Lambda バンドルに入る依存。これ以外を dependencies に置かない。 */
-const RUNTIME_DEPENDENCIES = [
+/**
+ * **ロックステップで揃えるべき依存。** @aws-sdk/* は同日リリースなのでバージョンを
+ * 一致させる。aws-jwt-verify はこの検査に含めない（別系統・別リリース周期）。
+ */
+const AWS_SDK_DEPENDENCIES = [
   '@aws-sdk/client-s3',
   '@aws-sdk/client-secrets-manager',
   '@aws-sdk/s3-request-presigner',
 ];
 
 /**
+ * Lambda バンドルに入る依存の **全集合**。これ以外を dependencies に置かない。
+ *
+ * **AWS_SDK_DEPENDENCIES と分けてあるのは意図的である。** Phase 3 まではこの 2 つが
+ * 同じ集合だったので 1 つの定数が「実行時依存の全集合」と「バージョンをロックステップ
+ * させる集合」の 2 つの意味を兼ねていた。aws-jwt-verify を足すと両者が分岐する。
+ * ここで割らずにバージョン検査のほうを緩めると、**AWS SDK 間のバージョンずれを
+ * 検出する能力を失う**（Phase 3 が意図的に入れた検査なので殺してはいけない）。
+ */
+const RUNTIME_DEPENDENCIES = [...AWS_SDK_DEPENDENCIES, 'aws-jwt-verify'].sort();
+
+/**
  * 入れないと決めたパッケージ。理由は計画の toolchain.rationale にある。
  *
- * - jose      : importPKCS8 は GitHub が配る PKCS#1 PEM を TypeError で拒否する。
- *               node:crypto の createSign('RSA-SHA256') はそのまま受け取れる（3.3 で実証）。
+ * **署名と検証で判断が分かれる。**
+ *
+ * - **署名（GitHub App の JWT）は node:crypto で書く。** createSign('RSA-SHA256') は
+ *   GitHub が配る PKCS#1 PEM をそのまま受け取れる（3.3 で実証）。署名には敵対的入力が
+ *   無いので、自前で持つコストが低い。
+ * - **検証（Cognito の ID トークン）は aws-jwt-verify に任せる。** 危険なのは
+ *   createVerify の 1 行ではなく、その周りの alg 許可リスト / kid の選択 / JWKS の取得と
+ *   キャッシュと鍵ローテーション / iss・aud・token_use・exp の検証であり、JWT の CVE は
+ *   歴史的にほぼ全部この層で生まれている。依存 0・推移依存 0 で、この層を
+ *   「トークンを発行している当の AWS が保守しているもの」に置き換えられる。
+ *
+ * - jose      : 汎用 JOSE ツールキットで、token_use / cognito:username / aud と client_id の
+ *               使い分けを知らない。**依存を足したうえで危険な半分を自分で書く**ことになり、
+ *               両方の欠点だけが残る。npm メンテナも 1 名で bus factor が悪い。
  * - @octokit  : 6 エンドポイントのために推移的依存を 32 個増やすうえ、
  *               「どのリクエストが飛んだか」のアサーションが Octokit の内部実装に依存する。
- * - jsonwebtoken : 同上（node:crypto で足りる）。
+ * - jsonwebtoken : 検証は aws-jwt-verify、署名は node:crypto で足りる。
  *
  * 後から「便利だから」で入らないよう、判断を機械的に固定する。
  */
@@ -62,14 +88,16 @@ describe('npm workspaces のルート', () => {
 });
 
 describe('api の実行時依存', () => {
-  it('dependencies が AWS SDK のちょうど 3 つだけである', () => {
-    // ここに増えたものはすべて Lambda のバンドルに入る。GitHub クライアントも JWT も
-    // node 組み込み（fetch / node:crypto）で書くので、実行時依存は AWS SDK だけになる。
+  it('dependencies が @aws-sdk 3 つ + aws-jwt-verify のちょうど 4 つである', () => {
+    // ここに増えたものはすべて Lambda のバンドルに入る。**集合等価で書く**（部分集合に
+    // しない）ので、5 つめが増えた瞬間に赤くなる。GitHub クライアントも JWT の署名も
+    // node 組み込み（fetch / node:crypto）で書くので、これ以上は増えない。
     const deps = apiPkg().dependencies ?? {};
     expect(Object.keys(deps).sort()).toEqual(RUNTIME_DEPENDENCIES);
+    expect(RUNTIME_DEPENDENCIES).toHaveLength(4);
   });
 
-  it('3 つの AWS SDK がすべて完全固定バージョンである', () => {
+  it('実行時依存 4 つがすべて完全固定バージョンである', () => {
     const deps = apiPkg().dependencies ?? {};
     for (const name of RUNTIME_DEPENDENCIES) {
       expect(deps[name], `${name} は範囲指定ではなく完全固定でなければならない`).toMatch(
@@ -78,11 +106,29 @@ describe('api の実行時依存', () => {
     }
   });
 
+  it('aws-jwt-verify が完全固定の 5.2.1 である（^ も ~ も付けない）', () => {
+    // AGENTS.md「バージョンは完全固定」。^5.2.1 は「次に誰かが npm install した日に
+    // 別のコードが入る」という意味で、署名検証という信頼の根っこには置けない。
+    const version = apiPkg().dependencies?.['aws-jwt-verify'];
+    expect(version).toBe('5.2.1');
+    expect(version).toMatch(EXACT_VERSION);
+  });
+
+  it('aws-jwt-verify が devDependencies **ではなく** dependencies にある', () => {
+    // Lambda のバンドルに入る必要がある。devDependencies に置くと esbuild は
+    // バンドルできるがワークスペースの意味が食い違い、依存の棚卸しから漏れる。
+    expect(apiPkg().dependencies?.['aws-jwt-verify']).toBeDefined();
+    expect(apiPkg().devDependencies?.['aws-jwt-verify']).toBeUndefined();
+  });
+
   it('3 つの AWS SDK のバージョンが互いに一致する', () => {
     // @aws-sdk/* は同日リリースのロックステップ。ずらすと共有される @smithy 層で
     // 不整合が起きうる（2 バージョンの @smithy がバンドルに同居する）。
+    // **aws-jwt-verify はこのループに入れない** — 別系統なので必ず不一致になり、
+    // 素朴に足すと検査そのものを緩めるしかなくなる。
     const deps = apiPkg().dependencies ?? {};
-    const versions = new Set(RUNTIME_DEPENDENCIES.map((name) => deps[name]));
+    expect(AWS_SDK_DEPENDENCIES).toHaveLength(3);
+    const versions = new Set(AWS_SDK_DEPENDENCIES.map((name) => deps[name]));
     expect(versions.size, `AWS SDK のバージョンが揃っていない: ${[...versions].join(' / ')}`).toBe(
       1,
     );
