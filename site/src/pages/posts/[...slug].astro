@@ -1,0 +1,34 @@
+---
+import type { GetStaticPaths } from "astro";
+import { getCollection, render } from "astro:content";
+
+export const getStaticPaths = (async () => {
+  // Filtering here as well as in the listing is what actually keeps drafts
+  // unpublished: an unlisted page would still be built, synced to S3 and served.
+  const posts = await getCollection("posts", ({ data }) => !data.draft);
+
+  // Content Layer API: the entry identifier is `id`, not `slug`, and the body is
+  // rendered with `render(entry)` imported from astro:content -- not entry.render().
+  return posts.map((post) => ({
+    params: { slug: post.id },
+    props: { post },
+  }));
+}) satisfies GetStaticPaths;
+
+const { post } = Astro.props;
+const { Content } = await render(post);
+---
+
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>{post.data.title}</title>
+  </head>
+  <body>
+    <article>
+      <h1>{post.data.title}</h1>
+      <Content />
+    </article>
+  </body>
+</html>
