@@ -72,6 +72,23 @@ describe('npm workspaces のルート', () => {
     expect(root.workspaces).toContain('infra');
   });
 
+  it("workspaces が ['site','infra','api'] を含み、'admin' を含まない", () => {
+    // admin は次フェーズ。先走って足すと、ディレクトリが無い状態で npm install が壊れる。
+    const workspaces = rootPkg().workspaces ?? [];
+    expect(workspaces).toEqual(expect.arrayContaining(['site', 'infra', 'api']));
+    expect(workspaces).not.toContain('admin');
+  });
+
+  it('workspaces 配列に "api" が含まれる', () => {
+    // infra の synth は api/dist のバンドルをアセットとして読む。api がワークスペースで
+    // なくなると pretest の `npm run build -w ../api` が 'No workspaces found' で落ちる。
+    // api 側（api/test/unit/toolchain.test.ts）からも同じことを主張している。**両方から
+    // 見るのは意図的**で、片方だけだと片方を消したときに気づけない。
+    const root = rootPkg();
+    expect(Array.isArray(root.workspaces)).toBe(true);
+    expect(root.workspaces).toContain('api');
+  });
+
   it('private: true である（誤って publish しないため）', () => {
     expect(rootPkg().private).toBe(true);
   });
@@ -95,6 +112,30 @@ describe('infra/package.json の pretest', () => {
 
   it('スタックを名指ししていない（名指しすると他スタックの synth 崩れを見逃す）', () => {
     expect(infraPkg().scripts?.pretest).not.toContain('BlogSiteStack');
+  });
+
+  it('**api のバンドルを先にビルドする**', () => {
+    // Code.fromAsset が api/dist を読むので、synth の前に api のバンドルが要る。
+    // ビルドせずに synth すると **テンプレートは通るのに中身が古い**。
+    expect(infraPkg().scripts?.pretest).toContain('npm run build -w ../api');
+  });
+
+  it("**'-w api' という（infra からは解決できない）形になっていない**", () => {
+    // 実測: infra を cwd にした `npm run -w api build` も
+    // `npm --prefix .. run -w api build` も 'No workspaces found: --workspace=api' で失敗する。
+    // **パス形式（-w ../api）だけが通る。**
+    const pretest = infraPkg().scripts?.pretest ?? '';
+    expect(pretest).not.toMatch(/-w\s+api(\s|$)/);
+    expect(pretest).not.toContain('--prefix ..');
+  });
+
+  it('api のビルドが cdk synth **より前** に来る', () => {
+    const pretest = infraPkg().scripts?.pretest ?? '';
+    const buildAt = pretest.indexOf('npm run build -w ../api');
+    const synthAt = pretest.indexOf('cdk synth');
+    expect(buildAt).toBeGreaterThanOrEqual(0);
+    expect(synthAt).toBeGreaterThanOrEqual(0);
+    expect(buildAt, 'api のビルドが synth より後ろにある').toBeLessThan(synthAt);
   });
 });
 
@@ -131,5 +172,102 @@ describe('infra/README.md が実装に追いついている', () => {
     const text = readme();
     expect(text).toContain('MediaBucketE52FC6E4');
     expect(text).toContain('GitHubActionsDeployRole');
+  });
+
+  it('構成表が Phase 3 のリソースを網羅している', () => {
+    const text = readme();
+    for (const needle of [
+      'PostingApi',
+      'AWS::Lambda::Url',
+      'AWS::SecretsManager::Secret',
+      'AWS::Lambda::Permission',
+      'SiteDistributionOrigin3FunctionUrlOriginAccessControl1ACDDE31',
+    ]) {
+      expect(text, `README に ${needle} の記述が無い`).toContain(needle);
+    }
+  });
+
+  it('検証結果に W3005 と cfn-guard の記述があり、Phase 3 の件数が明記されている', () => {
+    const text = readme();
+    expect(text).toContain('W3005');
+    expect(text).toContain('cfn-guard');
+    // 「6 件のまま」「新規 0 件」が読み取れること。次に誰かが同じ検証をしたとき、
+    // 6 件が「ツールが動いていない」ではなく「本当に増えていない」と分かるように。
+    expect(text).toMatch(/Phase 3[^\n]*0 件|0 件[^\n]*Phase 3/);
+  });
+
+  it('**AUTH_MODE と deny-all の記述がある**（デプロイ前に fail-closed 状態を知れる）', () => {
+    const text = readme();
+    expect(text).toContain('AUTH_MODE');
+    expect(text).toContain('deny-all');
+  });
+
+  it('x-amz-content-sha256 の記述がある（POST の必須ヘッダという運用上の落とし穴）', () => {
+    expect(readme()).toContain('x-amz-content-sha256');
+  });
+
+  it('Authorization ヘッダが上書きされる制約の記述がある', () => {
+    // OAC の SigningBehavior が always なので、Cognito のトークンを
+    // Authorization: Bearer で送る一般的な設計がそのままでは使えない。
+    expect(readme()).toContain('Authorization');
+  });
+
+  it('TODO セクションに Cognito が含まれる（意図的に開けたまま残した穴）', () => {
+    expect(todoSection()).toContain('Cognito');
+  });
+  it('TODO に「s3 sync の最小権限が実デプロイ未検証」が残っている', () => {
+    // **初回デプロイを終えるまで閉じてはいけない宿題である。**
+    // 実際に GitHub Actions が assume して sync するまで、6 アクションで足りるかは
+    // 誰も知らない（信頼ポリシーが GitHub OIDC の principal しか受け付けないので
+    // SSO からは assume できず、ローカルでは検証できない）。
+    // 初回デプロイが済んだらこのテストを「もう無い」側に反転させる。
+    expect(todoSection()).toContain('実デプロイ未検証');
+  });
+
+  it('GitHub Actions の変数 3 つと、その値の取得元が書かれている', () => {
+    // ワークフローは vars.* を読むだけで、未設定でも空文字に展開される。
+    // 「どこから値を持ってくるか」が README に無いと、preflight ガードが
+    // 落ちたときに次の一手が分からない。
+    const text = readme();
+    for (const name of ['AWS_DEPLOY_ROLE_ARN', 'SITE_BUCKET', 'CLOUDFRONT_DISTRIBUTION_ID']) {
+      expect(text, `README に ${name} の記載が必要`).toContain(name);
+    }
+    // 値は CloudFormation の Output からしか取れない（デプロイロールには
+    // cloudformation:DescribeStacks が無いので、実行時に読むことはできない）。
+    expect(text).toContain('describe-stacks');
+    for (const output of ['DeployRoleArn', 'SiteBucketName', 'DistributionId']) {
+      expect(text, `README に Output 名 ${output} の記載が必要`).toContain(output);
+    }
+  });
+});
+
+describe('DEVELOPERS.md が実装に追いついている', () => {
+  const developers = (): string =>
+    readFileSync(fileURLToPath(new URL('../../DEVELOPERS.md', import.meta.url)), 'utf8');
+
+  it('**シークレットの物理名がハードコードされていない**', () => {
+    // CDK は物理名を付けない方針なので、手順書に blog/github-app-private-key と
+    // 書いてあっても **その名前のシークレットは存在しない**（手順が実行不能だった）。
+    // CfnOutput GitHubAppSecretName から取る形に置き換わっていること。
+    expect(developers()).not.toContain('blog/github-app-private-key');
+  });
+
+  it('CfnOutput の GitHubAppSecretName を参照している', () => {
+    expect(developers()).toContain('GitHubAppSecretName');
+  });
+
+  it('鍵ローテーションの検証手順が実行可能な形になっている', () => {
+    // 「AWSPENDING で投入し、動作を確認」の **確認手段** が存在すること。
+    const text = developers();
+    expect(text).toContain('AWSPENDING');
+    expect(text).toContain('versionStage=AWSPENDING');
+    expect(text).toContain('/api/health/github-app');
+  });
+
+  it('ワークスペース表で api/ が「未着手」でない', () => {
+    const text = developers();
+    const row = text.split('\n').find((line) => line.includes('`api/`') && line.includes('|'));
+    expect(row, 'ワークスペース表に api/ の行が必要').toBeDefined();
+    expect(row).not.toContain('未着手');
   });
 });

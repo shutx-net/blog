@@ -136,6 +136,118 @@ describe('cdk synth が出力した実テンプレート: BlogSiteStack 固有',
     expect(raw).not.toContain('CloudFrontOriginAccessIdentity');
     expect(raw).not.toContain('origin-access-identity');
   });
+
+  it('**実ファイル上でも Secret の Properties キーが ["Description"] のみ**', () => {
+    // Template.fromStack ではなく cdk CLI が書いたバイト列で確認する。
+    // フィーチャーフラグや cdk.json の context が合成結果を変えても検出できる。
+    //
+    // CDK の既定（GenerateSecretString: {}）に戻ると、デプロイ時に 32 文字の
+    // ランダムパスワードが AWSCURRENT に入る。**このアサーションと
+    // test/posting-api.test.ts の同等のものだけが検出できる**（実測）。
+    const secrets = Object.values(
+      asTemplate('BlogSiteStack').findResources('AWS::SecretsManager::Secret'),
+    ) as Array<{ Properties?: Record<string, unknown> }>;
+    expect(secrets).toHaveLength(1);
+    expect(Object.keys(secrets[0]?.Properties ?? {}).sort()).toEqual(['Description']);
+  });
+
+  it('**実ファイル上でも ManagedPolicyArns を持つ IAM::Role が 0 個**', () => {
+    // 上の『Resource が "*" の Allow 文が 1 つも無い』の穴を塞ぐ。
+    // マネージドポリシーは ARN 参照なのでポリシー文がテンプレートに現れず、
+    // AWSLambdaBasicExecutionRole（logs:* を Resource "*" に許可）が付いていても
+    // あちらは緑のまま通る。**実測で確認済み。**
+    const roles = Object.values(
+      asTemplate('BlogSiteStack').findResources('AWS::IAM::Role'),
+    ) as Array<{ Properties?: Record<string, unknown> }>;
+    expect(roles.length, 'ロールが 1 件以上あること').toBeGreaterThan(0);
+    expect(roles.filter((role) => role.Properties?.['ManagedPolicyArns'] !== undefined)).toEqual([]);
+  });
+
+  it('実ファイル上でも Lambda::Url の AuthType が AWS_IAM', () => {
+    const urls = Object.values(
+      asTemplate('BlogSiteStack').findResources('AWS::Lambda::Url'),
+    ) as Array<{ Properties?: { AuthType?: string } }>;
+    expect(urls).toHaveLength(1);
+    expect(urls[0]?.Properties?.AuthType).toBe('AWS_IAM');
+  });
+
+  it('実ファイル上でも AUTH_MODE が deny-all', () => {
+    const functions = Object.values(
+      asTemplate('BlogSiteStack').findResources('AWS::Lambda::Function'),
+    ) as Array<{ Properties?: { Environment?: { Variables?: Record<string, unknown> } } }>;
+    expect(functions).toHaveLength(1);
+    expect(functions[0]?.Properties?.Environment?.Variables?.['AUTH_MODE']).toBe('deny-all');
+  });
+
+  it('生バイト列にも -----BEGIN が現れない（collectStrings と二重化）', () => {
+    // 上の describe.each が collectStrings で走査しているのと同じことを、
+    // **文字列としての grep 相当**でもう一度行う。構造化された走査が
+    // 見落とす場所（キー名やコメント）に入っても落ちる。
+    expect(readRaw('BlogSiteStack')).not.toContain('-----BEGIN');
+  });
+
+  it('実ファイル上でも OAC が 3 個・Lambda::Permission が 1 個', () => {
+    const template = asTemplate('BlogSiteStack');
+    template.resourceCountIs('AWS::CloudFront::OriginAccessControl', 3);
+    template.resourceCountIs('AWS::Lambda::Permission', 1);
+  });
+});
+
+/**
+ * **アセットという新しい乖離源。**
+ *
+ * Phase 3 でテンプレートは api/dist の内容ハッシュを S3Key に埋めるようになった。
+ * つまり **api をビルドせずに synth するとテンプレートは通るのに中身が古い**。
+ * assets.json と実ファイルの突き合わせがその防波堤になる。
+ */
+describe('Lambda のアセットが実在する', () => {
+  interface AssetManifest {
+    files?: Record<string, { source?: { packaging?: string; path?: string } }>;
+  }
+
+  const manifest = (): AssetManifest =>
+    JSON.parse(
+      readFileSync(fileURLToPath(new URL('../cdk.out/BlogSiteStack.assets.json', import.meta.url)), 'utf8'),
+    ) as AssetManifest;
+
+  it('assets.json に zip のエントリがある', () => {
+    const zips = Object.values(manifest().files ?? {}).filter(
+      (file) => file.source?.packaging === 'zip',
+    );
+    expect(zips.length, 'Lambda のアセットが 1 件以上あること').toBeGreaterThan(0);
+  });
+
+  it('**Code.S3Key がテンプレートに埋まっており、対応する実体が cdk.out にある**', () => {
+    const functions = Object.values(
+      asTemplate('BlogSiteStack').findResources('AWS::Lambda::Function'),
+    ) as Array<{ Properties?: { Code?: { S3Key?: string } } }>;
+    expect(functions).toHaveLength(1);
+    const s3Key = functions[0]?.Properties?.Code?.S3Key;
+    expect(s3Key, 'Code.S3Key が無い').toBeDefined();
+
+    // S3Key は '<hash>.zip'。assets.json の同じハッシュのエントリを探す。
+    const hash = String(s3Key).replace(/\.zip$/, '');
+    const entry = (manifest().files ?? {})[hash];
+    expect(entry, `assets.json に ${hash} のエントリが無い`).toBeDefined();
+    expect(entry?.source?.packaging).toBe('zip');
+
+    const assetPath = fileURLToPath(new URL(`../cdk.out/${entry?.source?.path}`, import.meta.url));
+    expect(existsSync(assetPath), `${assetPath} が実在しない`).toBe(true);
+  });
+
+  it('**アセットの中身が api/dist/index.mjs である**', () => {
+    // ディレクトリのままステージングされるので、中に index.mjs があること自体を見る。
+    // 「ビルドし忘れて古いバンドルが入った」は内容ハッシュが変わるので S3Key に出るが、
+    // そもそもファイルが無い状態はここで落ちる。
+    const zips = Object.entries(manifest().files ?? {}).filter(
+      ([, file]) => file.source?.packaging === 'zip',
+    );
+    expect(zips.length).toBeGreaterThan(0);
+    for (const [, file] of zips) {
+      const dir = fileURLToPath(new URL(`../cdk.out/${file.source?.path}`, import.meta.url));
+      expect(existsSync(`${dir}/index.mjs`), `${dir}/index.mjs が無い`).toBe(true);
+    }
+  });
 });
 
 describe('cdk synth が出力した実テンプレート: BlogCicdStack 固有', () => {
@@ -155,8 +267,11 @@ describe('cdk synth が出力した実テンプレート: BlogCicdStack 固有',
     expect(statements).toHaveLength(1);
     const condition = statements[0]?.Condition ?? {};
     expect(Object.keys(condition)).toEqual(['StringEquals']);
+    // **immutable subject claim 形式**（2026-07-15 以降に作成されたリポジトリの既定）。
+    // ここは意図的にリテラルだけで比較する — DEPLOY_SUBJECT を import すると
+    // 「定数と合成結果が一致する」ことしか言えず、実ファイルを読む意味が消える。
     expect(condition['StringEquals']?.['token.actions.githubusercontent.com:sub']).toBe(
-      'repo:shutx-net/blog:ref:refs/heads/main',
+      'repo:shutx-net@169037737/blog@1351152011:ref:refs/heads/main',
     );
   });
 
