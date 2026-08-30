@@ -4,6 +4,7 @@ import type { ApiRequest, ApiResponse } from './http.ts';
 import { InvalidJsonBodyError, errorResponse, isJsonContentType, jsonResponse, parseJsonObject } from './http.ts';
 import { renderMarkdown } from './posts/frontmatter.ts';
 import { PostValidationError, validatePost } from './posts/validate.ts';
+import { MediaValidationError } from './media/presign.ts';
 import { KeyNotProvisionedError } from './secret.ts';
 
 export interface RouteContext {
@@ -71,11 +72,21 @@ const createPost = async ({ body, deps }: RouteContext): Promise<ApiResponse> =>
 };
 
 const presignMedia = async ({ body, deps }: RouteContext): Promise<ApiResponse> => {
-  const result = await deps.presigner.presign({
-    contentType: String(body['contentType'] ?? ''),
-    size: Number(body['size'] ?? 0),
-  });
-  return jsonResponse(200, result);
+  const filename = body['filename'];
+  try {
+    const result = await deps.presigner.presign({
+      contentType: typeof body['contentType'] === 'string' ? body['contentType'] : '',
+      // 数値以外は NaN にして presigner の検証に落とす（'10' を 10 と読まない）。
+      size: typeof body['size'] === 'number' ? body['size'] : Number.NaN,
+      ...(typeof filename === 'string' ? { filename } : {}),
+    });
+    return jsonResponse(200, result);
+  } catch (error) {
+    if (error instanceof MediaValidationError) {
+      return jsonResponse(400, { error: 'invalid_media', field: error.field });
+    }
+    throw error;
+  }
 };
 
 /**
