@@ -1,4 +1,4 @@
-import { AUTH_NOT_CONFIGURED } from './auth.ts';
+import { AUTH_FAILURE_RESPONSES } from './auth.ts';
 import type { Deps } from './deps.ts';
 import type { ApiRequest, ApiResponse } from './http.ts';
 import { InvalidJsonBodyError, errorResponse, isJsonContentType, jsonResponse, parseJsonObject } from './http.ts';
@@ -129,11 +129,12 @@ export const dispatch = async (request: ApiRequest, deps: Deps): Promise<ApiResp
   if (route.requiresAuth) {
     const result = await deps.authorizer.authorize(request);
     if (!result.ok) {
-      // 401 ではなく 503。401 は「資格情報を出し直せば通る」を意味するが、
-      // deny-all では通る資格情報が **存在しない**。
-      return result.reason === AUTH_NOT_CONFIGURED
-        ? errorResponse(503, 'auth_not_configured')
-        : errorResponse(403, 'forbidden');
+      // **写像表は auth.ts が持つ。ここで分岐を書かない。**
+      // 表は 401 と 503 しか持てない型になっており、**403 と 404 は書けない**。
+      // CloudFront の CustomErrorResponses が origin の 403/404 も HTML に差し替える
+      // ため、403 を使うと admin から「経路が無い」と区別が付かなくなる（auth.ts 参照）。
+      const failure = AUTH_FAILURE_RESPONSES[result.reason];
+      return errorResponse(failure.statusCode, failure.error);
     }
   }
 

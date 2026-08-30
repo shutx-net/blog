@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Authorizer } from '../../src/auth.ts';
-import { denyAllAuthorizer } from '../../src/auth.ts';
+import type { AuthFailureReason, Authorizer } from '../../src/auth.ts';
+import { AUTH_FAILURE_REASONS, AUTH_FAILURE_RESPONSES, denyAllAuthorizer } from '../../src/auth.ts';
 import type { ApiRequest, ApiResponse } from '../../src/http.ts';
 import type { Deps } from '../../src/deps.ts';
 import { ROUTES, dispatch } from '../../src/router.ts';
@@ -415,5 +415,105 @@ describe('レスポンスの共通ヘッダ', () => {
       const response = await dispatch(req, deps);
       expect(() => JSON.parse(response.body)).not.toThrow();
     }
+  });
+});
+
+/**
+ * **本フェーズで一番機械的に効くテスト。**
+ *
+ * CloudFront の CustomErrorResponses は DistributionConfig 直下にあり、
+ * **ビヘイビア単位では外せない**。origin が返した 403 / 404 も /404.html の HTML に
+ * 差し替えられる（実測: `GET /api/nope` -> 404 / text/html / server: AmazonS3 /
+ * x-cache: Error from cloudfront）。
+ *
+ * したがって認証の拒否に 403 を使うと、admin からは
+ * 「トークンを出し直せ」「あなたは別のユーザだ」「経路が無い」の 3 つが
+ * **全部同じ HTML 404** になり区別が付かない。**直すべきは CloudFront ではなく
+ * API 側のステータス選択である。**
+ */
+describe('認証の拒否は 401 と 503 だけ（403 と 404 を絶対に返さない）', () => {
+  const rejecting = (reason: AuthFailureReason): Authorizer => ({
+    authorize: async () => ({ ok: false, reason }),
+  });
+
+  /** 認証が要る 3 経路すべてを走査する（health だけが requiresAuth: false）。 */
+  const protectedRequests: [string, () => ApiRequest][] = [
+    ['POST /api/posts', () => jsonPost('/api/posts', { slug: 'x', title: 't', description: 'd', body: 'b' })],
+    ['POST /api/media/presign', () => jsonPost('/api/media/presign', { contentType: 'image/png', size: 100 })],
+    ['GET /api/health/github-app', () => request({ path: '/api/health/github-app' })],
+  ];
+
+  const combinations = AUTH_FAILURE_REASONS.flatMap((reason) =>
+    protectedRequests.map(([label, make]) => [reason, label, make] as const),
+  );
+
+  it('走査対象が空でない（15 通り = 5 理由 x 3 経路）', () => {
+    // 非空ガード。ループが 0 件でも通ってしまう事故を防ぐ（infra/README.md の型 1）。
+    expect(combinations).toHaveLength(15);
+  });
+
+  it.each(combinations)('%s / %s: ステータスが 401 か 503 である', async (reason, _label, make) => {
+    const { deps } = spyDeps(rejecting(reason));
+    const response = await dispatch(make(), deps);
+    expect([401, 503]).toContain(response.statusCode);
+  });
+
+  it.each(combinations)('%s / %s: **403 を返さない**', async (reason, _label, make) => {
+    const { deps } = spyDeps(rejecting(reason));
+    const response = await dispatch(make(), deps);
+    expect(response.statusCode).not.toBe(403);
+  });
+
+  it.each(combinations)('%s / %s: **404 を返さない**', async (reason, _label, make) => {
+    const { deps } = spyDeps(rejecting(reason));
+    const response = await dispatch(make(), deps);
+    expect(response.statusCode).not.toBe(404);
+  });
+
+  it.each(combinations)('%s / %s: コラボレータを 1 つも呼ばない', async (reason, _label, make) => {
+    const { deps, expectNoCollaboratorCalls } = spyDeps(rejecting(reason));
+    await dispatch(make(), deps);
+    expectNoCollaboratorCalls();
+  });
+
+  it.each([
+    ['auth-not-configured', 503, 'auth_not_configured'],
+    ['unauthenticated', 401, 'unauthenticated'],
+    ['invalid-token', 401, 'invalid_token'],
+    ['not-authorized', 401, 'not_authorized'],
+    ['unavailable', 503, 'auth_unavailable'],
+  ] as const)('%s -> %i {"error":"%s"}', async (reason, statusCode, error) => {
+    const { deps } = spyDeps(rejecting(reason));
+    const response = await dispatch(jsonPost('/api/posts', {}), deps);
+    expect(response.statusCode).toBe(statusCode);
+    expect(bodyOf(response)['error']).toBe(error);
+  });
+
+  it.each(AUTH_FAILURE_REASONS.filter((r) => AUTH_FAILURE_RESPONSES[r].statusCode === 401))(
+    '%s の 401 応答に **WWW-Authenticate ヘッダが付かない**',
+    async (reason) => {
+      // トークンは Authorization に載っていないので `WWW-Authenticate: Bearer` は嘘になる。
+      // ブラウザに無意味な資格情報ダイアログを出させうる。
+      const { deps } = spyDeps(rejecting(reason));
+      const response = await dispatch(jsonPost('/api/posts', {}), deps);
+      const names = Object.keys(response.headers).map((name) => name.toLowerCase());
+      expect(names).not.toContain('www-authenticate');
+    },
+  );
+
+  it.each([...AUTH_FAILURE_REASONS])('%s の応答にも Cache-Control: no-store が付く', async (reason) => {
+    const { deps } = spyDeps(rejecting(reason));
+    const response = await dispatch(jsonPost('/api/posts', {}), deps);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.headers['content-type']).toBe('application/json');
+  });
+
+  it('**未知の経路が 404 を返すこと自体は変えない**（ただし CloudFront で HTML に化ける）', async () => {
+    // これは認証の失敗ではないので 404 のままでよい。admin 側の切り分けとしては
+    // 「HTML の 404 が返ってきたら、認証の失敗ではなく署名の問題か経路の問題」となる。
+    const { deps } = spyDeps(allowAuthorizer);
+    const response = await dispatch(request({ path: '/api/nope' }), deps);
+    expect(response.statusCode).toBe(404);
+    expect(bodyOf(response)['error']).toBe('not_found');
   });
 });
