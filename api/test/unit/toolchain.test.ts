@@ -1,4 +1,6 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -261,5 +263,77 @@ describe('api/tsconfig.json', () => {
     expect(options['verbatimModuleSyntax']).toBe(true);
     expect(options['module']).toBe('nodenext');
     expect(options['moduleResolution']).toBe('nodenext');
+  });
+});
+
+describe('**実際に走るコンパイラ**（package.json のピンではなく実行結果を見る）', () => {
+  const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+  const adminPkg = (): PackageJson => readJson<PackageJson>('../../../admin/package.json');
+
+  /** `node_modules/.bin/tsc --version` の実行結果から取り出したバージョン。 */
+  const runningCompilerVersion = (): string => {
+    const tsc = join(REPO_ROOT, 'node_modules', '.bin', 'tsc');
+    expect(existsSync(tsc), 'node_modules/.bin/tsc が無い（先に npm ci）').toBe(true);
+    const result = spawnSync(tsc, ['--version'], { encoding: 'utf8' });
+    expect(result.error, `tsc を起動できなかった: ${String(result.error)}`).toBeUndefined();
+    expect(
+      result.status,
+      `tsc --version が異常終了した (status=${String(result.status)}): ${result.stderr ?? ''}`,
+    ).toBe(0);
+    const version = /Version\s+(\d+\.\d+\.\d+)/.exec(result.stdout ?? '')?.[1] ?? '';
+    expect(version, `tsc --version の出力を解釈できない: ${JSON.stringify(result.stdout)}`).toMatch(
+      EXACT_VERSION,
+    );
+    return version;
+  };
+
+  it('**tsc --version の出力が 3 ワークスペースのピンと一致する**', () => {
+    // # なぜ package.json を読むだけでは足りないのか
+    //
+    // **TS 7 はコンパイラ本体をネイティブバイナリとして別パッケージで配る。**
+    // `typescript` パッケージは node のシムで、実体は
+    // `@typescript/typescript-<os>-<arch>`（27.9MB）を optionalDependency として引く。
+    // したがって **ピンは 7.0.2 のままで、入っているバイナリだけが間違っている／
+    // 存在しない**という状態がありうる。5.9.3（純 JS）には無かった壊れ方である。
+    //
+    // 捕まえたい事故は 3 つ:
+    //
+    // (a) **WSL から Windows 版 npm を使う。** win32 バイナリが Linux ツリーに入り、
+    //     node_modules/.bin/tsc が実行できなくなる（`which npm` が /nix/store 配下で
+    //     あることを DEVELOPERS.md が要求している理由）
+    // (b) `npm ci --omit=optional` を付けた CI。node_modules/@typescript が作られず
+    //     tsc が起動しない（ci.yml は素の `npm ci` を使っている）
+    // (c) lock がプラットフォームを取りこぼす
+    //
+    // # このテストが空振りでないことの根拠（変異で確認済み）
+    //
+    // `node_modules/@typescript/` を退避すると tsc は
+    // `Error: Unable to resolve @typescript/typescript-linux-x64. Either your platform
+    // is unsupported, or you are missing the package on disk.` を投げて **起動すらしない**
+    // （rc=1）。そのとき **このファイルの他の 21 件は緑のままだった**（実測）。
+    // ピン文字列を読むアサーションでは原理的に検出できない事故である。
+    const pinned = apiPkg().devDependencies?.['typescript'];
+    expect(pinned, 'api が typescript を宣言していること').toMatch(EXACT_VERSION);
+    expect(infraPkg().devDependencies?.['typescript'], 'infra のピンが api とずれている').toBe(
+      pinned,
+    );
+    expect(adminPkg().devDependencies?.['typescript'], 'admin のピンが api とずれている').toBe(
+      pinned,
+    );
+    expect(
+      runningCompilerVersion(),
+      '実際に走る tsc が package.json のピンと違う（node_modules が古いか、別 OS 用のバイナリが入っている）',
+    ).toBe(pinned);
+  });
+
+  it('**ワークスペースに typescript の入れ子コピーが無い**（3 つとも同じ実体を走らせる）', () => {
+    // 上のテストはルートの `node_modules/.bin/tsc` 1 本しか見ない。ピンがずれると
+    // npm はワークスペース直下に別バージョンを入れ、`npm run -w admin typecheck` だけが
+    // **検査していないコンパイラ**で走る状態になりうる。入れ子が無いことを別に主張して、
+    // 「ルートの 1 本 = 3 つが実際に使うもの」を成り立たせる。
+    for (const workspace of ['api', 'infra', 'admin', 'site']) {
+      const nested = join(REPO_ROOT, workspace, 'node_modules', 'typescript');
+      expect(existsSync(nested), `${workspace}/node_modules/typescript が存在する`).toBe(false);
+    }
   });
 });
