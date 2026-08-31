@@ -346,3 +346,49 @@ describe('ci.yml の権限とピン', () => {
     }
   });
 });
+
+describe('ci.yml — 型検査が本当に走ること（TypeScript 7 移行で重みが増した）', () => {
+  /** `typecheck` スクリプトを持つワークスペース。site は tsc を走らせない。 */
+  const TYPECHECKED = ['api', 'infra', 'admin'];
+
+  it('**api / infra / admin の 3 ジョブが typecheck を test より先に実行する**', () => {
+    // **infra だけは前から見ていたが、api と admin は見ていなかった。**
+    // Vitest は esbuild で型を剥がすので、**テストは型が壊れていても緑になる。**
+    // つまり `tsc --noEmit` の 3 本がこのリポジトリで型を見ている唯一の場所であり、
+    // ci.yml からステップが 1 つ消えても**他のどのテストも赤くならない。**
+    // 消えたことを検出できるのはここだけなので、3 つとも名指しで固定する。
+    const jobs = jobsOf(ci());
+    for (const name of TYPECHECKED) {
+      const text = runTextOf(jobs[name]);
+      const typecheckAt = text.indexOf(`npm run -w ${name} typecheck`);
+      const testAt = text.indexOf(`npm run -w ${name} test`);
+      expect(typecheckAt, `${name} ジョブに typecheck が無い`).toBeGreaterThan(-1);
+      expect(testAt, `${name} ジョブに test が無い`).toBeGreaterThan(-1);
+      expect(typecheckAt, `${name}: typecheck は test より先に書くこと`).toBeLessThan(testAt);
+    }
+  });
+
+  it('**typecheck を test ステップに畳み込んでいない**（別ステップのまま）', () => {
+    // 1 つの run に `typecheck && test` と書くと、ログ上どちらが落ちたか読みにくいうえ、
+    // 「型検査が走らなかったのに緑」という経路を作りやすい。ステップを分けたままにする。
+    for (const name of TYPECHECKED) {
+      for (const step of stepsOf(jobsOf(ci())[name])) {
+        const run = typeof step.run === 'string' ? step.run : '';
+        if (run.includes('typecheck')) {
+          expect(run.includes(` test`), `${name}: typecheck と test を同じ run に書かない`).toBe(
+            false,
+          );
+        }
+      }
+    }
+  });
+
+  it('**npm ci に --omit が付いていない**（TS 7 のコンパイラ本体は optionalDependency）', () => {
+    // TS 7 は `tsc` の実体を `@typescript/typescript-<os>-<arch>` として配り、
+    // `typescript` はそれを optionalDependencies で引くだけのシムになっている。
+    // したがって `npm ci --omit=optional` を付けるとコンパイラが入らず、
+    // `tsc` は `Error: Unable to resolve @typescript/typescript-linux-x64.` で
+    // **起動すらしない**（実測）。5.9.3 の純 JS 実装には無かった壊れ方。
+    expect(ciText(), 'ci.yml に --omit がある').not.toContain('--omit');
+  });
+});

@@ -553,3 +553,47 @@ describe('DEVELOPERS.md が Phase 4 に追いついている', () => {
     expect(developers()).toContain('ID トークン');
   });
 });
+
+describe('DEVELOPERS.md が TypeScript 7 に追いついている', () => {
+  const developers = (): string =>
+    readFileSync(fileURLToPath(new URL('../../DEVELOPERS.md', import.meta.url)), 'utf8');
+
+  it('**tsc の実体がネイティブバイナリの別パッケージであることが書いてある**', () => {
+    // 5.x では「typescript を入れれば tsc が動く」で済んだ。7.x は
+    // `@typescript/typescript-<os>-<arch>` を optionalDependency として引くので、
+    // 入れ方によっては**コンパイラだけが入らない**。手順書に無いと原因に辿り着けない。
+    const text = developers();
+    expect(text).toContain('@typescript/typescript-');
+    expect(text, 'optionalDependencies である旨').toContain('optionalDependencies');
+  });
+
+  it('**`npm ci --omit=optional` を使わないことが書いてある**', () => {
+    // 付けると tsc が起動しない。CI は赤くなるが、メッセージから原因が読み取りにくい。
+    expect(developers()).toContain('--omit=optional');
+  });
+
+  it('**WSL から Windows 版 npm を使わないことが書いてある**', () => {
+    // 5.x の tsc は純 JS でどの npm で入れても動いた。7.x は os/cpu でバイナリを選ぶので、
+    // Windows の npm で入れると win32 バイナリが Linux ツリーに入り実行不能になる。
+    const text = developers();
+    expect(text).toContain('which npm');
+    expect(text).toContain('/nix/store');
+  });
+
+  it('**tsserver が無くなり `tsc --lsp` になったことが書いてある**', () => {
+    expect(developers()).toContain('tsc --lsp');
+  });
+
+  it('**「テストが全部緑でも型が正しいことにはならない」と書いてある**', () => {
+    // **このフェーズで一番大事な注意書き。** Vitest は esbuild で型を剥がすため、
+    // 型が壊れていてもテストは通る。実測で 5.9.3 -> 7.0.2 の変更は 1988 件中 1987 件を
+    // そのまま通した。ここが消えると、次の人が緑を見て「移行できた」と誤解する。
+    const text = developers();
+    expect(text).toContain('esbuild で型を剥がして');
+    expect(text, '型を見ているのは tsc --noEmit だけ').toContain('tsc --noEmit');
+    expect(text, '実測値（1987 件が素通りしたこと）').toContain('1987 件');
+    expect(text, 'typecheck を test ステップに畳み込まないこと').toContain(
+      'テストジョブに畳み込まないこと',
+    );
+  });
+});
