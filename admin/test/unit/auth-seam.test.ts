@@ -3,8 +3,14 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { API_OPERATIONS, createApiClient } from '../../src/api/client.ts';
+import { utf8Bytes } from '../../src/api/sha256.ts';
+import { base64UrlEncode } from '../../src/auth/base64url.ts';
+import { AUTH_CONFIG } from '../../src/auth/config.ts';
+import { saveSession } from '../../src/auth/session-state.ts';
+import { createSessionStore } from '../../src/storage/session-store.ts';
+import type { SessionStore } from '../../src/storage/session-store.ts';
 import type { ApiOperation } from '../../src/api/client.ts';
-import { createStubAuthTransport } from '../../src/auth/session.ts';
+import { createCognitoAuthTransport, createStubAuthTransport } from '../../src/auth/session.ts';
 import type { AuthTransport } from '../../src/auth/session.ts';
 
 const SRC_DIR = fileURLToPath(new URL('../../src/', import.meta.url));
@@ -108,6 +114,88 @@ describe('**transport が x-amz-content-sha256 を上書きできない**', () =
     const sent = headersOf(calls[0])['x-amz-content-sha256'];
     expect(sent).not.toBe('deadbeef');
     expect(sent).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+/**
+ * **本物の transport を実物の client に刺した往復。**
+ *
+ * 上の describe 群は偽 transport で「どんな値が来ても署名が壊れない」ことを見ている。
+ * ここは逆に「本物が返す値が実際に全経路へ正しく乗る」ことを 1 件だけ確かめる。
+ * 片方だけだと「実装したが繋がっていない」で緑になる。
+ */
+describe('**本物の transport を createApiClient に刺した往復**', () => {
+  const NOW_MS = 1_800_000_000_000;
+
+  const signedInStore = (): { store: SessionStore; idToken: string } => {
+    const entries = new Map<string, string>();
+    const store = createSessionStore({
+      getItem: (key) => entries.get(key) ?? null,
+      setItem: (key, value) => {
+        entries.set(key, value);
+      },
+      removeItem: (key) => {
+        entries.delete(key);
+      },
+    });
+    const idToken = [
+      'eyJhbGciOiJSUzI1NiJ9',
+      base64UrlEncode(
+        utf8Bytes(
+          JSON.stringify({
+            exp: NOW_MS / 1000 + 3600,
+            aud: AUTH_CONFIG.clientId,
+            iss: AUTH_CONFIG.issuer,
+            token_use: 'id',
+            'cognito:username': 'shutx',
+          }),
+        ),
+      ),
+      'sig',
+    ].join('.');
+    saveSession(
+      store,
+      { ok: true, idToken, refreshToken: 'R' },
+      { clientId: AUTH_CONFIG.clientId, issuer: AUTH_CONFIG.issuer },
+    );
+    return { store, idToken };
+  };
+
+  it.each(API_OPERATIONS)('$method $path に本物のトークンが乗る', async (operation) => {
+    const { store, idToken } = signedInStore();
+    const auth = createCognitoAuthTransport({
+      store,
+      now: () => NOW_MS,
+      fetchImpl: async () => {
+        throw new Error('リフレッシュは起きないはず');
+      },
+    });
+
+    const { calls } = await callWith(operation, auth);
+    const headers = headersOf(calls[0]);
+    expect(headers['x-blog-authorization']).toBe(`Bearer ${idToken}`);
+    expect(Object.keys(headers)).not.toContain('authorization');
+    // 本物でも body のハッシュは client.ts のものが勝つ。
+    expect(headers['x-amz-content-sha256']).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('未認証の本物 transport では認証ヘッダが乗らない（api が 401 を返すのが正しい）', async () => {
+    const entries = new Map<string, string>();
+    const auth = createCognitoAuthTransport({
+      store: createSessionStore({
+        getItem: (key) => entries.get(key) ?? null,
+        setItem: (key, value) => {
+          entries.set(key, value);
+        },
+        removeItem: (key) => {
+          entries.delete(key);
+        },
+      }),
+      now: () => NOW_MS,
+    });
+
+    const { calls } = await callWith({ method: 'GET', path: '/api/health' }, auth);
+    expect(Object.keys(headersOf(calls[0]))).not.toContain('x-blog-authorization');
   });
 });
 
