@@ -184,6 +184,65 @@ describe('生成物の衛生', () => {
   });
 });
 
+/**
+ * **site/dist にも同じ invariant を張る。**
+ *
+ * CSP はデフォルトビヘイビア経由で **site と admin の両方**に付く。
+ * admin だけ調べても「CSP がサイトを壊す」は捕まらない。
+ * `pretest` が `npm run build -w ../site` を先に走らせるので site/dist は存在する。
+ */
+describe('**CSP がサイトを壊さないことの静的確認（site/dist）**', () => {
+  const SITE_DIST = fileURLToPath(new URL('../../../site/dist/', import.meta.url));
+
+  const htmlFiles = (): string[] =>
+    allFiles(SITE_DIST)
+      .filter((relative) => relative.endsWith('.html'))
+      .map((relative) => SITE_DIST + relative);
+
+  it('site/dist に HTML がある（走査が空振りしていない）', () => {
+    expect(existsSync(SITE_DIST), 'site/dist が無い。pretest が site をビルドする').toBe(true);
+    expect(htmlFiles().length).toBeGreaterThan(0);
+  });
+
+  it('**インライン <script> が 0 件**（script-src に unsafe-inline を入れずに済む）', () => {
+    const offenders = htmlFiles().filter((path) => {
+      const html = readFileSync(path, 'utf8');
+      return [...html.matchAll(/<script(?![^>]*\ssrc=)[^>]*>([\s\S]*?)<\/script>/g)].some(
+        (match) => (match[1] ?? '').trim().length > 0,
+      );
+    });
+    expect(offenders.map((path) => path.replace(SITE_DIST, ''))).toEqual([]);
+  });
+
+  it('**インラインイベントハンドラ属性が 0 件**（script-src-attr none が何も壊さない）', () => {
+    const offenders = htmlFiles().filter((path) =>
+      /\son[a-z]+\s*=\s*["']/i.test(readFileSync(path, 'utf8')),
+    );
+    expect(offenders.map((path) => path.replace(SITE_DIST, ''))).toEqual([]);
+  });
+
+  it('**javascript: で始まる href / src が 0 件**', () => {
+    const offenders = htmlFiles().filter((path) =>
+      /(?:href|src)\s*=\s*["']\s*javascript:/i.test(readFileSync(path, 'utf8')),
+    );
+    expect(offenders.map((path) => path.replace(SITE_DIST, ''))).toEqual([]);
+  });
+
+  it('**インライン <style> は実在する**（style-src の unsafe-inline が要る根拠）', () => {
+    // ここが 0 件になったら 'unsafe-inline' を外せる合図。
+    // **外せる根拠が消えたことに気づけるようにしておく。**
+    const withStyle = htmlFiles().filter((path) => /<style[^>]*>/i.test(readFileSync(path, 'utf8')));
+    expect(withStyle.length).toBeGreaterThan(0);
+  });
+
+  it('**外部オリジンのスクリプト参照が無い**（script-src self で足りる）', () => {
+    const offenders = htmlFiles().filter((path) =>
+      /<script[^>]*\ssrc=["']https?:\/\//i.test(readFileSync(path, 'utf8')),
+    );
+    expect(offenders.map((path) => path.replace(SITE_DIST, ''))).toEqual([]);
+  });
+});
+
 describe('dist の規模', () => {
   const files = allFiles(DIST);
 
