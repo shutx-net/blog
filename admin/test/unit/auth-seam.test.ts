@@ -124,40 +124,184 @@ describe('credentials が transport の値どおりに渡る', () => {
   });
 });
 
-describe('**認証の知識が session.ts の外に無い**', () => {
-  const sourceFiles = (dir: string): string[] =>
+/**
+ * **走査規則。Phase 5 で 1 本の許可リストから 4 本の規則に張り替えた。**
+ *
+ * Phase 4 までは「`Cognito` / `document.cookie` / `localStorage` / `sessionStorage` の
+ * どれも `src/auth/session.ts` にしか現れない」という 1 本だった。実装が 1 ファイルに
+ * 収まらなくなったときに、**その形を守るために実装を 1 ファイルへ押し込むのは本末転倒**
+ * なので、規則を分解した。**合計としては今より厳しい。**
+ *
+ *   | 綴り | Phase 4 の許可先 | Phase 5 の許可先 |
+ *   | --- | --- | --- |
+ *   | localStorage / sessionStorage | auth/session.ts（何にでも使えた） | **storage/session-store.ts の 1 本だけ** |
+ *   | document.cookie | auth/session.ts | **どこにも無い（0 件）** |
+ *   | Cognito | auth/session.ts | auth/ 配下（+ main.ts の import 行） |
+ *   | authorization | api/client.ts, auth/session.ts | 同じ（`authorization_code` は別物として除外） |
+ *
+ * **各規則について「違反サンプルを実際に検出できること」を先に主張する。**
+ * 検出できない走査は、走査が無いのと同じどころか、守られているという誤った確信を
+ * 与える分だけ悪い（test/unit/no-raw-fetch.test.ts と同じ規律）。
+ */
+interface SeamRule {
+  name: string;
+  pattern: RegExp;
+  /** その行にこの綴りがあってよいか。**行単位**なので import 行だけ許すこともできる。 */
+  allows(relative: string, line: string): boolean;
+  /** **空振り検出。** これらのファイルで実際に検出されなければ規則は無意味。 */
+  mustDetect: string[];
+  /** 規則が検出できることの確認用。 */
+  violating: string;
+  /** 誤検出しないことの確認用。 */
+  clean: string;
+}
+
+const SEAM_RULES: SeamRule[] = [
+  {
+    name: 'Web Storage',
+    // **Web Storage を名指しできるのは 1 ファイルだけ。** トークンも下書きも
+    // ここを経由するので、保存先を変えるときに読む場所が 1 つに決まる。
+    pattern: /\b(?:localStorage|sessionStorage)\b/,
+    allows: (relative) => relative === 'storage/session-store.ts',
+    mustDetect: ['storage/session-store.ts'],
+    violating: "const raw = window.sessionStorage.getItem('token');",
+    clean: "const raw = store.get('token');",
+  },
+  {
+    name: 'document.cookie',
+    // **Phase 5 で 1 -> 0 に締めた。** Cookie 方式は採らないと決めた
+    // （api/src/auth/transport.ts が理由を書いている）ので、綴りごと禁じる。
+    pattern: /document\s*\.\s*cookie/,
+    allows: () => false,
+    mustDetect: [],
+    violating: "document.cookie = 'session=1; path=/';",
+    clean: 'const store = createSessionStore();',
+  },
+  {
+    name: 'Cognito',
+    // 認可サーバ固有の知識（ドメイン・パラメータ・エンドポイント）を auth/ に閉じる。
+    // **main.ts は import 行でだけ名前を書ける** — 継ぎ目に本物を差し込むのが
+    // main.ts の唯一の仕事であり、そこに知識は無い（値は auth/config.ts が持つ）。
+    pattern: /cognito/i,
+    allows: (relative, line) =>
+      relative.startsWith('auth/') || (relative === 'main.ts' && /^import\b/.test(line.trim())),
+    mustDetect: ['auth/session.ts'],
+    violating: "const domain = 'https://x.auth.ap-northeast-1.amazoncognito.com';",
+    clean: "const domain = config.loginDomain;",
+  },
+  {
+    name: 'authorization',
+    // ヘッダ名を手で書かせない。**`AUTH_HEADER` の import 経由だけが正。**
+    // `authorization_code` は OAuth の grant_type であってヘッダ名ではないので除外する
+    // （除外しないと token-endpoint.ts が RFC どおりの grant_type を書けなくなる）。
+    pattern: /authorization(?!_code)/i,
+    allows: (relative) => relative === 'api/client.ts' || relative === 'auth/session.ts',
+    mustDetect: ['api/client.ts', 'auth/session.ts'],
+    violating: "headers['Authorization'] = 'Bearer ' + token;",
+    clean: "body.set('grant_type', 'authorization_code');",
+  },
+];
+
+describe('**走査規則そのものが機能する**', () => {
+  it('規則の表が空でない', () => {
+    expect(SEAM_RULES.length).toBeGreaterThan(0);
+  });
+
+  it.each(SEAM_RULES)('$name の規則が違反サンプルを検出する', (rule) => {
+    expect(rule.pattern.test(rule.violating)).toBe(true);
+  });
+
+  it.each(SEAM_RULES)('$name の規則が清潔なサンプルを誤検出しない', (rule) => {
+    expect(rule.pattern.test(rule.clean)).toBe(false);
+  });
+
+  it('authorization の規則は grant_type=authorization_code を見逃すが、ヘッダ名は捕まえる', () => {
+    // 除外が広すぎないことの確認。**`authorization_code` だけを外している。**
+    const rule = SEAM_RULES.find((candidate) => candidate.name === 'authorization');
+    expect(rule).toBeDefined();
+    expect(rule?.pattern.test("grant_type=authorization_code")).toBe(false);
+    expect(rule?.pattern.test("'x-blog-authorization'")).toBe(true);
+    expect(rule?.pattern.test('Authorization: Bearer')).toBe(true);
+  });
+
+  it('Cognito の規則は main.ts の import 行だけを許し、それ以外の行は許さない', () => {
+    const rule = SEAM_RULES.find((candidate) => candidate.name === 'Cognito');
+    expect(rule).toBeDefined();
+    expect(rule?.allows('main.ts', "import { createCognitoAuthTransport } from './auth/session.ts';")).toBe(true);
+    expect(rule?.allows('main.ts', "const domain = 'https://x.amazoncognito.com';")).toBe(false);
+    expect(rule?.allows('editor/app.ts', "import { x } from './cognito.ts';")).toBe(false);
+  });
+});
+
+describe('**認証の知識が src/auth/ の外に漏れていない**', () => {
+  const sourceFiles = (dir: string, prefix = ''): string[] =>
     readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
       entry.isDirectory()
-        ? sourceFiles(`${dir}${entry.name}/`)
+        ? sourceFiles(`${dir}${entry.name}/`, `${prefix}${entry.name}/`)
         : entry.name.endsWith('.ts')
-          ? [`${dir}${entry.name}`]
+          ? [`${prefix}${entry.name}`]
           : [],
     );
 
-  const files = sourceFiles(SRC_DIR).filter((path) => !path.endsWith('src/auth/session.ts'));
+  const files = sourceFiles(SRC_DIR);
+
+  /** 規則に違反している `相対パス:行番号` の一覧。 */
+  const offenders = (rule: SeamRule): string[] =>
+    files.flatMap((relative) =>
+      readFileSync(SRC_DIR + relative, 'utf8')
+        .split('\n')
+        .flatMap((line, index) =>
+          rule.pattern.test(line) && !rule.allows(relative, line)
+            ? [`${relative}:${index + 1}`]
+            : [],
+        ),
+    );
+
+  /** その規則に実際に引っかかったファイルの集合。 */
+  const detectedIn = (rule: SeamRule): string[] =>
+    files.filter((relative) => rule.pattern.test(readFileSync(SRC_DIR + relative, 'utf8')));
 
   it('走査対象が空でない', () => {
     expect(files.length).toBeGreaterThan(0);
   });
 
-  it('session.ts が実在する（許可リストが空振りしていない）', () => {
-    expect(sourceFiles(SRC_DIR)).toContain(`${SRC_DIR}auth/session.ts`);
-  });
-
-  it.each(['Cognito', 'cognito', 'document.cookie', 'localStorage', 'sessionStorage'])(
-    '%s が session.ts 以外に現れない',
-    (needle) => {
-      const offenders = files.filter((path) => readFileSync(path, 'utf8').includes(needle));
-      expect(offenders.map((path) => path.replace(SRC_DIR, ''))).toEqual([]);
+  it.each(SEAM_RULES.flatMap((rule) => rule.mustDetect.map((file) => ({ rule, file }))))(
+    '許可リストの $file が実在する（$rule.name）',
+    ({ file }) => {
+      // リネームで許可リストが空振りしていないこと。空振りすると
+      // 「許可されたファイルが無いので違反も無い」で緑になる。
+      expect(files).toContain(file);
     },
   );
 
-  it('Authorization という綴りが api/client.ts の防御以外に現れない', () => {
-    // client.ts は「authorization を投げる」ための 1 箇所だけ知っている。
-    // それ以外のファイルは綴りすら持たない。
-    const offenders = files
-      .filter((path) => !path.endsWith('src/api/client.ts'))
-      .filter((path) => /authorization/i.test(readFileSync(path, 'utf8')));
-    expect(offenders.map((path) => path.replace(SRC_DIR, ''))).toEqual([]);
+  it.each(SEAM_RULES.flatMap((rule) => rule.mustDetect.map((file) => ({ rule, file }))))(
+    '$file が $rule.name の走査に実際に掛かる（空振りしていない）',
+    ({ rule, file }) => {
+      expect(detectedIn(rule)).toContain(file);
+    },
+  );
+
+  it.each(SEAM_RULES)('$name が許可された場所以外に現れない', (rule) => {
+    expect(offenders(rule)).toEqual([]);
   });
+
+  it('**document.cookie はどのファイルにも現れない**（許可先が 0 件）', () => {
+    // 上の it.each とは別に、0 件であること自体を名指しで固定する。
+    const rule = SEAM_RULES.find((candidate) => candidate.name === 'document.cookie');
+    expect(rule).toBeDefined();
+    expect(detectedIn(rule as SeamRule)).toEqual([]);
+  });
+
+  it('**Web Storage を名指しするファイルがちょうど 1 本**', () => {
+    const rule = SEAM_RULES.find((candidate) => candidate.name === 'Web Storage');
+    expect(detectedIn(rule as SeamRule)).toEqual(['storage/session-store.ts']);
+  });
+
+  it.each(['editor/', 'api/', 'preview/', 'storage/'])(
+    'src/%s の下に Cognito の綴りが 1 つも無い',
+    (directory) => {
+      const rule = SEAM_RULES.find((candidate) => candidate.name === 'Cognito');
+      expect(detectedIn(rule as SeamRule).filter((file) => file.startsWith(directory))).toEqual([]);
+    },
+  );
 });
