@@ -72,6 +72,35 @@ describe('auth/config.ts の値の形', () => {
   });
 });
 
+describe('設定ドリフトの smoke が実在し、呼べる', () => {
+  it('scripts/auth-smoke.ts が実在する', async () => {
+    const { existsSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    expect(
+      existsSync(fileURLToPath(new URL('../../scripts/auth-smoke.ts', import.meta.url))),
+    ).toBe(true);
+  });
+
+  it('**package.json の scripts から呼べる**（未登録だと「走らせていないのに緑」になる）', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const pkg = JSON.parse(
+      readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8'),
+    ) as { scripts?: Record<string, string> };
+    expect(pkg.scripts?.['auth-smoke']).toBe('node scripts/auth-smoke.ts');
+  });
+
+  it('**npm test には入っていない**（ネットワークに依存するため）', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const pkg = JSON.parse(
+      readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8'),
+    ) as { scripts?: Record<string, string> };
+    expect(pkg.scripts?.['test']).not.toContain('auth-smoke');
+    expect(pkg.scripts?.['pretest']).not.toContain('auth-smoke');
+  });
+});
+
 describe('**秘密をこのリポジトリに置かない**（public client）', () => {
   it('config に secret に相当するキーが 1 つも無い', () => {
     const suspicious = Object.keys(AUTH_CONFIG).filter((key) => /secret|password|key$/i.test(key));
