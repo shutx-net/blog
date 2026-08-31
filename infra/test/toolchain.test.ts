@@ -151,6 +151,43 @@ describe('infra/tsconfig.json の型ライブラリ', () => {
   });
 });
 
+describe('infra/tsconfig.json の erasableSyntaxOnly', () => {
+  it('compilerOptions.erasableSyntaxOnly が true', () => {
+    // **infra だけは、破れたときに型エラーではなく実行時に壊れる。**
+    // cdk.json の app が `node bin/blog.ts` で、node 24 のフラグ無し型ストリップに
+    // 依存している。enum / namespace / パラメータプロパティ / decorators を書くと
+    // 「剥がすだけでは動かない」構文になり、**`cdk synth` だけが実行時に落ちる。**
+    // 理由の全文は README.md の「### ツールチェーン」にある。
+    //
+    // **api と admin には前から同じアサーションがあり、infra にだけ無かった。**
+    // 3 つのうち事故が一番静かに起きるのが infra なので、その非対称を埋める。
+    //
+    // ## 空振りでないことの根拠（TS 7.0.2 で変異を目視した）
+    //
+    // `lib/__probe-erasable.ts` に次を置くと、3 種類とも
+    // `error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.`
+    // が出て rc=1 になり、消すと rc=0 に戻る（実測）。
+    //
+    //   export enum ProbeErasable { A }
+    //   export class P { constructor(private readonly x: number) {} }
+    //   export namespace N { export const a = 1; }
+    //
+    // 同じ enum のファイルを `node lib/__probe-erasable.ts` で直接実行すると node が
+    // 起動時に落ちる。**これが cdk synth で起きる事故そのもの**である。
+    // フラグ自体も TS 7 で生きている（`tsc --help` の抜粋 27 個には出ないが
+    // `--help --all` には含まれ、CLI フラグとしても受理される。実測 rc=0）。
+    expect(readJson<TsConfig>('../tsconfig.json').compilerOptions?.['erasableSyntaxOnly']).toBe(
+      true,
+    );
+  });
+
+  it('**cdk.json の app が node で .ts を直接実行する形のままである**', () => {
+    // 上の制約が要る**理由そのもの**。ここが tsx や ts-node に変われば
+    // erasableSyntaxOnly の意味も変わるので、2 つを同じ場所で見張る。
+    expect(readJson<CdkJson>('../cdk.json').app).toBe('node bin/blog.ts');
+  });
+});
+
 describe('infra/README.md が実装に追いついている', () => {
   const readme = (): string =>
     readFileSync(fileURLToPath(new URL('../README.md', import.meta.url)), 'utf8');
