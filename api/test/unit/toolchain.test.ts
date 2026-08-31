@@ -1,4 +1,6 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -150,11 +152,34 @@ describe('api の開発依存', () => {
     }
   });
 
-  it('typescript が "5.9.3" で、infra の typescript と一致する', () => {
-    // ワークスペース間でコンパイラをずらさない。7.x は type:module 化と
-    // ネイティブバイナリを伴う別物で、infra が 5.9.3 に固定されている以上ずらす理由がない。
+  it('typescript が "7.0.2" で、infra の typescript と一致する', () => {
+    // ワークスペース間でコンパイラをずらさない。**3 つとも同じ文字列であること**を
+    // api と admin の両側から見ている（片側だけだと 1 つ上げ忘れても緑になる）。
+    //
+    // # なぜ 5.9.3 から 7.0.2 に上げたか
+    //
+    // **据え置くほうが規約違反になるから。** AGENTS.md の不採用条件は
+    // 「12 か月以上リリースが無い」。5.9.3 は **2025-09-30 公開**なので
+    // **2026-09-30 にこの条件へ抵触する**。自分たちで決めた規約に自分たちが
+    // 違反する状態を、期限が来る前に解消したのがこの変更である。
+    //
+    // 7.0.2 は 2026-07-08 公開の Go 移植版（`latest`）。AGENTS.md の 3 条件は実測で
+    // すべて通過している: archived=false（microsoft/TypeScript は 2026-08-31 push、
+    // microsoft/typescript-go も同日 push）、deprecated フィールド無し、
+    // 公開から 54 日。maintainers 7 名、Apache-2.0 で 5.9.3 と同じ。
+    //
+    // **速度は採否の理由ではない**（AGENTS.md は保守を最上位に置く）。副次的な
+    // 実測値として api 4610ms -> 779ms、infra 6822ms -> 396ms、admin 2468ms -> 337ms。
+    //
+    // # 上げるときに実際に効いた差分は 1 行だけだった
+    //
+    // `noUncheckedSideEffectImports` の既定が TS 6.0 で true になり、admin の
+    // `import './styles.css'` が TS2882 で落ちた（`admin/src/assets.d.ts` で解決済み）。
+    // それ以外は api / infra / admin とも無修正で `tsc --noEmit` が exit 0。
+    // **JS コンパイラ API（`import ts from 'typescript'`）は 7.x で落ちたが、
+    // このツリーは typescript を tsc CLI としてしか使っていない**ので影響が無い。
     const apiTs = apiPkg().devDependencies?.['typescript'];
-    expect(apiTs).toBe('5.9.3');
+    expect(apiTs).toBe('7.0.2');
     expect(apiTs).toBe(infraPkg().devDependencies?.['typescript']);
   });
 
@@ -204,8 +229,23 @@ describe('api/package.json のかたち', () => {
 
 describe('api/tsconfig.json', () => {
   it('compilerOptions.types が ["node"] に限定されている', () => {
-    // 限定しないと tsc がルート node_modules/@types を暗黙に全部 type library として
-    // 拾い、他ワークスペース由来の壊れた @types で型検査が落ちる（infra と同じ理由）。
+    // **設定は変えていないが、理由は TS 7 で変わった。この 1 行は今や空振りである。**
+    //
+    // 5.9.3 では「ルート node_modules/@types を暗黙に全部読ませない柵」だった
+    // （実測: types 省略で @types 13 パッケージ / 139 ファイルが入る）。**TS 7 は
+    // types の既定を [] にしたので、柵として守る対象がもう無い。** 7.0.2 実測で、
+    // types を消してもエラー 0 件・`tsc --listFiles` の出力も完全に一致する。
+    // `process` を裸で書いても通る（@types/node は `node:*` の import 経由で既に
+    // プログラムに入っており、types フィールドは関与していない）。
+    //
+    // 消さないのは **5.x へ戻す道を塞がないため**。後退先の 6.0.3 / 5.9.3 では
+    // 柵として本当に効くので、今消すと戻した日に事故が黙って復活する。
+    // 測定の全文と最小再現は infra/test/toolchain.test.ts の同名テストにある。
+    //
+    // **型検査はもうこの値を見ていない**（変異で確認済み: ["node","chai"] に広げても
+    // tsc は rc=0 のまま。赤くなるのは 3 ワークスペースのこのテストだけ）。
+    // **「緑だから守られている」ではなく「テストだけが見ている」と読むこと。**
+    //
     // **@types/aws-lambda はこの設定の影響を受けない** — types が制御するのは
     // 「グローバルとして自動で読み込む @types」だけで、明示的な
     // `import type { ... } from 'aws-lambda'` は通常のモジュール解決で解決される。
@@ -223,7 +263,20 @@ describe('api/tsconfig.json', () => {
     // test/contract/frontmatter-schema.test.ts が site の postSchema を実物で import
     // する結果、astro / shiki / unstorage の .d.ts が api の tsc に引きずり込まれる。
     // それらは DOM lib と省略可能な peer 依存を前提に書かれており、api の
-    // lib:["ES2023"] / types:["node"] では 130 件超のエラーになる（実測）。
+    // lib:["ES2023"] / types:["node"] ではエラーの山になる。
+    //
+    // # **types と違い、これは空振りではない**（TS 7.0.2 で再測定した）
+    //
+    // api から skipLibCheck を外すと **124 件**（admin は 29 件）。内訳は
+    // TS2304 56 / TS2307 48 / TS2694 8 / TS2749 5 / TS2552 3 / TS2305 2 で、
+    // 出どころは astro 59・unstorage の各ドライバ・@shikijs/*。
+    // **次に疑われたときに再測定せずに済むよう数字を残す。**
+    //
+    // うち TS2305 の 2 件は TS 7 に固有で、`astro/dist/core/config/tsconfig.d.ts` が
+    // `Module '"typescript"' has no exported member 'CompilerOptions' / 'TypeAcquisition'`
+    // になる。**TS 7 が JS コンパイラ API を落とした**ことが astro の .d.ts に現れたもので、
+    // skipLibCheck がこれも隠している。このリポジトリ自身は typescript を tsc CLI として
+    // しか使っていないので実害は無いが、astro を上げたときに再発しうる。
     //
     // **lib に "DOM" を足して解決してはいけない。** api は Lambda のコードで、
     // window や HTMLElement が型として見えてよい理由が無い。skipLibCheck が
@@ -238,5 +291,77 @@ describe('api/tsconfig.json', () => {
     expect(options['verbatimModuleSyntax']).toBe(true);
     expect(options['module']).toBe('nodenext');
     expect(options['moduleResolution']).toBe('nodenext');
+  });
+});
+
+describe('**実際に走るコンパイラ**（package.json のピンではなく実行結果を見る）', () => {
+  const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+  const adminPkg = (): PackageJson => readJson<PackageJson>('../../../admin/package.json');
+
+  /** `node_modules/.bin/tsc --version` の実行結果から取り出したバージョン。 */
+  const runningCompilerVersion = (): string => {
+    const tsc = join(REPO_ROOT, 'node_modules', '.bin', 'tsc');
+    expect(existsSync(tsc), 'node_modules/.bin/tsc が無い（先に npm ci）').toBe(true);
+    const result = spawnSync(tsc, ['--version'], { encoding: 'utf8' });
+    expect(result.error, `tsc を起動できなかった: ${String(result.error)}`).toBeUndefined();
+    expect(
+      result.status,
+      `tsc --version が異常終了した (status=${String(result.status)}): ${result.stderr ?? ''}`,
+    ).toBe(0);
+    const version = /Version\s+(\d+\.\d+\.\d+)/.exec(result.stdout ?? '')?.[1] ?? '';
+    expect(version, `tsc --version の出力を解釈できない: ${JSON.stringify(result.stdout)}`).toMatch(
+      EXACT_VERSION,
+    );
+    return version;
+  };
+
+  it('**tsc --version の出力が 3 ワークスペースのピンと一致する**', () => {
+    // # なぜ package.json を読むだけでは足りないのか
+    //
+    // **TS 7 はコンパイラ本体をネイティブバイナリとして別パッケージで配る。**
+    // `typescript` パッケージは node のシムで、実体は
+    // `@typescript/typescript-<os>-<arch>`（27.9MB）を optionalDependency として引く。
+    // したがって **ピンは 7.0.2 のままで、入っているバイナリだけが間違っている／
+    // 存在しない**という状態がありうる。5.9.3（純 JS）には無かった壊れ方である。
+    //
+    // 捕まえたい事故は 3 つ:
+    //
+    // (a) **WSL から Windows 版 npm を使う。** win32 バイナリが Linux ツリーに入り、
+    //     node_modules/.bin/tsc が実行できなくなる（`which npm` が /nix/store 配下で
+    //     あることを DEVELOPERS.md が要求している理由）
+    // (b) `npm ci --omit=optional` を付けた CI。node_modules/@typescript が作られず
+    //     tsc が起動しない（ci.yml は素の `npm ci` を使っている）
+    // (c) lock がプラットフォームを取りこぼす
+    //
+    // # このテストが空振りでないことの根拠（変異で確認済み）
+    //
+    // `node_modules/@typescript/` を退避すると tsc は
+    // `Error: Unable to resolve @typescript/typescript-linux-x64. Either your platform
+    // is unsupported, or you are missing the package on disk.` を投げて **起動すらしない**
+    // （rc=1）。そのとき **このファイルの他の 21 件は緑のままだった**（実測）。
+    // ピン文字列を読むアサーションでは原理的に検出できない事故である。
+    const pinned = apiPkg().devDependencies?.['typescript'];
+    expect(pinned, 'api が typescript を宣言していること').toMatch(EXACT_VERSION);
+    expect(infraPkg().devDependencies?.['typescript'], 'infra のピンが api とずれている').toBe(
+      pinned,
+    );
+    expect(adminPkg().devDependencies?.['typescript'], 'admin のピンが api とずれている').toBe(
+      pinned,
+    );
+    expect(
+      runningCompilerVersion(),
+      '実際に走る tsc が package.json のピンと違う（node_modules が古いか、別 OS 用のバイナリが入っている）',
+    ).toBe(pinned);
+  });
+
+  it('**ワークスペースに typescript の入れ子コピーが無い**（3 つとも同じ実体を走らせる）', () => {
+    // 上のテストはルートの `node_modules/.bin/tsc` 1 本しか見ない。ピンがずれると
+    // npm はワークスペース直下に別バージョンを入れ、`npm run -w admin typecheck` だけが
+    // **検査していないコンパイラ**で走る状態になりうる。入れ子が無いことを別に主張して、
+    // 「ルートの 1 本 = 3 つが実際に使うもの」を成り立たせる。
+    for (const workspace of ['api', 'infra', 'admin', 'site']) {
+      const nested = join(REPO_ROOT, workspace, 'node_modules', 'typescript');
+      expect(existsSync(nested), `${workspace}/node_modules/typescript が存在する`).toBe(false);
+    }
   });
 });

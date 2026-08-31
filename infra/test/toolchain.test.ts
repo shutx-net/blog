@@ -144,10 +144,86 @@ describe('infra/package.json の pretest', () => {
 
 describe('infra/tsconfig.json の型ライブラリ', () => {
   it('compilerOptions.types が ["node"] に限定されている', () => {
-    // 限定しないと tsc がルート node_modules/@types を暗黙に全部 type library として
-    // 拾う。site ワークスペース由来の壊れた @types が混ざると infra の型検査が
-    // 「error TS2688: Cannot find type definition file for 'sax'」で落ちる。
+    // **設定は変えていないが、理由は TS 7 で変わった。この 1 行は今や空振りである。**
+    // 3 ワークスペースで同じ話なので、実測の全文はここにだけ書く（api / admin は要約）。
+    //
+    // # 5.9.3 のとき何をしていたか — 「他所の @types を入れない柵」
+    //
+    // types を省略すると tsc がルートの node_modules/@types を **暗黙に全部** type
+    // library として読んだ。実測（5.9.3・types 省略）で @types 13 パッケージ / 139 ファイルが
+    // プログラムに入る: aws-lambda, chai, debug, deep-eql, estree, estree-jsx, hast,
+    // mdast, ms, nlcst, node, sax, unist。site 由来の壊れた @types が混ざると infra が
+    // 「error TS2688: Cannot find type definition file for 'sax'」で落ちた。
+    // （**@types/sax が空だった問題は上流で解消済み。** 現在 1.2.7 の index.d.ts は 3921 バイト。
+    //   歴史的な経緯としてだけ残す）
+    //
+    // # TS 7 で何が変わったか — **types の既定が [] になった**
+    //
+    // 暗黙の全部読み込みが無くなった。**柵として守る対象がもう存在しない。**
+    // 7.0.2 での実測:
+    //
+    //   - types を消しても api / infra / admin ともエラー 0 件・rc=0
+    //   - `tsc --listFiles` の出力が types の有無で **完全に一致する**
+    //   - `process` / `Buffer` を裸で書いても types 無しで通る。@types/node は
+    //     `node:*` の import 経由で既にプログラムへ入っており、その global 宣言が
+    //     そのまま見えるため。**types フィールドは関与していない**
+    //
+    // 最小再現では今も効く: `node:*` を 1 つも import しないプロジェクトで
+    // `process.version` を書くと、types 省略の 7.0.2 は
+    // `error TS2591: Cannot find name 'process'` になり、types:["node"] を足すと通る
+    // （5.9.3 は types 省略でも通る）。**このリポジトリはその条件に当たらない。**
+    //
+    // # それでも消さない理由
+    //
+    // 1. **5.x へ戻す道を塞がないため。** 移行が問題を起こしたときの後退先は 6.0.3 か
+    //    5.9.3 で、そこでは柵として本当に効く。今消すと、戻した日に @types/sax 系の
+    //    事故が黙って復活する
+    // 2. node を対象にしているという明示的な宣言としては正しく、コストが無い
+    //
+    // # このアサーションが実際に守っているもの（正直に書く）
+    //
+    // **型検査はもうこの値を見ていない。** 変異で確認済み: types を ["node","chai"] に
+    // 広げても `tsc --noEmit` は rc=0 のままで、赤くなったのは api / infra / admin の
+    // **このテスト 3 本だけ**だった。つまり現在この行のドリフトを検出できるのは
+    // テストだけである。**「緑だから守られている」ではなく「テストだけが見ている」と読むこと。**
     expect(readJson<TsConfig>('../tsconfig.json').compilerOptions?.['types']).toEqual(['node']);
+  });
+});
+
+describe('infra/tsconfig.json の erasableSyntaxOnly', () => {
+  it('compilerOptions.erasableSyntaxOnly が true', () => {
+    // **infra だけは、破れたときに型エラーではなく実行時に壊れる。**
+    // cdk.json の app が `node bin/blog.ts` で、node 24 のフラグ無し型ストリップに
+    // 依存している。enum / namespace / パラメータプロパティ / decorators を書くと
+    // 「剥がすだけでは動かない」構文になり、**`cdk synth` だけが実行時に落ちる。**
+    // 理由の全文は README.md の「### ツールチェーン」にある。
+    //
+    // **api と admin には前から同じアサーションがあり、infra にだけ無かった。**
+    // 3 つのうち事故が一番静かに起きるのが infra なので、その非対称を埋める。
+    //
+    // ## 空振りでないことの根拠（TS 7.0.2 で変異を目視した）
+    //
+    // `lib/__probe-erasable.ts` に次を置くと、3 種類とも
+    // `error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.`
+    // が出て rc=1 になり、消すと rc=0 に戻る（実測）。
+    //
+    //   export enum ProbeErasable { A }
+    //   export class P { constructor(private readonly x: number) {} }
+    //   export namespace N { export const a = 1; }
+    //
+    // 同じ enum のファイルを `node lib/__probe-erasable.ts` で直接実行すると node が
+    // 起動時に落ちる。**これが cdk synth で起きる事故そのもの**である。
+    // フラグ自体も TS 7 で生きている（`tsc --help` の抜粋 27 個には出ないが
+    // `--help --all` には含まれ、CLI フラグとしても受理される。実測 rc=0）。
+    expect(readJson<TsConfig>('../tsconfig.json').compilerOptions?.['erasableSyntaxOnly']).toBe(
+      true,
+    );
+  });
+
+  it('**cdk.json の app が node で .ts を直接実行する形のままである**', () => {
+    // 上の制約が要る**理由そのもの**。ここが tsx や ts-node に変われば
+    // erasableSyntaxOnly の意味も変わるので、2 つを同じ場所で見張る。
+    expect(readJson<CdkJson>('../cdk.json').app).toBe('node bin/blog.ts');
   });
 });
 
@@ -475,5 +551,49 @@ describe('DEVELOPERS.md が Phase 4 に追いついている', () => {
 
   it('**ID トークンであって access トークンではないことが書かれている**', () => {
     expect(developers()).toContain('ID トークン');
+  });
+});
+
+describe('DEVELOPERS.md が TypeScript 7 に追いついている', () => {
+  const developers = (): string =>
+    readFileSync(fileURLToPath(new URL('../../DEVELOPERS.md', import.meta.url)), 'utf8');
+
+  it('**tsc の実体がネイティブバイナリの別パッケージであることが書いてある**', () => {
+    // 5.x では「typescript を入れれば tsc が動く」で済んだ。7.x は
+    // `@typescript/typescript-<os>-<arch>` を optionalDependency として引くので、
+    // 入れ方によっては**コンパイラだけが入らない**。手順書に無いと原因に辿り着けない。
+    const text = developers();
+    expect(text).toContain('@typescript/typescript-');
+    expect(text, 'optionalDependencies である旨').toContain('optionalDependencies');
+  });
+
+  it('**`npm ci --omit=optional` を使わないことが書いてある**', () => {
+    // 付けると tsc が起動しない。CI は赤くなるが、メッセージから原因が読み取りにくい。
+    expect(developers()).toContain('--omit=optional');
+  });
+
+  it('**WSL から Windows 版 npm を使わないことが書いてある**', () => {
+    // 5.x の tsc は純 JS でどの npm で入れても動いた。7.x は os/cpu でバイナリを選ぶので、
+    // Windows の npm で入れると win32 バイナリが Linux ツリーに入り実行不能になる。
+    const text = developers();
+    expect(text).toContain('which npm');
+    expect(text).toContain('/nix/store');
+  });
+
+  it('**tsserver が無くなり `tsc --lsp` になったことが書いてある**', () => {
+    expect(developers()).toContain('tsc --lsp');
+  });
+
+  it('**「テストが全部緑でも型が正しいことにはならない」と書いてある**', () => {
+    // **このフェーズで一番大事な注意書き。** Vitest は esbuild で型を剥がすため、
+    // 型が壊れていてもテストは通る。実測で 5.9.3 -> 7.0.2 の変更は 1988 件中 1987 件を
+    // そのまま通した。ここが消えると、次の人が緑を見て「移行できた」と誤解する。
+    const text = developers();
+    expect(text).toContain('esbuild で型を剥がして');
+    expect(text, '型を見ているのは tsc --noEmit だけ').toContain('tsc --noEmit');
+    expect(text, '実測値（1987 件が素通りしたこと）').toContain('1987 件');
+    expect(text, 'typecheck を test ステップに畳み込まないこと').toContain(
+      'テストジョブに畳み込まないこと',
+    );
   });
 });
