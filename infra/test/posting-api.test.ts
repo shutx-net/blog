@@ -435,3 +435,43 @@ describe('カスタムリソースを引き込んでいない', () => {
     template.resourceCountIs('AWS::Lambda::Function', 1);
   });
 });
+
+/**
+ * GitHub App の client ID。
+ *
+ * Phase 3〜5 は App が存在しなかったので `'not-configured'` を入れていた。
+ * **`AUTH_MODE=deny-all` の間は GitHub を呼ぶ経路に到達しないので安全だった**が、
+ * 認証が通るようになった今は、プレースホルダのままだと
+ * 「鍵は読めているのに GitHub が 401 を返す」という紛らわしい壊れ方をする。
+ */
+describe('GitHub App の client ID', () => {
+  const env = (): Record<string, unknown> => {
+    const fns = Object.values(
+      template.findResources('AWS::Lambda::Function'),
+    ) as Array<{ Properties?: { Environment?: { Variables?: Record<string, unknown> } } }>;
+    expect(fns, 'Lambda が 1 つも無い（アサーションの空振り防止）').toHaveLength(1);
+    return fns[0]?.Properties?.Environment?.Variables ?? {};
+  };
+
+  it('**プレースホルダのままではない**', () => {
+    expect(
+      env().GITHUB_APP_CLIENT_ID,
+      "'not-configured' のままだと GitHub が App JWT を 401 で拒否する。" +
+        '症状は「鍵は読めているのに GitHub 呼び出しだけ失敗する」形になり、鍵の問題と紛らわしい',
+    ).not.toBe('not-configured');
+  });
+
+  it('GitHub App の client ID の形をしている（Iv で始まる）', () => {
+    // app ID（数字）でも動くが、GitHub は client ID を推奨している。
+    // 数字を入れてしまう取り違えを検出する。
+    expect(String(env().GITHUB_APP_CLIENT_ID)).toMatch(/^Iv[0-9]{1,2}[A-Za-z0-9]+$/);
+  });
+
+  it('空でもプレースホルダ的な値でもない', () => {
+    const value = String(env().GITHUB_APP_CLIENT_ID ?? '');
+    expect(value.length).toBeGreaterThan(8);
+    for (const bad of ['todo', 'changeme', 'xxx', 'placeholder']) {
+      expect(value.toLowerCase()).not.toContain(bad);
+    }
+  });
+});

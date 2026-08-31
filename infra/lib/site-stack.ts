@@ -86,6 +86,21 @@ export const ADMIN_LOGIN_DOMAIN_PREFIX = 'shutx-blog-admin';
 export const ADMIN_USERNAME = 'shutx';
 
 /**
+ * GitHub App の client ID。JWT の `iss` に入る。
+ *
+ * **秘密ではない。** GitHub は app ID / client ID を公開識別子として扱う。
+ * 秘密は秘密鍵だけで、それは Secrets Manager にある（CDK は空のシークレットを
+ * 作るだけで値を持たない。DEVELOPERS.md の手順で運用者が CLI から入れる）。
+ *
+ * **GitHub は app ID より client ID を推奨している。**
+ *
+ * ここが間違っていると GitHub は App JWT を 401 で拒否する。症状は
+ * 「鍵は読めているのに GitHub 呼び出しだけ失敗する」という形になり、
+ * 鍵の問題と紛らわしい。`/api/health/github-app` は鍵の有無しか見ない。
+ */
+export const GITHUB_APP_CLIENT_ID = 'Iv23liVPDAakRE2AKX45';
+
+/**
  * 静的サイト配信スタック。
  *
  * env は意図的に指定しない（env-agnostic）。本フェーズは AWS 認証情報を
@@ -156,7 +171,9 @@ export class SiteStack extends Stack {
       },
       githubOwner: 'shutx-net',
       githubRepo: 'blog',
-      githubAppClientId: 'not-configured',
+      // GitHub App の client ID。**秘密ではない**ので public リポジトリに置いてよい。
+    // 秘密は秘密鍵のほうだけで、そちらは Secrets Manager にあり CDK は値を持たない。
+    githubAppClientId: GITHUB_APP_CLIENT_ID,
     });
 
     // セキュリティヘッダ。**Phase 5 で新設**（実測で、それまでの実配信は
