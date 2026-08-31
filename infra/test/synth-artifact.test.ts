@@ -128,6 +128,30 @@ describe('cdk synth が出力した実テンプレート: BlogSiteStack 固有',
     });
   });
 
+  it('**実ファイル上でも CORS を持つバケットがちょうど 1 個で、中身が固定されている**', () => {
+    // 実ファイル側は CORS に対して盲目だった（CorsConfiguration を足しても
+    // 1 件も赤くならない）。**アサーションと実出力の乖離を防ぐ**ため、
+    // 有無と中身の両方をここでも主張する。
+    const buckets = asTemplate('BlogSiteStack').findResources('AWS::S3::Bucket') as Record<
+      string,
+      { Properties?: Record<string, unknown> }
+    >;
+    expect(Object.keys(buckets)).toHaveLength(2);
+    const withCors = Object.entries(buckets).filter(
+      ([, r]) => r.Properties?.['CorsConfiguration'] !== undefined,
+    );
+    expect(withCors).toHaveLength(1);
+    const rules = (withCors[0]?.[1]?.Properties?.['CorsConfiguration'] as {
+      CorsRules?: Record<string, unknown>[];
+    }).CorsRules;
+    expect(rules).toHaveLength(1);
+    expect(rules?.[0]?.['AllowedMethods']).toEqual(['PUT']);
+    const origins = rules?.[0]?.['AllowedOrigins'] as string[];
+    expect(origins).toHaveLength(1);
+    expect(origins).not.toContain('*');
+    expect(origins[0]?.startsWith('https://')).toBe(true);
+  });
+
   it('実ファイル上でも OAI が 1 文字も出現しない', () => {
     const template = asTemplate('BlogSiteStack');
     template.resourceCountIs('AWS::CloudFront::Distribution', 1);
@@ -171,12 +195,54 @@ describe('cdk synth が出力した実テンプレート: BlogSiteStack 固有',
     expect(urls[0]?.Properties?.AuthType).toBe('AWS_IAM');
   });
 
-  it('実ファイル上でも AUTH_MODE が deny-all', () => {
+  const lambdaVariables = (): Record<string, unknown> => {
     const functions = Object.values(
       asTemplate('BlogSiteStack').findResources('AWS::Lambda::Function'),
     ) as Array<{ Properties?: { Environment?: { Variables?: Record<string, unknown> } } }>;
     expect(functions).toHaveLength(1);
-    expect(functions[0]?.Properties?.Environment?.Variables?.['AUTH_MODE']).toBe('deny-all');
+    const variables = functions[0]?.Properties?.Environment?.Variables;
+    expect(variables, '実ファイルの Lambda に環境変数が必要').toBeDefined();
+    return variables ?? {};
+  };
+
+  it('実ファイル上でも AUTH_MODE が cognito', () => {
+    expect(lambdaVariables()['AUTH_MODE']).toBe('cognito');
+  });
+
+  it('**実ファイル上でも「cognito なら COGNITO_* が 3 つ揃っている」**', () => {
+    // 条件付きの不変条件。deny-all に戻しても緑のまま通り、
+    // **cognito にしたのに変数が欠けている状態だけが赤くなる。**
+    const variables = lambdaVariables();
+    if (variables['AUTH_MODE'] !== 'cognito') return;
+    for (const name of ['COGNITO_USER_POOL_ID', 'COGNITO_CLIENT_ID', 'COGNITO_ALLOWED_USERNAME']) {
+      expect(variables[name], `実ファイルに ${name} が無い`).toBeDefined();
+      expect(JSON.stringify(variables[name]).length, `${name} が空`).toBeGreaterThan(2);
+    }
+  });
+
+  it('実ファイル上でも COGNITO_ALLOWED_USERNAME に @ が入っていない', () => {
+    const value = lambdaVariables()['COGNITO_ALLOWED_USERNAME'];
+    expect(typeof value).toBe('string');
+    expect(value).not.toContain('@');
+  });
+
+  it('**実ファイル上でも Cognito のリソースが 3 種そろっている**', () => {
+    const template = asTemplate('BlogSiteStack');
+    template.resourceCountIs('AWS::Cognito::UserPool', 1);
+    template.resourceCountIs('AWS::Cognito::UserPoolClient', 1);
+    template.resourceCountIs('AWS::Cognito::UserPoolDomain', 1);
+    // 増やしていないもの（Cognito は IdentityPool も UserPoolGroup も作らない）。
+    template.resourceCountIs('AWS::Cognito::IdentityPool', 0);
+    template.resourceCountIs('AWS::Cognito::UserPoolGroup', 0);
+  });
+
+  it('**実ファイル上でも Custom:: が 0 個・IAM::Role が 1 個・Lambda が 1 個**', () => {
+    const resources = readTemplate('BlogSiteStack').Resources ?? {};
+    const custom = Object.entries(resources).filter(([, r]) => (r.Type ?? '').startsWith('Custom::'));
+    expect(custom.map(([id]) => id)).toEqual([]);
+    const template = asTemplate('BlogSiteStack');
+    template.resourceCountIs('AWS::IAM::Role', 1);
+    template.resourceCountIs('AWS::Lambda::Function', 1);
   });
 
   it('生バイト列にも -----BEGIN が現れない（collectStrings と二重化）', () => {

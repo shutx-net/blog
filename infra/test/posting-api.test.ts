@@ -1,7 +1,21 @@
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
-import { SiteStack } from '../lib/site-stack.ts';
+// **api の定数を実物で import する。** infra が書く文字列と api が受け付ける文字列が
+// ずれると synth もテストも通ったうえでコールドスタートだけが落ちる。
+import {
+  ALLOWED_AUTH_MODES,
+  AUTH_MODE_COGNITO,
+  AUTH_MODE_DENY_ALL,
+} from '../../api/src/config.ts';
+import { ADMIN_USERNAME, SiteStack } from '../lib/site-stack.ts';
+
+/** cognito モードのときだけ現れる環境変数。 */
+const COGNITO_ENV_NAMES = [
+  'COGNITO_USER_POOL_ID',
+  'COGNITO_CLIENT_ID',
+  'COGNITO_ALLOWED_USERNAME',
+] as const;
 
 interface PolicyStatement {
   Effect?: string;
@@ -21,16 +35,47 @@ const only = (type: string): Record<string, unknown> => {
   return (found[0]?.Properties ?? {}) as Record<string, unknown>;
 };
 
-const policyStatements = (): PolicyStatement[] =>
-  resourcesOf('AWS::IAM::Policy').flatMap((policy) => {
+/**
+ * 実行ロールのインラインポリシー文。
+ *
+ * **件数ガードを入れてある（修復 5）。** ガードが無いと、ポリシーが 2 本目に
+ * 増えた瞬間に以降の『アクションがちょうど 4 つ』等が **黙って
+ * 「全ポリシーの合併」についての主張に意味が変わる**。
+ * Cognito が SMS ロールなどを持ち込むと現実に起きうる。
+ */
+const policyStatements = (): PolicyStatement[] => {
+  const policies = resourcesOf('AWS::IAM::Policy');
+  expect(policies, 'AWS::IAM::Policy はちょうど 1 本（増えたら以降の主張の意味が変わる）').toHaveLength(1);
+  return policies.flatMap((policy) => {
     const document = policy.Properties?.['PolicyDocument'] as
       | { Statement?: PolicyStatement[] }
       | undefined;
-    return document?.Statement ?? [];
+    const statements = document?.Statement ?? [];
+    expect(statements.length, 'ポリシー文が 0 件だと以降のループが素通りする').toBeGreaterThan(0);
+    return statements;
   });
+};
+
+/** ロググループの論理 ID。**件数 1 を先に主張してから取る（修復 3・4）。** */
+const onlyLogGroupId = (): string => {
+  const ids = Object.keys(template.findResources('AWS::Logs::LogGroup'));
+  expect(ids, 'AWS::Logs::LogGroup はちょうど 1 個').toHaveLength(1);
+  return ids[0] as string;
+};
 
 const actionsOf = (statement: PolicyStatement): string[] =>
   typeof statement.Action === 'string' ? [statement.Action] : (statement.Action ?? []);
+
+const lambdaEnvironment = (): Record<string, unknown> => {
+  const environment = only('AWS::Lambda::Function')['Environment'] as
+    | { Variables?: Record<string, unknown> }
+    | undefined;
+  const variables = environment?.Variables;
+  // 非空ガード。Environment ごと消えたときに全アサーションが素通りするのを防ぐ。
+  expect(variables, 'Lambda に環境変数が必要').toBeDefined();
+  expect(Object.keys(variables ?? {}).length).toBeGreaterThan(0);
+  return variables ?? {};
+};
 
 describe('GitHub App の秘密鍵シークレット', () => {
   it('**Properties のキー集合が ["Description"] ちょうどである**', () => {
@@ -57,12 +102,18 @@ describe('GitHub App の秘密鍵シークレット', () => {
   it('DeletionPolicy が Retain である', () => {
     // **GitHub App の秘密鍵は Web UI で生成した瞬間に 1 度しか表示されない。**
     // スタックを消して鍵を失うと、新しい鍵を作り直す以外に復旧手段がない。
-    const secrets = Object.values(template.findResources('AWS::SecretsManager::Secret')) as Array<{
-      DeletionPolicy?: string;
-      UpdateReplacePolicy?: string;
-    }>;
-    expect(secrets[0]?.DeletionPolicy).toBe('Retain');
-    expect(secrets[0]?.UpdateReplacePolicy).toBe('Retain');
+    // **修復 1**: 以前は secrets[0] というガード無しの添字だった。0 件でも
+    // `undefined?.DeletionPolicy` が undefined になるだけ…ではなく toBe で落ちるが、
+    // **2 件目が増えたときに 1 件目だけ見て通ってしまう**。件数を先に主張し、
+    // 全件ループに変える（infra/README.md の型 2）。
+    const secrets = Object.entries(template.findResources('AWS::SecretsManager::Secret')) as Array<
+      [string, { DeletionPolicy?: string; UpdateReplacePolicy?: string }]
+    >;
+    expect(secrets, 'AWS::SecretsManager::Secret はちょうど 1 個').toHaveLength(1);
+    for (const [logicalId, secret] of secrets) {
+      expect(secret.DeletionPolicy, `${logicalId} の DeletionPolicy`).toBe('Retain');
+      expect(secret.UpdateReplacePolicy, `${logicalId} の UpdateReplacePolicy`).toBe('Retain');
+    }
   });
 
   it('Description に鍵らしき文字列が入っていない', () => {
@@ -99,18 +150,27 @@ describe('実行ロール', () => {
     expect(withManaged).toEqual([]);
   });
 
-  it('lambda.amazonaws.com が assume する', () => {
-    template.hasResourceProperties('AWS::IAM::Role', {
-      AssumeRolePolicyDocument: Match.objectLike({
-        Statement: Match.arrayWith([
-          Match.objectLike({
-            Effect: 'Allow',
-            Principal: { Service: 'lambda.amazonaws.com' },
-            Action: 'sts:AssumeRole',
-          }),
-        ]),
-      }),
-    });
+  it('**すべての** Role が lambda.amazonaws.com だけに assume される', () => {
+    // **修復 2**: 以前は hasResourceProperties で、**1 件でも一致すれば通った**。
+    // 現在ロールは 1 個だが、Cognito が SMS ロール等を持ち込むと
+    // 「どれか 1 つが lambda を assume する」に静かに退化する。
+    // findResources を全件走査する形に変える（infra/README.md の型 1/4）。
+    const roles = Object.entries(template.findResources('AWS::IAM::Role')) as Array<
+      [string, { Properties?: Record<string, unknown> }]
+    >;
+    expect(roles, 'AWS::IAM::Role はちょうど 1 個').toHaveLength(1);
+    for (const [logicalId, role] of roles) {
+      const document = role.Properties?.['AssumeRolePolicyDocument'] as {
+        Statement?: Array<{ Effect?: string; Principal?: unknown; Action?: unknown }>;
+      };
+      const statements = document?.Statement ?? [];
+      expect(statements, `${logicalId} の AssumeRolePolicyDocument が空`).toHaveLength(1);
+      for (const statement of statements) {
+        expect(statement.Effect, logicalId).toBe('Allow');
+        expect(statement.Principal, logicalId).toEqual({ Service: 'lambda.amazonaws.com' });
+        expect(statement.Action, logicalId).toBe('sts:AssumeRole');
+      }
+    }
   });
 });
 
@@ -147,9 +207,9 @@ describe('実行ロールのインラインポリシー', () => {
       actionsOf(s).some((a) => a.startsWith('logs:')),
     );
     expect(logStatements).toHaveLength(1);
-    const logGroupId = Object.keys(template.findResources('AWS::Logs::LogGroup'))[0];
-    expect(logGroupId).toBeDefined();
-    expect(JSON.stringify(logStatements[0]?.Resource)).toContain(logGroupId as string);
+    // **修復 3**: 以前は Object.keys(...)[0] というガード無しの添字だった。
+    // onlyLogGroupId() が件数 1 を先に主張する。
+    expect(JSON.stringify(logStatements[0]?.Resource)).toContain(onlyLogGroupId());
   });
 
   it('logs:CreateLogGroup を持っていない（LogGroup は CDK が作る）', () => {
@@ -214,17 +274,100 @@ describe('Lambda 関数', () => {
       | { LogGroup?: unknown }
       | undefined;
     expect(logging?.LogGroup).toBeDefined();
-    const logGroupId = Object.keys(template.findResources('AWS::Logs::LogGroup'))[0];
-    expect(JSON.stringify(logging?.LogGroup)).toContain(logGroupId as string);
+    // **修復 4**: 修復 3 と同じガード無し添字。
+    expect(JSON.stringify(logging?.LogGroup)).toContain(onlyLogGroupId());
   });
 
-  it('**Environment.Variables.AUTH_MODE が "deny-all" である**', () => {
-    // **この 1 行が「認証なしの書き込みエンドポイントをデプロイしない」の infra 側の担保。**
-    // 変えるときに必ずこのテストを直させる。Cognito の実装と同じ PR でなければならない。
-    const environment = only('AWS::Lambda::Function')['Environment'] as
-      | { Variables?: Record<string, unknown> }
-      | undefined;
-    expect(environment?.Variables?.['AUTH_MODE']).toBe('deny-all');
+  it('**Environment.Variables.AUTH_MODE が "cognito" である**', () => {
+    expect(lambdaEnvironment()['AUTH_MODE']).toBe(AUTH_MODE_COGNITO);
+  });
+
+  it('AUTH_MODE の値が api 側の定数と一致する（ずれるとコールドスタートで落ちる）', () => {
+    // infra が書く文字列と api/src/config.ts が受け付ける文字列がずれると、
+    // **synth もテストも通ったうえで**本番のコールドスタートだけが落ちる。
+    // 既存の media-presign.test.ts が MEDIA_PATH_PATTERN を import しているのと同じ手口。
+    expect([AUTH_MODE_DENY_ALL, AUTH_MODE_COGNITO]).toContain(lambdaEnvironment()['AUTH_MODE']);
+    expect(ALLOWED_AUTH_MODES).toContain(lambdaEnvironment()['AUTH_MODE'] as string);
+  });
+
+  /**
+   * **本 step で最も重要な主張。条件付きの不変条件として書く。**
+   *
+   * 将来 deny-all に戻しても緑のまま通り、**cognito にしたのに COGNITO_* が
+   * 欠けている状態だけが赤くなる。**
+   */
+  it('**AUTH_MODE=cognito なら COGNITO_* が 3 つ揃っていて、いずれも空でない**', () => {
+    const variables = lambdaEnvironment();
+    if (variables['AUTH_MODE'] !== AUTH_MODE_COGNITO) return;
+    for (const name of COGNITO_ENV_NAMES) {
+      const value = variables[name];
+      expect(value, `${name} が無い`).toBeDefined();
+      expect(JSON.stringify(value), `${name} が空`).not.toBe('""');
+      expect(JSON.stringify(value).length, `${name} が空`).toBeGreaterThan(2);
+    }
+  });
+
+  it('**AUTH_MODE=deny-all なら COGNITO_* を 1 つも渡さない**（切り戻しの逃げ道）', () => {
+    const variables = lambdaEnvironment();
+    if (variables['AUTH_MODE'] !== AUTH_MODE_DENY_ALL) return;
+    for (const name of COGNITO_ENV_NAMES) {
+      expect(variables[name], `deny-all なのに ${name} がある`).toBeUndefined();
+    }
+  });
+
+  it('COGNITO_USER_POOL_ID が Ref でユーザプールを指している（物理 ID の直書きでない）', () => {
+    const value = lambdaEnvironment()['COGNITO_USER_POOL_ID'] as Record<string, unknown>;
+    expect(Object.keys(value)).toEqual(['Ref']);
+    const pools = Object.keys(template.findResources('AWS::Cognito::UserPool'));
+    expect(pools).toHaveLength(1);
+    expect(value['Ref']).toBe(pools[0]);
+  });
+
+  it('COGNITO_CLIENT_ID が Ref でアプリクライアントを指している', () => {
+    const value = lambdaEnvironment()['COGNITO_CLIENT_ID'] as Record<string, unknown>;
+    expect(Object.keys(value)).toEqual(['Ref']);
+    const clients = Object.keys(template.findResources('AWS::Cognito::UserPoolClient'));
+    expect(clients).toHaveLength(1);
+    expect(value['Ref']).toBe(clients[0]);
+  });
+
+  it('**COGNITO_ALLOWED_USERNAME がリテラルで、空でなく、@ を含まない**', () => {
+    // メールアドレスを入れると usernameAttributes 無しのプールでは一致しない。
+    // public リポジトリに個人のメールを書かないという方針とも合う。
+    const value = lambdaEnvironment()['COGNITO_ALLOWED_USERNAME'];
+    expect(typeof value).toBe('string');
+    expect(value).toBe(ADMIN_USERNAME);
+    expect((value as string).length).toBeGreaterThan(0);
+    expect(value).not.toContain('@');
+  });
+
+  it('**環境変数のキー集合が固定されている**（増えたこと自体を検出する）', () => {
+    // 既存の「秘密が入っていない」走査は自動的に COGNITO_* も見るが、
+    // **キーが増えたこと自体**を検出する主張が無かった。
+    expect(Object.keys(lambdaEnvironment()).sort()).toEqual(
+      [
+        'AUTH_MODE',
+        'COGNITO_ALLOWED_USERNAME',
+        'COGNITO_CLIENT_ID',
+        'COGNITO_USER_POOL_ID',
+        'GITHUB_APP_CLIENT_ID',
+        'GITHUB_APP_SECRET_ID',
+        'GITHUB_OWNER',
+        'GITHUB_REPO',
+        'MEDIA_BUCKET',
+      ].sort(),
+    );
+  });
+
+  it('**cognito-idp の IAM 権限を 1 つも足していない**', () => {
+    // JWKS の取得は認証不要な公開 HTTPS GET なので IAM 権限は要らない。
+    // 「赤くなったから権限を足す」をしないための名指しの主張。
+    expect(templateJson).not.toContain('cognito-idp:');
+    for (const statement of policyStatements()) {
+      for (const action of actionsOf(statement)) {
+        expect(action, 'cognito の権限は要らない').not.toMatch(/^cognito/);
+      }
+    }
   });
 
   it('環境変数に秘密が入っていない', () => {

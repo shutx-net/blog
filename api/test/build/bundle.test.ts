@@ -13,11 +13,40 @@ import { describe, expect, it } from 'vitest';
 const distDir = fileURLToPath(new URL('../../dist/', import.meta.url));
 const bundlePath = `${distDir}index.mjs`;
 
-/** 実測のベースラインは 617,185 バイト。3 MB は「node_modules を丸ごと巻き込んだ」ときだけ鳴る。 */
-const MAX_BUNDLE_BYTES = 3 * 1024 * 1024;
+/**
+ * **上限は実測ベース。**
+ *
+ * Phase 3 は 3 MB（実測 617,185 バイトの約 5 倍）で、事実上何も固定していなかった。
+ * 「依存が 1 つ増えた」も「10 個増えた」も同じく緑になる上限に意味は無い。
+ * aws-jwt-verify の実測増分は +16,596 バイト。
+ *
+ * **締めすぎない。** @aws-sdk/* は日次リリースなので、下限と上限の両方を持ちつつ
+ * 上限は実測 + 50% 程度に置く（アサーションを弱めるのではなく、根拠のある幅にする）。
+ */
+const MAX_BUNDLE_BYTES = 950_000;
+const MIN_BUNDLE_BYTES = 500_000;
 
-/** バンドルを import するために最低限必要な環境変数。 */
+/**
+ * バンドルを import するために最低限必要な環境変数。
+ *
+ * **AUTH_MODE=cognito にしてある。** これが本番の設定であり、COGNITO_* 3 つを
+ * 含めて「1 つでも欠けると起動しない」の走査ループが自動的に 10 変数を回る。
+ */
 const ENV: Record<string, string> = {
+  AUTH_MODE: 'cognito',
+  COGNITO_USER_POOL_ID: 'ap-northeast-1_TESTPOOL1',
+  COGNITO_CLIENT_ID: '1example23456789testclientid',
+  COGNITO_ALLOWED_USERNAME: 'shutx',
+  GITHUB_APP_CLIENT_ID: 'Iv23liTEST',
+  GITHUB_OWNER: 'shutx-net',
+  GITHUB_REPO: 'blog',
+  GITHUB_APP_SECRET_ID: 'arn:aws:secretsmanager:ap-northeast-1:111111111111:secret:x-AbCdEf',
+  MEDIA_BUCKET: 'blogsitestack-mediabucket-example',
+  AWS_REGION: 'ap-northeast-1',
+};
+
+/** deny-all に戻したときも起動することを確かめるための一式（切り戻しの逃げ道）。 */
+const DENY_ALL_ENV: Record<string, string> = {
   AUTH_MODE: 'deny-all',
   GITHUB_APP_CLIENT_ID: 'Iv23liTEST',
   GITHUB_OWNER: 'shutx-net',
@@ -72,9 +101,11 @@ describe('esbuild のバンドル', () => {
     expect(scripts).toEqual(['index.mjs']);
   });
 
-  it(`サイズが ${MAX_BUNDLE_BYTES} バイト以内である`, () => {
+  it(`サイズが ${MIN_BUNDLE_BYTES} 〜 ${MAX_BUNDLE_BYTES} バイトに収まる`, () => {
     const size = statSync(bundlePath).size;
-    expect(size).toBeGreaterThan(100_000); // AWS SDK が入っていれば必ずこれを超える
+    // 下限: AWS SDK と aws-jwt-verify が入っていれば必ずこれを超える。
+    // 依存を取りこぼしたバンドルは下限で捕まる。
+    expect(size).toBeGreaterThan(MIN_BUNDLE_BYTES);
     expect(size).toBeLessThan(MAX_BUNDLE_BYTES);
   });
 
@@ -135,6 +166,9 @@ describe('esbuild のバンドル', () => {
   });
 
   it('環境変数が 1 つでも欠けると起動しない', () => {
+    // ENV は AUTH_MODE=cognito の一式なので、このループは COGNITO_* 3 つも回る。
+    // **ENV を直せば自動で走査対象が増える形**にしてある。
+    expect(Object.keys(ENV)).toHaveLength(10);
     for (const missing of Object.keys(ENV)) {
       const env = { ...ENV };
       delete env[missing];
@@ -142,5 +176,71 @@ describe('esbuild のバンドル', () => {
       expect(result.status, `${missing} が無いのに起動した`).not.toBe(0);
       expect(result.stdout).toContain(missing);
     }
+  });
+
+  it.each(['COGNITO_USER_POOL_ID', 'COGNITO_CLIENT_ID', 'COGNITO_ALLOWED_USERNAME'])(
+    '**AUTH_MODE=cognito で %s だけ欠けると import が非ゼロ終了し、変数名が出る**',
+    (missing) => {
+      const env = { ...ENV };
+      delete env[missing];
+      const result = runBundle(env);
+      expect(result.status, `${missing} が無いのに起動した`).not.toBe(0);
+      expect(result.stdout).toContain(missing);
+    },
+  );
+
+  it.each([
+    ['cognito-ish', '未知の値'],
+    ['allow-all', '通してしまいそうな未知の値'],
+    ['COGNITO', '大文字'],
+    ['cognito ', '末尾に空白'],
+    ['', '空文字'],
+  ])(
+    '**AUTH_MODE=%o では import が非ゼロ終了する**（%s。黙って書き込みを許さない）',
+    (mode) => {
+      // **バンドル成果物のレベルでの fail-closed の証明。**
+      // 「不明な値が黙って書き込みを許す」ことがあり得ないことを、
+      // ソースではなく Lambda が実際に読むファイルに対して固定する。
+      const result = runBundle({ ...ENV, AUTH_MODE: mode });
+      expect(result.status, `AUTH_MODE=${mode} で起動してしまった`).not.toBe(0);
+      expect(result.stdout).toContain('AUTH_MODE');
+    },
+  );
+
+  it('AUTH_MODE 未設定でも import が非ゼロ終了する', () => {
+    const env = { ...ENV };
+    delete env['AUTH_MODE'];
+    const result = runBundle(env);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toContain('AUTH_MODE');
+  });
+
+  it('**deny-all に戻しても起動する**（切り戻しの逃げ道が生きている）', () => {
+    // COGNITO_* を 1 つも与えていない点が重要。壊れた Cognito 設定を抱えたまま
+    // 安全側に倒せることを、バンドル成果物のレベルで確かめる。
+    const result = runBundle(DENY_ALL_ENV);
+    expect(result.status, result.stdout || result.stderr).toBe(0);
+    expect(result.stdout).toContain('OK:function');
+  });
+
+  it('**バンドルに aws-jwt-verify が入っている**（JWKS 取得コードが実在する）', () => {
+    const source = readFileSync(bundlePath, 'utf8');
+    // minify されるので識別子ではなく、潰れない文字列リテラルで見る。
+    expect(source).toContain('.well-known/jwks.json');
+    expect(source).toContain('cognito:username');
+    expect(source).toContain('token_use');
+    // 正の許可リスト（HMAC が 1 つも無い）がバンドルに入っていること。
+    expect(source).toContain('RS256');
+  });
+
+  it('jose / jsonwebtoken が入っていない', () => {
+    const source = readFileSync(bundlePath, 'utf8');
+    expect(source).not.toContain('node_modules/jose');
+    expect(source).not.toContain('jsonwebtoken');
+  });
+
+  it('**トークン輸送のヘッダ名がバンドルに実在する**（admin との契約）', () => {
+    const source = readFileSync(bundlePath, 'utf8');
+    expect(source).toContain('x-blog-authorization');
   });
 });

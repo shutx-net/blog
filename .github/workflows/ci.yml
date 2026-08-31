@@ -60,3 +60,37 @@ jobs:
       # 型エラーは tsc のほうが読みやすく、数秒で終わる。失敗を早く安く出す。
       - run: npm run -w infra typecheck
       - run: npm run -w infra test
+
+  api:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+      - run: npm ci
+      - run: npm run -w api typecheck
+      - run: npm run -w api test
+
+  admin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+      - run: npm ci
+      - run: npm run -w admin typecheck
+      # admin の parity テストは site/dist の公開済み HTML と突き合わせるので、
+      # **先に site をビルドしないと落ちる。** admin の pretest は自分の vite build
+      # しか走らせない（他ワークスペースのビルドを暗黙に呼ぶと依存が見えなくなる）。
+      - run: npm run -w site build
+      - run: npm run -w admin test

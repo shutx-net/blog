@@ -190,6 +190,59 @@ describe('infra/README.md が実装に追いついている', () => {
     }
   });
 
+  it('構成表が Phase 4 のリソースを網羅している', () => {
+    const text = readme();
+    for (const needle of [
+      'AWS::Cognito::UserPool',
+      'AWS::Cognito::UserPoolDomain',
+      'AWS::Cognito::UserPoolClient',
+      'AdminAuthUserPoolBFAE8287',
+      'AdminAuthUserPoolAdminClient7A4B432D',
+      'AdminAuthUserPoolLoginDomain53790831',
+      'CorsConfiguration',
+    ]) {
+      expect(text, `README に ${needle} の記述が無い`).toContain(needle);
+    }
+  });
+
+  it('**Phase 4 で増えた CfnOutput 4 本が README に載っている**', () => {
+    const text = readme();
+    for (const output of [
+      'AdminUserPoolId',
+      'AdminUserPoolClientId',
+      'AdminLoginDomain',
+      'AdminUserPoolIssuerUrl',
+    ]) {
+      expect(text, `README に Output 名 ${output} の記載が必要`).toContain(output);
+    }
+  });
+
+  it('**デプロイ手順に cdk diff・受け入れ確認・切り戻しが揃っている**', () => {
+    const text = readme();
+    // AGENTS.md の規約: infra を変えたら先に差分を見る。
+    expect(text).toContain('cdk diff');
+    // **ユーザ作成が CDK ではなく CLI であること**（public リポジトリに個人情報を書かない）。
+    expect(text).toContain('aws cognito-idp admin-create-user');
+    expect(text).toContain('admin-set-user-password');
+    // 受け入れ確認のコマンドがそのまま貼れる形であること。
+    expect(text).toContain('/api/health');
+    expect(text).toContain('x-blog-authorization: Bearer');
+    expect(text).toContain('response_type=code');
+    // トークン無しの書き込みが 401 であること、404 HTML なら設計違反であること。
+    expect(text).toMatch(/401[^\n]*unauthenticated|unauthenticated[^\n]*401/);
+    // SITE_ORIGIN のドリフト確認。
+    expect(text).toContain("OutputKey=='DistributionDomainName'");
+    // 切り戻し。
+    expect(text).toContain("{ mode: 'deny-all' }");
+    expect(text).toContain('deletionProtection');
+  });
+
+  it('**デプロイ手順が「1 回の cdk deploy で完結する」と書いてある**', () => {
+    // AUTH_MODE=cognito の Lambda はユーザプールへの Ref を持つので、
+    // CloudFormation は Cognito を先に作る。2 段階に割る必要は無い。
+    expect(readme()).toMatch(/1 回[^\n]*deploy|deploy[^\n]*1 回/);
+  });
+
   it('検証結果に W3005 と cfn-guard の記述があり、Phase 3 の件数が明記されている', () => {
     const text = readme();
     expect(text).toContain('W3005');
@@ -199,10 +252,31 @@ describe('infra/README.md が実装に追いついている', () => {
     expect(text).toMatch(/Phase 3[^\n]*0 件|0 件[^\n]*Phase 3/);
   });
 
-  it('**AUTH_MODE と deny-all の記述がある**（デプロイ前に fail-closed 状態を知れる）', () => {
+  it('**cfn-guard の節に Phase 4 の行が追記されている**', () => {
+    const text = readme();
+    expect(text).toMatch(/Phase 4[^\n]*0 件|0 件[^\n]*Phase 4/);
+    // Cognito の 3 リソースが 1 件も指摘を生まなかったことが列挙されていること。
+    for (const needle of [
+      'AWS::Cognito::UserPool',
+      'AWS::Cognito::UserPoolClient',
+      'AWS::Cognito::UserPoolDomain',
+    ]) {
+      expect(text, `cfn-guard の節に ${needle} の記述が無い`).toContain(needle);
+    }
+  });
+
+  it('**cfn-lint の E3004（循環参照）についての記述がある**', () => {
+    // メディアバケットの CORS で最も踏みやすい罠。cdk synth は素通しするので、
+    // 「cfn-lint を回す理由」が README に書かれていないと次の人が省略する。
+    expect(readme()).toContain('E3004');
+  });
+
+  it('**AUTH_MODE の記述があり、cognito と deny-all の両方が書かれている**', () => {
+    // deny-all は切り戻し先として残っているので、両方が書かれている必要がある。
     const text = readme();
     expect(text).toContain('AUTH_MODE');
     expect(text).toContain('deny-all');
+    expect(text).toContain('cognito');
   });
 
   it('x-amz-content-sha256 の記述がある（POST の必須ヘッダという運用上の落とし穴）', () => {
@@ -215,8 +289,41 @@ describe('infra/README.md が実装に追いついている', () => {
     expect(readme()).toContain('Authorization');
   });
 
-  it('TODO セクションに Cognito が含まれる（意図的に開けたまま残した穴）', () => {
-    expect(todoSection()).toContain('Cognito');
+  it('**トークン輸送の契約 x-blog-authorization が README に実在する**', () => {
+    // admin を作る側がこの 1 行に対して実装する。ドキュメントの腐敗を機械的に防ぐ。
+    expect(readme()).toContain('x-blog-authorization');
+  });
+
+  it('**403 と 404 を認証に使わない理由が書かれている**', () => {
+    // 書かないと次の人が「認可失敗は 403 が素直だ」と直してしまう。
+    const text = readme();
+    expect(text).toContain('CustomErrorResponses');
+    expect(text).toMatch(/403 と 404 を使わない|403 と 404 は/);
+    for (const code of ['auth_not_configured', 'unauthenticated', 'invalid_token', 'not_authorized', 'auth_unavailable']) {
+      expect(text, `README に error コード ${code} の記載が無い`).toContain(code);
+    }
+  });
+
+  it('**Cognito の feature plan に Essentials を選んだ理由が書かれている**', () => {
+    const text = readme();
+    expect(text).toContain('ESSENTIALS');
+    expect(text).toContain('Managed Login');
+  });
+
+  it('**SITE_ORIGIN 定数の節がある**（循環参照と差し替え手順）', () => {
+    const text = readme();
+    expect(text).toContain('SITE_ORIGIN');
+    expect(text).toContain('DistributionDomainName');
+  });
+
+  it('**TODO から「Cognito が入っていない」と「CORS は admin フェーズで」が消えている**', () => {
+    // **反転済み。** Phase 3 までは「意図的に開けたまま残した穴」だったが、
+    // Phase 4 が両方とも閉じた。宿題として残し続けると次に読む人が
+    // 「まだ入っていない」と誤解する。
+    const todo = todoSection();
+    expect(todo.length).toBeGreaterThan(0);
+    expect(todo).not.toContain('エンドユーザ認証（Cognito）が入っていない');
+    expect(todo).not.toContain('メディアバケットの CORS は admin フェーズで');
   });
   it('実デプロイで解決した宿題が TODO に残っていない', () => {
     // **反転済み。** 2026-08-30 の deploy ワークフロー実走で
@@ -279,9 +386,56 @@ describe('DEVELOPERS.md が実装に追いついている', () => {
   });
 
   it('ワークスペース表で api/ が「未着手」でない', () => {
+    // **`includes('`api/`')` だけで探してはいけない。** ツールチェーン表の
+    // 「`api/` のデプロイ先が Lambda の nodejs24.x」という行が先に一致してしまい、
+    // ワークスペース表を 1 行も見ないまま緑になる（実測）。行頭で名指しする。
+    const rows = developers()
+      .split('\n')
+      .filter((line) => line.trimStart().startsWith('| `api/` |'));
+    expect(rows, 'ワークスペース表に api/ の行がちょうど 1 本必要').toHaveLength(1);
+    expect(rows[0]).not.toContain('未着手');
+  });
+});
+
+describe('DEVELOPERS.md が Phase 4 に追いついている', () => {
+  const developers = (): string =>
+    readFileSync(fileURLToPath(new URL('../../DEVELOPERS.md', import.meta.url)), 'utf8');
+
+  it('**Cognito ユーザを帯域外で作る手順がある**（CDK には書かない）', () => {
     const text = developers();
-    const row = text.split('\n').find((line) => line.includes('`api/`') && line.includes('|'));
-    expect(row, 'ワークスペース表に api/ の行が必要').toBeDefined();
-    expect(row).not.toContain('未着手');
+    expect(text).toContain('aws cognito-idp admin-create-user');
+    expect(text).toContain('admin-set-user-password');
+    // 物理値ではなく CfnOutput から拾う形になっていること。
+    expect(text).toContain('AdminUserPoolId');
+    expect(text).toContain('describe-stacks');
+  });
+
+  it('**鍵ローテーションの手順が Cognito のトークンを付ける形になっている**', () => {
+    // Phase 3 の注記は「AUTH_MODE が deny-all の間は 503 が返るのでコンソールから」だった。
+    // Cognito が入った以上、実行可能な手順に置き換わっていなければならない。
+    const text = developers();
+    expect(text).toContain('x-blog-authorization: Bearer');
+    expect(text).toContain('versionStage=AWSPENDING');
+  });
+
+  it('**AUTH_MODE の運用手順（切り戻し）がある**', () => {
+    const text = developers();
+    expect(text).toContain('AUTH_MODE');
+    expect(text).toContain("{ mode: 'deny-all' }");
+    // 「いま何で動いているか」を無認証で確認できることが書かれていること。
+    expect(text).toContain('"authMode"');
+  });
+
+  it('ワークスペース表の api/ が deny-all のままになっていない', () => {
+    const rows = developers()
+      .split('\n')
+      .filter((line) => line.trimStart().startsWith('| `api/` |'));
+    expect(rows, 'ワークスペース表に api/ の行がちょうど 1 本必要').toHaveLength(1);
+    expect(rows[0]).toContain('cognito');
+    expect(rows[0]).not.toContain('deny-all');
+  });
+
+  it('**ID トークンであって access トークンではないことが書かれている**', () => {
+    expect(developers()).toContain('ID トークン');
   });
 });

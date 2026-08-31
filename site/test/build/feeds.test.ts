@@ -102,3 +102,22 @@ describe("robots.txt", () => {
     expect(readDist("robots.txt")).toContain(`Sitemap: ${site}sitemap-index.xml`);
   });
 });
+
+describe("robots.txt keeps the admin UI out of search results", () => {
+  const robots = (): string => readFileSync(join(distDir, "robots.txt"), "utf8");
+
+  it("disallows /admin/", () => {
+    // Not access control -- Cognito is. This only stops the login screen from
+    // being indexed, where it would be noise at best.
+    expect(robots()).toContain("Disallow: /admin/");
+  });
+
+  it("still allows the rest of the site", () => {
+    expect(robots()).toContain("Allow: /");
+  });
+
+  it("puts Disallow before Allow so the more specific rule is not shadowed", () => {
+    const text = robots();
+    expect(text.indexOf("Disallow: /admin/")).toBeLessThan(text.indexOf("Allow: /"));
+  });
+});

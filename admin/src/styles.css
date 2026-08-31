@@ -1,0 +1,132 @@
+/*
+ * 読めて操作できる最小限。デザインはこのフェーズのスコープ外。
+ * プレビューは site の HTML をそのまま流し込むので、記事本文側の見た目は
+ * ここでは作り込まない（作り込むと「site と同じに見えるか」を目で確かめる
+ * ときに邪魔になる）。
+ */
+:root {
+  color-scheme: light dark;
+  --gap: 1rem;
+  --border: #8884;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  line-height: 1.6;
+}
+
+#editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--gap);
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: var(--gap);
+}
+
+@media (min-width: 60rem) {
+  #editor {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  #editor > h1 {
+    grid-column: 1 / -1;
+  }
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  margin-block-end: var(--gap);
+}
+
+.field-inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+label {
+  font-weight: 600;
+}
+
+input,
+textarea {
+  font: inherit;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+textarea {
+  font-family: ui-monospace, monospace;
+  resize: vertical;
+}
+
+.hint {
+  margin: 0.25rem 0 0;
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+/* 検証エラー。**赤で出す。** 相対パス画像の警告もここに出る。 */
+.problems {
+  margin: 0 0 var(--gap);
+  padding: 0;
+  list-style: none;
+  color: #c0392b;
+}
+
+.problems:empty {
+  display: none;
+}
+
+.problems li::before {
+  content: '× ';
+}
+
+.status {
+  min-height: 1.5em;
+  margin: 0 0 var(--gap);
+}
+
+.status[data-kind='error'] {
+  color: #c0392b;
+}
+
+.status[data-kind='ok'] {
+  color: #1e8449;
+}
+
+button {
+  font: inherit;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}
+
+button[disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.preview-pane {
+  min-width: 0;
+}
+
+#preview {
+  overflow-x: auto;
+  padding: var(--gap);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+#preview :is(img, table) {
+  max-width: 100%;
+}
+
+#preview pre {
+  overflow-x: auto;
+  padding: 0.75rem;
+  border-radius: 4px;
+}

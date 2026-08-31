@@ -61,17 +61,20 @@ npx -w infra cdk diff        # deploy の前に必ず。PR 本文に貼る（AGE
 | --- | --- | --- |
 | `AWS::S3::Bucket` | `SiteBucket397A1860` | 配信用。ブロックパブリックアクセス 4 つとも有効 / SSE-S3 / `enforceSSL` / `DeletionPolicy: Retain` / **バージョニングなし** |
 | `AWS::S3::BucketPolicy` | `SiteBucketPolicy3AC1D0F8` | SecureTransport=false の Deny と、CloudFront への `s3:GetObject` Allow のみ |
-| `AWS::S3::Bucket` | `MediaBucketE52FC6E4` | メディア用。上と同じ設定 + **バージョニング有効**・非現行バージョン 90 日で失効 |
+| `AWS::S3::Bucket` | `MediaBucketE52FC6E4` | メディア用。上と同じ設定 + **バージョニング有効**・非現行バージョン 90 日で失効 + **CORS 1 本**（`AllowedOrigins` は `SITE_ORIGIN` 1 本、`AllowedMethods` は `PUT` のみ） |
 | `AWS::S3::BucketPolicy` | `MediaBucketPolicyB24E187B` | 同上（`AWS:SourceArn` はこのディストリビューションに限定） |
 | `AWS::CloudFront::OriginAccessControl` | `SiteDistributionOrigin1S3OriginAccessControl7D960FE6` | 配信用オリジン。`s3` / `always` / `sigv4` |
 | `AWS::CloudFront::OriginAccessControl` | `SiteDistributionOrigin2S3OriginAccessControlE0FE6FAA` | メディア用オリジン。同上（**OAC はオリジンごとに別**） |
 | `AWS::CloudFront::Distribution` | `SiteDistribution3FF9535D` | `redirect-to-https` / `DefaultRootObject: index.html` / `/media/*` の追加ビヘイビア / 403・404 を `/404.html` にマップ |
 | `AWS::CloudFront::Function` | `RewriteUriFunctionF5D8A5AC` | `cloudfront-js-2.0` / viewer-request（デフォルトビヘイビアのみ） |
+| `AWS::Cognito::UserPool` | `AdminAuthUserPoolBFAE8287` | **`AdminAuth`**。管理画面のログイン。`UserPoolTier: ESSENTIALS` / **`AllowAdminCreateUserOnly: true`** / `UsernameConfiguration.CaseSensitive: true` / MFA は TOTP のみ / パスワード 16 文字 / `DeletionProtection: ACTIVE` / `DeletionPolicy: Retain` |
+| `AWS::Cognito::UserPoolDomain` | `AdminAuthUserPoolLoginDomain53790831` | **Managed Login**（`ManagedLoginVersion: 2`）。`Domain` は `shutx-blog-admin`（**グローバルに一意な物理名。意図的な例外**） |
+| `AWS::Cognito::UserPoolClient` | `AdminAuthUserPoolAdminClient7A4B432D` | public client（`GenerateSecret: false`）。`AllowedOAuthFlows: ["code"]` / `AllowedOAuthScopes: ["openid"]` / **`ExplicitAuthFlows: ["ALLOW_REFRESH_TOKEN_AUTH"]` ちょうど** / `PreventUserExistenceErrors: ENABLED` / id・access 60 分・refresh 1 日 |
 | `AWS::SecretsManager::Secret` | `PostingApiGitHubAppPrivateKeyBB7A7648` | **`PostingApi`**。GitHub App の秘密鍵。**Properties は `Description` のみ**（空のシークレット）/ `DeletionPolicy: Retain` |
 | `AWS::Logs::LogGroup` | `PostingApiFunctionLogGroupCAC55A4B` | `RetentionInDays: 30`。Lambda に作らせず先に作る（実行ロールに `logs:CreateLogGroup` が要らなくなる） |
 | `AWS::IAM::Role` | `PostingApiExecutionRoleC51CD7D8` | **`ManagedPolicyArns` を持たない**。マネージドポリシーは 1 つも付けない |
 | `AWS::IAM::Policy` | `PostingApiExecutionRoleDefaultPolicy9EF9FB76` | 4 アクションのみ（`logs:CreateLogStream` / `logs:PutLogEvents` / `s3:PutObject` / `secretsmanager:GetSecretValue`）。ワイルドカードも `Resource: "*"` も 0 件 |
-| `AWS::Lambda::Function` | `PostingApiFunctionEFE83FA3` | `nodejs24.x` / `ReservedConcurrentExecutions: 2` / **`AUTH_MODE=deny-all`** / `Code` は `api/dist` のアセット |
+| `AWS::Lambda::Function` | `PostingApiFunctionEFE83FA3` | `nodejs24.x` / `ReservedConcurrentExecutions: 2` / **`AUTH_MODE=cognito`**（Phase 4 で `deny-all` から切り替え）+ `COGNITO_USER_POOL_ID` / `COGNITO_CLIENT_ID` は `Ref`、`COGNITO_ALLOWED_USERNAME` はリテラル / `Code` は `api/dist` のアセット |
 | `AWS::Lambda::Url` | `PostingApiFunctionFunctionUrlCB228805` | **`AuthType: AWS_IAM`**（`NONE` は完全公開になる） |
 | `AWS::CloudFront::OriginAccessControl` | `SiteDistributionOrigin3FunctionUrlOriginAccessControl1ACDDE31` | 投稿 API オリジン。`lambda` / `always` / `sigv4` |
 | `AWS::Lambda::Permission` | `SiteDistributionOrigin3InvokeFromApi...D7364C80` | `cloudfront.amazonaws.com` に `lambda:InvokeFunctionUrl`。`SourceArn` をこのディストリビューションに限定（confused deputy 対策） |
@@ -90,10 +93,33 @@ Phase 3 の `cdk diff` は新規 8 リソースと Distribution の in-place 更
 | `POST` | `/api/posts` | 必要 | Git Data API で 1 記事 1 コミット |
 | `POST` | `/api/media/presign` | 必要 | presigned PUT URL の発行 |
 
-**`AUTH_MODE=deny-all` で出荷している。** エンドユーザ認証（Cognito）は次フェーズなので、
-認証が必要な 3 経路は **すべて 503 を返し、GitHub にも S3 にも Secrets Manager にも到達しない**。
+**Phase 4 で `AUTH_MODE` を `deny-all` から `cognito` に切り替えた。** 認証が必要な 3 経路は
+`x-blog-authorization: Bearer <Cognito ID token>` を要求し、pool の JWKS に対して実鍵で検証する。
+
+**トークンの運び方（`admin/` を作る側が実装する契約）:**
+
+```
+x-blog-authorization: Bearer <Cognito ID token>
+```
+
+ヘッダ名は **全部小文字**、値は `Bearer` + 半角スペース 1 つ + ID トークン。定数は
+`api/src/auth/transport.ts` の `AUTH_HEADER` / `AUTH_SCHEME` として export されている。
+**`Authorization` は使えない**（下の「閲覧者の `Authorization` ヘッダは CloudFront に上書きされる」）。
+Cookie も使わない（ブラウザが自動で送るため CSRF が成立する。カスタムヘッダなら構造的に防がれる）。
+
+**使うのは ID トークンであって access トークンではない。** `token_use: 'id'` を要求し、
+`aud` がアプリクライアント ID と一致することを検証する。access トークンを送ると
+**401 `{"error":"invalid_token"}`** になる（access トークンは `aud` ではなく `client_id` を持つ）。
+
+**期待できるステータスは 200 / 201 / 400 / 415 / 401 / 503 だけ。** 認証系の失敗は
+**401**（`unauthenticated` / `invalid_token` / `not_authorized`）か
+**503**（`auth_not_configured` / `auth_unavailable`）で、JSON の `error` フィールドで区別する。
+**403 と 404 は API の認証経路からは絶対に返らない**（下の「認証の拒否に 403 と 404 を使わない」）。
+
 `api/test/unit/router.test.ts` が「503 が返る」ではなく **「コラボレータの呼び出し回数が 0」** を
 主張しており、`test/posting-api.test.ts` が環境変数の値を固定している。
+**切り戻しは `PostingApi` の `auth` を `{ mode: 'deny-all' }` に戻して deploy し直すだけ**
+（下の「デプロイ手順（Phase 4）」）。
 
 ### BlogCicdStack
 
@@ -203,12 +229,18 @@ AccessDenied が出た場合は `s3:GetObject` → `s3:ListBucketMultipartUpload
 
 ### cfn-lint
 
-`validate_cloudformation_template` — Phase 3 時点の実測。
+`validate_cloudformation_template` — **Phase 4 時点の実測（2026-08-31）。**
 
 | スタック | 結果 |
 | --- | --- |
 | `BlogCicdStack` | **0 error / 0 warning / 0 info** |
-| `BlogSiteStack` | **0 error / 1 warning / 0 info**（Phase 2 の 0/0/0 から warning が 1 件増えた） |
+| `BlogSiteStack` | **0 error / 1 warning / 0 info**（Phase 3 から変化なし。Cognito 3 リソースと CORS の追加で **1 件も増えなかった**） |
+
+**`E3004`（Circular Dependencies）は 0 件。** これは形式的な確認ではない。
+メディアバケットの CORS の `AllowedOrigins` に `distribution.distributionDomainName` を
+入れると循環参照になり、**`cdk synth` は exit 0 で素通しする**（実測）。
+`E3004` を見ているのが実質的な最後の砦なので、**この確認を省略しないこと**
+（下の「`SITE_ORIGIN` 定数」）。
 
 唯一の指摘は **`W3005`**。
 
@@ -229,7 +261,22 @@ W3005 'PostingApiExecutionRoleC51CD7D8' dependency already enforced by a 'GetAtt
 | スタック | 結果 |
 | --- | --- |
 | `BlogCicdStack` | **0 件（COMPLIANT）** |
-| `BlogSiteStack` | **6 件**。すべて S3 関連で、CloudFront・IAM への指摘は 0 件 |
+| `BlogSiteStack` | **6 件**。すべて S3 関連で、CloudFront・IAM・**Cognito** への指摘は 0 件 |
+
+**Phase 4 時点の実測（2026-08-31）: 6 件のまま、ルール ID も完全に同一。**
+`S3_BUCKET_DEFAULT_LOCK_ENABLED` / `S3_BUCKET_LOGGING_ENABLED` / `S3_BUCKET_NO_PUBLIC_RW_ACL` /
+`S3_BUCKET_REPLICATION_ENABLED` / `S3_BUCKET_SSL_REQUESTS_ONLY` / `S3_BUCKET_VERSIONING_ENABLED`。
+
+**Phase 4 が新しく増やした指摘は 0 件。** bundled `aws-security` ルールセットには
+**Cognito のルールが 1 つも無い。** 次に誰かが同じ検証をしたとき
+「6 件のまま＝ツールが動いていない」と誤解しないよう、
+**Phase 4 で追加したどのリソースが 1 件も指摘を生まなかったかを列挙しておく。**
+
+- `AWS::Cognito::UserPool`（Essentials / MFA TOTP / パスワード 16 文字 / `DeletionProtection: ACTIVE`）
+- `AWS::Cognito::UserPoolClient`（public client / code grant のみ / scope は openid のみ）
+- `AWS::Cognito::UserPoolDomain`（Managed Login v2）
+- メディアバケットの `CorsConfiguration`（S3 の 5 ルールは **CORS の有無と無関係に**発火するため、
+  CORS を足しても件数もルール ID も変わらない）
 
 **Phase 2 が新しく増やした指摘はゼロ。** 6 件は Phase 1 と同一で、ルール ID も同じ。
 IAM ロール・IAM ポリシー・OIDC プロバイダ・CloudFront の追加ビヘイビア・`CustomErrorResponses` の
@@ -268,6 +315,155 @@ IAM ロール・IAM ポリシー・OIDC プロバイダ・CloudFront の追加�
 | `S3_BUCKET_REPLICATION_ENABLED` | **意図的に見送り** | **意図的に見送り（後続フェーズで再検討の余地）** | 配信用は Git から再生成可能なので費用しか生まない。メディアは再生成できないぶん価値はゼロではないが、個人ブログの規模ではバージョニング + `Retain` で足りると判断した |
 | `S3_BUCKET_LOGGING_ENABLED` | **意図的に見送り（後続フェーズで再検討）** | **意図的に見送り（後続フェーズで再検討）** | S3 サーバアクセスログには第 3 のバケットが要り、そのバケット自体が新たな違反を生む（実測で 6 件 → 8 件に増える）。必要になった時点で CloudFront 標準ログとあわせて運用フェーズで設計する |
 
+## デプロイ手順（Phase 4）
+
+**`cdk deploy` は人間が承認して実行する。**（AGENTS.md: `infra/` を変えた PR では
+`cdk diff` の出力を本文に貼る）
+
+### 1. まず差分を見る
+
+```sh
+npx -w infra cdk diff BlogSiteStack
+```
+
+新規は Cognito 3 リソース（`UserPool` / `UserPoolDomain` / `UserPoolClient`）、
+更新は Lambda の `Environment.Variables`（`AUTH_MODE` と `COGNITO_*` 3 つ）と
+メディアバケットの `CorsConfiguration` だけであること。**IAM ロール・Lambda 関数・
+`Custom::*` の数が増えていないこと**を目で確認する。
+
+### 2. デプロイ（1 回の `cdk deploy` で完結する）
+
+```sh
+npx -w infra cdk deploy BlogSiteStack
+```
+
+`AUTH_MODE=cognito` の Lambda はユーザプールへの `Ref` を持つので、CloudFormation は
+**Cognito を先に作る**。2 段階に割る必要は無い。
+
+`domainPrefix`（`shutx-blog-admin`）が他アカウントに取られていると、ここで明示的な
+エラーになる。その場合は `ADMIN_LOGIN_DOMAIN_PREFIX` を変えて再実行する。
+
+### 3. デプロイ後の受け入れ確認（この順で）
+
+**(1) モードが切り替わったか**（無認証で確認できる）
+
+```sh
+curl -s https://d8gsxbwzr6ft8.cloudfront.net/api/health
+# => {"status":"ok","authMode":"cognito"}
+```
+
+**(2) トークン無しで書き込み経路が閉じているか**
+
+```sh
+BODY='{}'
+SHA=$(printf '%s' "$BODY" | sha256sum | cut -d' ' -f1)
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  -H 'content-type: application/json' -H "x-amz-content-sha256: $SHA" \
+  -d "$BODY" https://d8gsxbwzr6ft8.cloudfront.net/api/posts
+# => 401  （本文は {"error":"unauthenticated"}）
+```
+
+**404 の HTML が返ってきたら 403 を返してしまっている** — 設計違反なので直すこと
+（あるいは `x-amz-content-sha256` が間違っている。上の切り分け表を参照）。
+
+**(3) ユーザを作る**（帯域外。**CDK には書かない** — このリポジトリは public）
+
+```sh
+POOL_ID=$(aws cloudformation describe-stacks --stack-name BlogSiteStack \
+  --query "Stacks[0].Outputs[?ends_with(OutputKey,'AdminUserPoolId')].OutputValue" --output text)
+
+aws cognito-idp admin-create-user --user-pool-id "$POOL_ID" \
+  --username shutx --message-action SUPPRESS
+aws cognito-idp admin-set-user-password --user-pool-id "$POOL_ID" \
+  --username shutx --password '<16 文字以上・4 種混在>' --permanent
+```
+
+`--username` は `COGNITO_ALLOWED_USERNAME`（`ADMIN_USERNAME` 定数）と
+**完全一致**でなければならない（プールは `CaseSensitive: true`）。
+
+**(4) Managed Login で実際にトークンを取り、ヘッダで通す**
+（**唯一デプロイしないと確かめられない輪**）
+
+```sh
+CLIENT_ID=$(aws cloudformation describe-stacks --stack-name BlogSiteStack \
+  --query "Stacks[0].Outputs[?ends_with(OutputKey,'AdminUserPoolClientId')].OutputValue" --output text)
+LOGIN=$(aws cloudformation describe-stacks --stack-name BlogSiteStack \
+  --query "Stacks[0].Outputs[?ends_with(OutputKey,'AdminLoginDomain')].OutputValue" --output text)
+
+echo "$LOGIN/login?client_id=$CLIENT_ID&response_type=code&scope=openid&redirect_uri=https://d8gsxbwzr6ft8.cloudfront.net/admin/"
+```
+
+ブラウザで開いて code を取り、`/oauth2/token` で ID トークンに交換してから:
+
+```sh
+curl -s -H "x-blog-authorization: Bearer $ID_TOKEN" \
+  https://d8gsxbwzr6ft8.cloudfront.net/api/health/github-app
+# => 200 {"status":"degraded","canMintInstallationToken":false,...}
+```
+
+GitHub App が未作成なので中身は `degraded` でよい。
+**200 が返ること自体が「ヘッダが Lambda に届き、JWT 検証が通った」の証拠である。**
+
+**(5) 別ユーザのトークンが弾かれるか**（2 人目を一時的に作って確認し、確認後に削除する）
+
+```sh
+# => 401 {"error":"not_authorized"}
+aws cognito-idp admin-delete-user --user-pool-id "$POOL_ID" --username <2 人目>
+```
+
+**(6) `SITE_ORIGIN` 定数のドリフト確認**
+
+```sh
+aws cloudformation describe-stacks --stack-name BlogSiteStack \
+  --query "Stacks[0].Outputs[?OutputKey=='DistributionDomainName'].OutputValue" --output text
+```
+
+`SITE_ORIGIN` の `https://` を除いた部分と一致すること。
+
+**(7) CORS の確認**（admin ができてから）
+
+```sh
+MEDIA=$(aws cloudformation describe-stacks --stack-name BlogSiteStack \
+  --query "Stacks[0].Outputs[?OutputKey=='MediaBucketName'].OutputValue" --output text)
+curl -s -D- -o /dev/null -X OPTIONS \
+  -H 'Origin: https://d8gsxbwzr6ft8.cloudfront.net' \
+  -H 'Access-Control-Request-Method: PUT' \
+  "https://$MEDIA.s3.ap-northeast-1.amazonaws.com/media/probe.png"
+# => Access-Control-Allow-Origin が CloudFront ドメインで返ること
+```
+
+### 4. 切り戻し
+
+`infra/lib/site-stack.ts` の `PostingApi` の `auth` を `{ mode: 'deny-all' }` に戻して
+deploy し直す。
+
+```ts
+auth: { mode: 'deny-all' },
+```
+
+- **Cognito のリソースは消えない**（`deletionProtection: true` / `RemovalPolicy.RETAIN`）
+- **api 側の `deny-all` は `COGNITO_*` を 1 つも読まない**ので、
+  **壊れた Cognito 設定を抱えたまま安全側に倒せる**
+- 戻すと認証が必要な 3 経路はすべて `503 auth_not_configured` になる
+
+### CfnOutput 一覧
+
+| Output 名（末尾一致で引く） | 用途 |
+| --- | --- |
+| `SiteBucketName` | `aws s3 sync` の宛先 |
+| `MediaBucketName` | presigned PUT の宛先バケット |
+| `DistributionDomainName` | 配信ドメイン。**`SITE_ORIGIN` 定数と突き合わせる** |
+| `DistributionId` | キャッシュ無効化 |
+| `AdminUserPoolId` | `aws cognito-idp admin-create-user --user-pool-id` |
+| `AdminUserPoolClientId` | admin の OAuth `client_id` |
+| `AdminLoginDomain` | Managed Login の URL |
+| `AdminUserPoolIssuerUrl` | ID トークンの `iss`。JWKS は `<issuer>/.well-known/jwks.json` |
+| `GitHubAppSecretName` | `aws secretsmanager put-secret-value --secret-id` |
+| `PostingApiFunctionName` | 投稿 API の Lambda 関数名 |
+
+Construct の中で作った Output は論理 ID が `<構築子パス><名前><ハッシュ>` になるので、
+**`?ends_with(OutputKey, '<名前>')` で引くこと。**
+
 ## TODO（本フェーズで意図的に残した宿題）
 
 - **最初の `cdk deploy` の直前に、クロススタック参照の強さをもう一度考えること。**
@@ -282,17 +478,23 @@ IAM ロール・IAM ポリシー・OIDC プロバイダ・CloudFront の追加�
   カスタム証明書を指定したときにしか描画されない。カスタムドメイン + ACM を入れるフェーズで
   `SecurityPolicyProtocol.TLS_V1_2_2021` を設定する。`cdk.json` の context に
   `@aws-cdk/aws-cloudfront:defaultSecurityPolicyTLSv1.2_2021: true` を入れて地ならしだけ済ませてある
-- **メディアバケットの CORS は admin フェーズで。** 管理画面がブラウザから presigned PUT で
-  直接 S3 に上げるには CORS が要るが、`admin/` も `api/` も無い現時点では許可すべき Origin が
-  決まらず（カスタムドメインも未定）、正しい値を書けないうえテストで検証もできない。
-  CORS の追加はバケットの置換を伴わない更新なので、後から安全に足せる
-- **エンドユーザ認証（Cognito）が入っていない。** 本フェーズは `AUTH_MODE=deny-all` で
-  fail-closed 出荷している。**`AUTH_MODE` を緩める変更と Cognito の実装は同一 PR でなければならない。**
-  `AWS_IAM` + OAC はエンドユーザ認証ではないため（下の「`AWS_IAM` + OAC はエンドユーザ認証ではない」を参照）、
-  この 1 行を緩めた瞬間に公開の書き込みエンドポイントになる
+- **管理画面（`admin/`）がまだ無い。** 本フェーズは admin が実装すべき契約（ヘッダ名・値の形・
+  `x-amz-content-sha256`・OAuth のパラメータ・返りうるステータス）を固定するところまで。
+  Managed Login からトークンを受け取って `x-blog-authorization` に載せる SPA は別途作る
+- **カスタムドメインと ACM。** Cognito の Managed Login も CloudFront も、いまは AWS が配る
+  ドメインをそのまま使っている。`SITE_ORIGIN` 定数と `ADMIN_LOGIN_DOMAIN_PREFIX` を差し替えるのは
+  このフェーズになる（下の「`SITE_ORIGIN` 定数」）
+- **refresh token rotation を入れていない。** Essentials で使えるが、aws-cdk-lib 2.267.0 の
+  `configureAuthFlows` が `props.refreshTokenRotationGracePeriod || authFlows.push('ALLOW_REFRESH_TOKEN_AUTH')`
+  と書かれており、**有効にすると `ExplicitAuthFlows` から `ALLOW_REFRESH_TOKEN_AUTH` が消える**（実測）。
+  この相互作用を検証してから入れること
 - **GitHub App がまだ存在しない。** `GITHUB_APP_CLIENT_ID` は `not-configured` というプレースホルダで、
   シークレットも空。App の作成は Web UI でしかできず、鍵の投入は `DEVELOPERS.md` の手順で行う。
-  `AUTH_MODE=deny-all` の間は GitHub を呼ぶ経路に到達しないので、この状態で deploy しても安全
+  Phase 4 で `AUTH_MODE=cognito` になったので、**認証を通せば GitHub を呼ぶ経路に到達する。**
+  ただし秘密鍵が空なので `GET /api/health/github-app` は
+  `{"status":"degraded","canMintInstallationToken":false}` を返し、`POST /api/posts` は
+  `503 key_not_provisioned` になる。**認証されていない相手はそこに到達できない**ので、
+  この状態で deploy しても安全であることは変わらない
 - **`env` を明示するのは ACM のフェーズで。** 下の「`env` を明示しない」を参照
 
 ## 実デプロイで解決した宿題（2026-08-30）
@@ -446,13 +648,158 @@ CloudFront + Lambda Function URL の OAC 構成では、**呼び出し側（＝�
 OAC の `SigningBehavior` が `always` である帰結として、CloudFront は自分の SigV4 署名を
 `Authorization` ヘッダに書く。**閲覧者が送った `Authorization` は失われる。**
 
-したがって Cognito フェーズで ID トークンを `Authorization: Bearer` で送る一般的な設計は
-**そのままでは使えない**。独自ヘッダ（例 `X-Blog-Id-Token`）か Cookie で運ぶこと。
-`/api/*` のオリジンリクエストポリシーは `ALL_VIEWER_EXCEPT_HOST_HEADER` なので、
-独自ヘッダも Cookie もそのまま転送される（追加設定は不要）。
-
+したがって ID トークンを `Authorization: Bearer` で送る一般的な設計は **そのままでは使えない**。
 `no-override` に切り替える手もあるが、そうすると今度は **ブラウザ側が Lambda URL のホストに対して
 SigV4 署名を行う必要**が生じ、SPA では現実的でない。
+
+#### 解決策（Phase 4 で確定）
+
+```
+x-blog-authorization: Bearer <Cognito ID token>
+```
+
+定数は `api/src/auth/transport.ts` の `AUTH_HEADER` / `AUTH_SCHEME`。
+**Cookie は採らない** — ブラウザが自動で送るため同一オリジンの `/api/*` に対する CSRF が
+成立する。カスタムヘッダはクロスオリジンから preflight 無しに付けられないので
+**CSRF が構造的に防がれる**。SPA が Managed Login のリダイレクトからトークンを受け取る以上
+HttpOnly にもできず、Cookie 側に利点が無い。
+
+`x-amz-` で始まる名前は避けている（OAC が `x-amz-date` / `x-amz-security-token` /
+`x-amz-content-sha256` を自分で付けるため）。全部小文字なのは、Lambda 側が
+`headers[name.toLowerCase()]` で正規化しているから。
+
+#### このヘッダが本当にオリジンに届くことの根拠（推測ではなく実測）
+
+1. **AWS のドキュメント**: OAC の `SigningBehavior: always` は
+   「CloudFront signs all origin requests, **overwriting the Authorization header from the
+   viewer request** if one exists」と明記されている（＝上書きされるのは `Authorization` だけ）。
+2. **オリジンリクエストポリシーの定義**: `/api/*` は `Managed-AllViewerExceptHostHeader`
+   （ID `b689b0a8-53d0-40ab-baf2-68738e2966ac`）で、実測の内容は
+   `HeaderBehavior: allExcept` / `Headers: [host]` / `CookieBehavior: all` /
+   `QueryStringBehavior: all`。**`host` 以外の全ヘッダがオリジンに渡る。**
+3. **対照実験（値を変えると結果が変わる）**: 本番ディストリビューションに対して
+   - `POST /api/posts` + ボディ + `x-amz-content-sha256` **正しい値** -> **503**（Lambda まで届いた）
+   - 同じリクエストで `x-amz-content-sha256` を **間違った値** に -> **404 HTML**（署名検証に落ちた）
+   - ヘッダ無し -> **404 HTML**
+
+   **値を変えると結果が変わる以上、viewer のヘッダ値は確かにオリジン側で使われている。**
+   加えて `X-Blog-Authorization` を足しても 503 のまま（カスタムヘッダを足しても OAC 署名は
+   壊れない）、1,800 バイトのヘッダ値でも壊れないことを実測した。Cognito の ID トークンは
+   1〜2KB なので余裕で通る。
+
+**唯一未検証の輪**: Lambda のハンドラ内で実際にこのヘッダを読めることは、デプロイしないと
+観測できない。**下の「デプロイ手順（Phase 4）」の手順 4 で実地確認すること。**
+
+### 認証の拒否に 403 と 404 を使わない
+
+**`CustomErrorResponses` は `DistributionConfig` 直下にあり、ビヘイビア単位では外せない。**
+origin（Lambda）が返した 403 / 404 も `/404.html` の HTML に差し替えられる。
+
+実測（2026-08-31、本番ディストリビューション）:
+
+```
+GET /api/nope   -> 404 / content-type: text/html / server: AmazonS3 / x-cache: Error from cloudfront
+GET /api/health -> 200 / content-type: application/json / x-cache: Miss from cloudfront
+```
+
+`/api/nope` に対して Lambda のルータは `404 {"error":"not_found"}` を返しているが、
+CloudFront が日本語の HTML ページに差し替えている。`x-cache: Error from cloudfront` がその証拠。
+403 も同じ表に載っているので同様に化ける。
+
+**したがって認証の拒否に 403 を使うと、admin からは「エンドポイントが無い」と区別が付かなくなる。**
+「トークンを出し直せ」「あなたは別のユーザだ」「経路が無い」の 3 つが全部同じ HTML 404 になる。
+
+`CustomErrorResponses` を外すと、OAC + S3 REST オリジンで存在しないキーが 403 のまま閲覧者に
+見える（Phase 2 の判断）。**よって直すべきは CloudFront ではなく API 側のステータス選択である。**
+
+| 拒否理由 | ステータス | `error` |
+| --- | --- | --- |
+| `auth-not-configured`（`AUTH_MODE=deny-all`） | **503** | `auth_not_configured` |
+| `unauthenticated`（ヘッダ欠落 / スキーム不正） | **401** | `unauthenticated` |
+| `invalid-token`（署名・iss・aud・token_use・exp・改竄） | **401** | `invalid_token` |
+| `not-authorized`（正当なトークンだが別ユーザ） | **401** | `not_authorized` |
+| `unavailable`（JWKS が取得できない） | **503** | `auth_unavailable` |
+
+401 と 503 はどちらも `CustomErrorResponses` の表に無いので **素通しで JSON のまま届く**
+（実測で 503 が届くことは確認済み）。
+
+`not-authorized` に 401 を使うのは意味論的には妥協である（本来 403）。
+**妥協する代わりに、機械可読な `error` コードで区別できるようにしてある。**
+表の `statusCode` は TypeScript の型で `401 | 503` に制限してあるので、
+**403 と 404 はそもそも書けない**（`api/src/auth.ts`）。
+`api/test/unit/router.test.ts` が 5 理由 x 3 保護経路の 15 通りを走査して
+「401 か 503」「403 でない」「404 でない」を主張している。
+
+> **admin 側の切り分け表**: HTML の 404 が返ってきたら、それは **認証の失敗ではない。**
+> 「`x-amz-content-sha256` の付け忘れ／値の誤り（署名が壊れている）」か
+> 「そのパスが存在しない」かのどちらかである。
+
+### Cognito の feature plan に Essentials を選ぶ
+
+**Lite ではなく Essentials。理由は Managed Login。**
+
+- AWS 開発者ガイド:「Managed login is available in the **Essentials and Plus tiers**.
+  The classic hosted UI is available in all feature tiers.」
+- AWS 料金ページ: 無料枠は Lite も Essentials も **10,000 MAU / 月・アカウント**で、
+  「The free tier does not automatically expire ... available to both existing and new AWS
+  customers indefinitely」。
+
+**MAU 1 では Lite と Essentials の請求額はどちらも 0 円なので、安いほうを選ぶ動機が存在しない。**
+Essentials は `CreateUserPool` の既定でもある。
+
+**Plus は採らない。** 料金ページに「There is no free tier for the Plus tier.」とあり、
+threat protection（旧 advanced security features）に MAU 1 の個人ブログが月額を払う理由が無い。
+
+### `SITE_ORIGIN` 定数
+
+`infra/lib/site-stack.ts` に配信ドメインを **文字列でハードコードしている。**
+「物理名をハードコードしない」方針の **意図的な例外**である。
+
+```ts
+export const SITE_ORIGIN = 'https://d8gsxbwzr6ft8.cloudfront.net';
+```
+
+**理由 1: `distribution.distributionDomainName` は原理的に使えない。**
+`CorsConfiguration` は `AWS::S3::Bucket` **本体**のプロパティなので、そこに Distribution の
+`Fn::GetAtt` を入れると循環参照になる。
+
+```
+Media.Properties.CorsConfiguration...AllowedOrigins = Fn::GetAtt [Dist, DomainName]
+Dist.Properties...Origins[0].DomainName            = Fn::GetAtt [Media, RegionalDomainName]
+```
+
+**実測（実際に循環を作って確認した）:**
+
+| 検出手段 | 結果 |
+| --- | --- |
+| `npx -w infra cdk synth` | **exit 0 で成功する。** CLI は同一スタック内のリソース間循環を検出しない |
+| `Template.fromStack()`（vitest） | **throw する。** ただしテストファイルの読み込み時点で落ちるので、どのアサーションが何を言っているか分からない（全 `it` が消える） |
+| cfn-lint | **E3004** で検出する |
+
+`cdk synth` だけを回していると `cdk deploy` で初めて分かる。だから
+`test/media-bucket.test.ts` に「**`AWS::S3::Bucket` の `Properties` から Distribution を
+`Fn::GetAtt` している箇所が 1 つも無い**」という名指しの回帰テストを置いてある。
+バケットポリシー（別リソース）が Distribution を参照するのは問題ない。
+
+**理由 2:** 同じ値が Cognito の `CallbackURLs` でも必要で、どのみち synth 時に確定した
+文字列でなければならない。**CORS と `CallbackURLs` の両方がこの 1 定数を参照する**
+（2 か所に別々の文字列を書くと「ログインはできるが画像が上がらない」という
+デバッグしにくい壊れ方をする）。
+
+**理由 3:** カスタムドメインを入れるフェーズで、この 1 定数を差し替えるだけで済む。
+
+**この定数を変えるのは CloudFront のドメインが変わったときだけ。** ドリフトの確認:
+
+```sh
+aws cloudformation describe-stacks --stack-name BlogSiteStack \
+  --query "Stacks[0].Outputs[?OutputKey=='DistributionDomainName'].OutputValue" --output text
+```
+
+`ADMIN_LOGIN_DOMAIN_PREFIX`（`shutx-blog-admin`）も同じ性質の例外である。Cognito の
+プレフィックスドメインは **AWS グローバルで一意**でなければならず、CDK に自動生成させられない。
+他アカウントに取られていれば `cdk deploy` が明示的なエラーで落ちるだけなので静かには壊れない。
+**アカウント ID を混ぜて一意性を上げる案は採らない** — Managed Login の URL は利用者の
+ブラウザに表示されるので、そこに AWS アカウント ID を載せたくない。
 
 ### `/api/*` のビヘイビアで既定に任せてはいけない 4 つ
 

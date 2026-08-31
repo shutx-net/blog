@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { CfnOutput, Duration, RemovalPolicy } from 'aws-cdk-lib';
+import type * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
@@ -40,9 +41,30 @@ const RESERVED_CONCURRENCY = 2;
 /** ログの保持期間。無期限にしない（溜め続ける理由が無い）。 */
 const LOG_RETENTION = logs.RetentionDays.ONE_MONTH;
 
+/**
+ * **判別可能ユニオン。「AUTH_MODE=cognito なのに pool id が無い」テンプレートを
+ * synth 不能にする。**
+ *
+ * これが「中途半端な状態がデプロイできない」の 3 段目である
+ * （1 段目は api の AuthConfig 型、2 段目は loadConfig のコールドスタート例外）。
+ * 環境変数はこの 1 つの値からまとめて組み立てるので、片方だけ書かれた
+ * テンプレートは **型として作れない。**
+ */
+export type PostingApiAuth =
+  | { readonly mode: 'deny-all' }
+  | {
+      readonly mode: 'cognito';
+      readonly userPool: cognito.IUserPool;
+      readonly userPoolClient: cognito.IUserPoolClient;
+      /** 通す唯一の cognito:username。**秘密ではない**ので public リポジトリに書ける。 */
+      readonly allowedUsername: string;
+    };
+
 export interface PostingApiProps {
   /** presigned PUT の宛先。**この 1 本の参照が ApiStack を別スタックにできない理由**（README）。 */
   mediaBucket: s3.Bucket;
+  /** エンドユーザ認証の設定。**deny-all に戻すのが切り戻し手段**（README の手順）。 */
+  auth: PostingApiAuth;
   githubOwner: string;
   githubRepo: string;
   /**
@@ -156,6 +178,32 @@ export class PostingApi extends Construct {
       }),
     );
 
+    // ---- 認証まわりの環境変数（判別可能ユニオンから 1 回で組み立てる） ----
+    //
+    // **`AUTH_MODE: 'cognito'` という文字列はこの三項演算子の中にしか現れない。**
+    // 型が「cognito なら pool と client がある」を保証しているので、
+    // **片方だけ書かれたテンプレートは synth できない。**
+    //
+    // api 側の定数（api/src/config.ts の AUTH_MODE_COGNITO / AUTH_MODE_DENY_ALL）と
+    // ずれると synth もテストも通ったうえでコールドスタートで落ちるので、
+    // test/posting-api.test.ts が api の定数を import して等価を主張している。
+    //
+    // **IAM 権限は 1 つも足していない。** JWKS の取得は
+    // https://cognito-idp.<region>.amazonaws.com/... への **認証不要な公開 HTTPS GET** で、
+    // cognito-idp:* の IAM 権限は要らない。足すと「アクションがちょうど 4 つ」が赤くなる。
+    // 型注釈は Lambda の environment（{ [key: string]: string }）に合わせるためだけのもの。
+    // **「cognito なら pool と client がある」の保証は props.auth の判別可能ユニオンが
+    // 担っている**ので、ここを Record にしても何も緩まない。
+    const authEnvironment: Record<string, string> =
+      props.auth.mode === 'cognito'
+        ? {
+            AUTH_MODE: 'cognito',
+            COGNITO_USER_POOL_ID: props.auth.userPool.userPoolId,
+            COGNITO_CLIENT_ID: props.auth.userPoolClient.userPoolClientId,
+            COGNITO_ALLOWED_USERNAME: props.auth.allowedUsername,
+          }
+        : { AUTH_MODE: 'deny-all' };
+
     // ---- Lambda ----
     const handler = new lambda.Function(this, 'Function', {
       runtime: lambda.Runtime.NODEJS_24_X,
@@ -169,10 +217,11 @@ export class PostingApi extends Construct {
       memorySize: 512,
       reservedConcurrentExecutions: RESERVED_CONCURRENCY,
       environment: {
-        // **この 1 行が「認証なしの書き込みエンドポイントをデプロイしない」の担保。**
-        // 緩めるときは Cognito の実装と同じ PR でなければならない
-        // （test/posting-api.test.ts が値を固定している）。
-        AUTH_MODE: 'deny-all',
+        // **ここを緩めた瞬間、/api/* に到達できる誰もが書き込み経路に到達できるようになる。**
+        // 守っているのは Authorizer だけになるので、Cognito の実装と
+        // **同一 PR** でなければならない（test/posting-api.test.ts が
+        // 「cognito なら COGNITO_* が 3 つ揃っている」を条件付き不変条件として固定している）。
+        ...authEnvironment,
         GITHUB_OWNER: props.githubOwner,
         GITHUB_REPO: props.githubRepo,
         GITHUB_APP_CLIENT_ID: props.githubAppClientId,

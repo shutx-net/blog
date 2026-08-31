@@ -6,6 +6,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
+import { AdminAuth } from './admin-auth.ts';
 import { MediaBucket } from './media-bucket.ts';
 import { PostingApi } from './posting-api.ts';
 
@@ -35,6 +36,55 @@ export const MEDIA_PATH_PATTERN = '/media/*';
 export const API_PATH_PATTERN = '/api/*';
 
 /**
+ * **サイトのオリジン（CloudFront の配信ドメイン）。**
+ *
+ * 「物理名をハードコードしない」方針の **意図的な例外**である。理由は 3 つ。
+ *
+ * 1. **`distribution.distributionDomainName` は原理的に使えない。**
+ *    メディアバケットの CORS（`CorsConfiguration` は `AWS::S3::Bucket` **本体**の
+ *    プロパティ）に入れると、
+ *      Media.Properties.CorsConfiguration...AllowedOrigins = Fn::GetAtt [Dist, DomainName]
+ *      Dist.Properties...Origins[0].DomainName            = Fn::GetAtt [Media, RegionalDomainName]
+ *    という循環参照になる。**`cdk synth` はこれを検出せず成功してしまい**、
+ *    cfn-lint の **E3004** だけが捕まえる（実測で 2 件）。バケットポリシー（別リソース）が
+ *    Distribution を参照するのは問題ないが、CorsConfiguration には逃げ道が無い。
+ * 2. Cognito の `CallbackURLs` でも同じ値が必要で、**どのみち synth 時に確定した
+ *    文字列でなければならない。**
+ * 3. カスタムドメインを入れるフェーズで、**この 1 定数を差し替えるだけで済む。**
+ *
+ * **CORS と Cognito の CallbackURLs の両方がこの 1 定数を参照する。** 2 か所に別々の
+ * 文字列を書くと「ログインはできるが画像が上がらない」というデバッグしにくい壊れ方をする。
+ *
+ * **この定数を変えるのは CloudFront のドメインが変わったときだけ。**
+ * デプロイ後に `describe-stacks` の Output `DistributionDomainName` と突き合わせること
+ * （手順は infra/README.md）。
+ */
+export const SITE_ORIGIN = 'https://d8gsxbwzr6ft8.cloudfront.net';
+
+/**
+ * Managed Login のドメイン接頭辞。**AWS グローバルで一意でなければならない。**
+ *
+ * CDK に自動生成させられないので、これも「物理名をハードコードしない」方針の
+ * 意図的な例外になる。秘密ではないし、他アカウントに取られていれば `cdk deploy` が
+ * 明示的なエラーで落ちるだけなので静かには壊れない。
+ *
+ * **アカウント ID を混ぜて一意性を上げる案は採らない** — hosted UI の URL は
+ * 利用者のブラウザに表示されるので、そこに AWS アカウント ID を載せたくない。
+ */
+export const ADMIN_LOGIN_DOMAIN_PREFIX = 'shutx-blog-admin';
+
+/**
+ * 投稿を許可する唯一の Cognito ユーザ名。
+ *
+ * **`@` を含めないこと。** メールアドレスを入れても、`usernameAttributes` を設定して
+ * いないこのプールでは `cognito:username` に一致しない。public リポジトリに個人の
+ * メールアドレスを書かないという方針とも合う（AGENTS.md）。
+ *
+ * ユーザの作成は帯域外（`aws cognito-idp admin-create-user`）。CDK は作らない。
+ */
+export const ADMIN_USERNAME = 'shutx';
+
+/**
  * 静的サイト配信スタック。
  *
  * env は意図的に指定しない（env-agnostic）。本フェーズは AWS 認証情報を
@@ -49,6 +99,9 @@ export class SiteStack extends Stack {
 
   /** CicdStack がキャッシュ無効化の権限をここに絞る。 */
   readonly distribution: cloudfront.Distribution;
+
+  /** 管理画面のログイン（単一著者の Cognito ユーザプール）。 */
+  readonly adminAuth: AdminAuth;
 
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
@@ -66,14 +119,40 @@ export class SiteStack extends Stack {
     // メディアは配信用と別バケットにする。同居させると sync --delete が巻き込んで消す。
     // 別 Stack ではなく Construct なのは、別 Stack だと synth が DependencyCycle で
     // 落ちるため（media-bucket.ts のコメントと README を参照）。
-    const media = new MediaBucket(this, 'MediaBucket');
+    // **siteOrigin に distribution.distributionDomainName を渡してはいけない。**
+    // CorsConfiguration は S3::Bucket 本体のプロパティなので循環参照になる
+    // （SITE_ORIGIN の定義のコメントを参照）。
+    const media = new MediaBucket(this, 'MediaBucket', { siteOrigin: SITE_ORIGIN });
     this.mediaBucket = media.bucket;
+
+    // 管理画面のログイン（単一著者の Cognito ユーザプール）。
+    // **Stack ではなく Construct**（CloudFront に紐づくものを別 Stack にすると
+    // DependencyCycle になる、という Phase 2・3 の実測に揃える）。
+    const adminAuth = new AdminAuth(this, 'AdminAuth', {
+      domainPrefix: ADMIN_LOGIN_DOMAIN_PREFIX,
+      siteOrigin: SITE_ORIGIN,
+    });
+    this.adminAuth = adminAuth;
 
     // 投稿 API。**Stack ではなく Construct にしている**（理由は README と
     // posting-api.ts のコメント）。Distribution が functionUrl を参照するので
     // ここで先に作る。
     const postingApi = new PostingApi(this, 'PostingApi', {
       mediaBucket: this.mediaBucket,
+      // **Phase 4 でここが deny-all から cognito に変わった。**
+      // 型が判別可能ユニオンなので、userPool / userPoolClient / allowedUsername を
+      // 揃えずに mode: 'cognito' にすることは **できない**。
+      //
+      // **切り戻しは `{ mode: 'deny-all' }` に戻して deploy し直すだけ。**
+      // Cognito のリソースは消えない（deletionProtection + RemovalPolicy.RETAIN）し、
+      // api 側の deny-all は COGNITO_* を 1 つも読まないので、
+      // **壊れた Cognito 設定を抱えたまま安全側に倒せる。**
+      auth: {
+        mode: 'cognito',
+        userPool: adminAuth.userPool,
+        userPoolClient: adminAuth.userPoolClient,
+        allowedUsername: ADMIN_USERNAME,
+      },
       githubOwner: 'shutx-net',
       githubRepo: 'blog',
       githubAppClientId: 'not-configured',
