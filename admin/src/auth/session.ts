@@ -183,6 +183,12 @@ export const completeCallback = async (deps: CompleteCallbackDeps): Promise<Call
 };
 
 /**
+ * サインアウト。実装は `sign-out.ts`（revoke -> 消去 -> 遷移の順序がそこで固定されている）。
+ */
+export { signOut } from './sign-out.ts';
+export type { SignOutDeps } from './sign-out.ts';
+
+/**
  * 輸送の契約。**api/src/auth/transport.ts が唯一の出所。**
  * ここで再 export しておくと、綴りを書き写す経路が構造的に無くなる。
  */

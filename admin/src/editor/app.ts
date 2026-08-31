@@ -9,7 +9,9 @@ import {
   uploadToPresignedUrl,
 } from '../api/upload.ts';
 import type { AuthTransport } from '../auth/session.ts';
+import type { SessionStore } from '../storage/session-store.ts';
 import { bindEditor } from './bind.ts';
+import { applyDraftToForm, clearDraft, loadDraft, saveDraft } from './draft-persistence.ts';
 import { validateDraft } from './model.ts';
 
 const CREATE_POST: ApiOperation = { method: 'POST', path: '/api/posts' };
@@ -21,6 +23,13 @@ export interface AppDeps {
   renderPreview(markdown: string): Promise<string>;
   /** 注入するクロック。`Date.now()` を関数内で読まない。 */
   now(): number;
+  /**
+   * 下書きの保存先。**省略できる**（渡さなければ保存も復元もしない）。
+   *
+   * 保存できないことでエディタが使えなくなってはいけないので、
+   * ストレージが投げる環境でも `store` 側が吸収する。
+   */
+  store?: SessionStore;
   origin?: string;
   fetchImpl?: typeof fetch;
 }
@@ -62,10 +71,30 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
     ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
   });
 
+  const store = deps.store;
+
+  // **復元は bindEditor より前。** 先に value を入れておけば、bindEditor の初回
+  // update() が復元後の値でプレビューと検証をまとめて行う。
+  const restored = store === undefined ? undefined : loadDraft(store);
+  if (restored !== undefined) applyDraftToForm(deps.root, restored);
+
+  /**
+   * **復元中の保存を抑える。** `bindEditor` は構築時に update() を 1 回呼び、
+   * その中で onChange が発火する。抑えないと「復元 -> 保存し直し」が毎回走る。
+   */
+  let ready = false;
+
   const editor = bindEditor(deps.root, {
     renderPreview: deps.renderPreview,
-    onChange: () => {},
+    // **既存の差し込み口をそのまま使う。** 毎 input / change で呼ばれるので、
+    // 新しいイベント配線は要らない（bind.ts は 1 行も変えていない）。
+    onChange: (fields) => {
+      if (!ready || store === undefined) return;
+      saveDraft(store, fields);
+    },
   });
+
+  ready = true;
 
   const form = deps.root.querySelector<HTMLFormElement>('#post-form');
   const imageInput = deps.root.querySelector<HTMLInputElement>('#image');
@@ -96,6 +125,9 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
       .call(CREATE_POST, post)
       .then((result) => {
         const record = (result ?? {}) as Record<string, unknown>;
+        // **成功したときだけ下書きを捨てる。** 残すと次に開いたときに復活する。
+        // 失敗時は消さない（書き直せなければならない）。
+        if (store !== undefined) clearDraft(store);
         editor.setStatus(
           `公開しました: ${String(record['commitSha'] ?? '')} ${String(record['path'] ?? '')}`,
           'ok',
