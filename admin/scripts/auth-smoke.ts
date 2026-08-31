@@ -69,6 +69,43 @@ const hasAwsCredentials = (): boolean => {
 /** リダイレクトを追わない GET。3xx をそのまま観測する。 */
 const head = async (url: string): Promise<Response> => fetch(url, { redirect: 'manual' });
 
+/**
+ * 実配信の `content-security-policy` ヘッダを取り、最低限の健全性まで見る。
+ *
+ * **ヘッダが無ければ「まだデプロイしていない」。** 実測でデプロイ前の配信は
+ * セキュリティヘッダを 1 つも返さないので、`cdk deploy` の前にここが落ちるのは正しい。
+ */
+const cspOf = async (url: string): Promise<string> => {
+  const response = await fetch(url, { redirect: 'manual' });
+  const header = response.headers.get('content-security-policy');
+  if (header === null) {
+    throw new Error(
+      `content-security-policy が返っていない（${response.status}）。` +
+        '**CSP をまだデプロイしていない可能性が高い**（npx -w infra cdk deploy BlogSiteStack）',
+    );
+  }
+  // **script-src だけをディレクティブ名で厳密に引く。** 素朴な部分一致は
+  // style-src 側の 'unsafe-inline' に当たって誤検出する。
+  const scriptSrc = directiveOf(header, 'script-src');
+  if (scriptSrc.includes("'unsafe-inline'")) {
+    throw new Error(`script-src に 'unsafe-inline' が入っている: ${scriptSrc.join(' ')}`);
+  }
+  if (scriptSrc.includes("'unsafe-eval'")) {
+    throw new Error(`script-src に 'unsafe-eval' が入っている: ${scriptSrc.join(' ')}`);
+  }
+  return header;
+};
+
+/** ディレクティブ名の完全一致で値を取る（`script-src-attr` を巻き込まない）。 */
+const directiveOf = (csp: string, name: string): string[] => {
+  const found = csp
+    .split(';')
+    .map((part) => part.trim().split(/\s+/).filter((token) => token.length > 0))
+    .find((tokens) => tokens[0] === name);
+  if (found === undefined) throw new Error(`${name} が CSP に無い: ${csp}`);
+  return found.slice(1);
+};
+
 const authorizeUrl = (challengeMethod: string): string => {
   const url = new URL(`${AUTH_CONFIG.loginDomain}${AUTHORIZE_PATH}`);
   url.search = new URLSearchParams({
@@ -251,6 +288,61 @@ const checks: Check[] = [
       equal('status', body.status, 'ok');
       equal('authMode', body.authMode, 'cognito');
       return 'status=ok authMode=cognito';
+    },
+  },
+
+  // ---- ここから下は **CSP をデプロイしたあとに緑になる** ----
+  //
+  // テンプレートのアサーション（infra/test/distribution-response-headers.test.ts）は
+  // 「ポリシーが正しいこと」しか言えない。**実際に届いていること**はここでしか見られない。
+  // 実測で、デプロイ前の配信は CSP / HSTS / nosniff を 1 つも返していない。
+  {
+    name: '[要デプロイ] GET /admin/ が Content-Security-Policy を返す',
+    run: async () => {
+      const csp = await cspOf(`${ORIGIN}/admin/`);
+      return `script-src に unsafe-inline なし / 長さ ${csp.length}`;
+    },
+  },
+  {
+    name: '[要デプロイ] サイトのルート / にも同じヘッダが付く',
+    run: async () => {
+      // admin もサイトもデフォルトビヘイビア経由なので、同じポリシーが付く。
+      const csp = await cspOf(`${ORIGIN}/`);
+      return `長さ ${csp.length}`;
+    },
+  },
+  {
+    name: '[要デプロイ] **connect-src に認可サーバのドメインが入っている**',
+    run: async () => {
+      // 入っていなければログインは動かない（token 交換がブロックされる）。
+      const values = directiveOf(await cspOf(`${ORIGIN}/admin/`), 'connect-src');
+      if (!values.includes(AUTH_CONFIG.loginDomain)) {
+        throw new Error(`connect-src に ${AUTH_CONFIG.loginDomain} が無い: ${values.join(' ')}`);
+      }
+      const s3 = values.filter((value) => /\.s3\.[a-z0-9-]+\.amazonaws\.com$/.test(value));
+      if (s3.length === 0) throw new Error(`connect-src に S3 の regional domain が無い`);
+      return `${AUTH_CONFIG.loginDomain} と ${s3[0] ?? ''} を許可`;
+    },
+  },
+  {
+    name: "[要デプロイ] **script-src に 'wasm-unsafe-eval' がある**（shiki が動く）",
+    run: async () => {
+      const values = directiveOf(await cspOf(`${ORIGIN}/admin/`), 'script-src');
+      if (!values.includes("'wasm-unsafe-eval'")) {
+        throw new Error(`script-src に 'wasm-unsafe-eval' が無い: ${values.join(' ')}`);
+      }
+      return values.join(' ');
+    },
+  },
+  {
+    name: '[要デプロイ] **/api/health には CSP を付けていない**（意図しない結線の検出）',
+    run: async () => {
+      const response = await fetch(`${ORIGIN}/api/health`);
+      const header = response.headers.get('content-security-policy');
+      if (header !== null) {
+        throw new Error(`/api/* に CSP が付いている（付けない設計）: ${header}`);
+      }
+      return 'ヘッダ無し（設計どおり）';
     },
   },
 ];

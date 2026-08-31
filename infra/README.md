@@ -278,6 +278,21 @@ W3005 'PostingApiExecutionRoleC51CD7D8' dependency already enforced by a 'GetAtt
 - メディアバケットの `CorsConfiguration`（S3 の 5 ルールは **CORS の有無と無関係に**発火するため、
   CORS を足しても件数もルール ID も変わらない）
 
+**Phase 5 時点の実測（2026-08-31）: 6 件のまま、ルール ID も件数も完全に同一。
+Phase 5 が新しく増やした指摘は 0 件。**
+
+cfn-lint も変化なし（`BlogSiteStack` は error 0 / warning 1 / info 0。warning は既知の
+`W3005`、`PostingApiFunctionEFE83FA3` の冗長な `DependsOn`。`BlogCicdStack` は 0/0/0）。
+
+**Phase 5 で追加して 1 件も指摘を生まなかったリソース:**
+
+- `AWS::CloudFront::ResponseHeadersPolicy`（CSP / X-Content-Type-Options / Referrer-Policy）
+- `defaultBehavior` と `/media/*` の `ResponseHeadersPolicyId`
+
+**cfn-guard の出力は 6 件すべて `resource: "Unknown"` を返す。** ルール単位で集約するため、
+どのバケットが該当したかは機械的には分からない。`SiteBucket` と `MediaBucket` の
+どちらが原因かはルールごとの判断（上のバケット単位トリアージ表）を参照すること。
+
 **Phase 2 が新しく増やした指摘はゼロ。** 6 件は Phase 1 と同一で、ルール ID も同じ。
 IAM ロール・IAM ポリシー・OIDC プロバイダ・CloudFront の追加ビヘイビア・`CustomErrorResponses` の
 いずれに対しても指摘は出なかった。
@@ -314,6 +329,132 @@ IAM ロール・IAM ポリシー・OIDC プロバイダ・CloudFront の追加�
 | `S3_BUCKET_DEFAULT_LOCK_ENABLED` | **意図的に見送り** | **意図的に見送り** | 配信用は毎デプロイ `sync --delete` で作り直す成果物で、オブジェクトロックは上書き・削除と正面から衝突する。メディアは誤削除対策をバージョニングで足りると判断した（オブジェクトロックは一度有効にすると解除できず、運用の自由度を大きく損なう） |
 | `S3_BUCKET_REPLICATION_ENABLED` | **意図的に見送り** | **意図的に見送り（後続フェーズで再検討の余地）** | 配信用は Git から再生成可能なので費用しか生まない。メディアは再生成できないぶん価値はゼロではないが、個人ブログの規模ではバージョニング + `Retain` で足りると判断した |
 | `S3_BUCKET_LOGGING_ENABLED` | **意図的に見送り（後続フェーズで再検討）** | **意図的に見送り（後続フェーズで再検討）** | S3 サーバアクセスログには第 3 のバケットが要り、そのバケット自体が新たな違反を生む（実測で 6 件 → 8 件に増える）。必要になった時点で CloudFront 標準ログとあわせて運用フェーズで設計する |
+
+## セキュリティヘッダ / CSP（Phase 5）
+
+`AWS::CloudFront::ResponseHeadersPolicy` を **1 個**作り、**デフォルトビヘイビアと
+`/media/*` の 2 つ**に付けている。`/api/*` には**付けない**（JSON 応答に CSP は効かず、
+あのビヘイビアは OAC の署名条件で繊細に調整されている）。
+
+**`/admin/*` 専用のビヘイビアは新設していない。** admin はデフォルトビヘイビアで
+配信されているので、サイトと admin で 1 つのポリシーを共有すれば足りる。新設すると
+`distribution-behavior.test.ts` と `distribution-media-behavior.test.ts` の
+ビヘイビア件数・順序のアサーションを書き換えることになる。
+
+ポリシー本文は `infra/lib/response-headers.ts` の `buildCsp()` が組み立てる。
+**このファイルは依存ゼロの純粋モジュール**で、`admin/test/unit/csp-contract.test.ts` が
+同じ関数を import して「admin が実際に通信する先を許可し漏れていないか」を突き合わせている
+（`import` 文が 1 つも無いことを infra 側のテストが固定している）。
+
+```
+Content-Security-Policy:
+  default-src 'self'; base-uri 'self'; object-src 'none'; frame-src 'none';
+  frame-ancestors 'none'; form-action 'self'; img-src 'self'; font-src 'self';
+  style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval';
+  script-src-attr 'none';
+  connect-src 'self' <Cognito の Managed Login ドメイン> <メディアバケットの regional domain>
+```
+
+`connect-src` の 2 つのホストは**構成要素から導出している**（`UserPoolDomain` の `Ref` と
+`bucketRegionalDomainName` の `Fn::GetAtt`）。**物理名は書いていない**（AGENTS.md）。
+
+同時に `X-Content-Type-Options: nosniff` / `Referrer-Policy: same-origin` /
+`X-Frame-Options: DENY` / `Strict-Transport-Security` も出す。
+**Phase 5 より前の実配信は、これらを 1 つも返していなかった**（実測）。
+
+### なぜ CSP なのか（サニタイズしない理由）
+
+admin のプレビューには**実在する XSS 経路**がある。実測で、実パイプラインは Markdown 中の
+生 HTML をそのまま通し（`<img src=x onerror=...>` / `<a href="javascript:...">` /
+`<svg onload=...>` が出力に残る）、`admin/src/editor/bind.ts` がそれを `innerHTML` に入れる。
+
+**それでもサニタイズは採らない。**
+
+- パイプラインで消毒すると `admin/test/parity/published-html.test.ts` の**バイト一致が壊れる。**
+- `bind.ts` の境界だけで消毒すると「プレビューは安全・公開ページは危険」という**乖離**が生まれ、
+  プレビューが本番を再現しなくなる（プレビューの存在理由と衝突する）。
+
+**CSP はレスポンスヘッダなので、3 つの一致証明のどれにも触れない。**
+
+### `script-src` に `'unsafe-inline'` を入れない（ここが心臓部）
+
+インラインイベントハンドラ（`onerror` / `onload`）も `javascript:` URL も、
+`script-src` に `'unsafe-inline'` が無ければ動かない。`script-src-attr 'none'` で
+**二重化**している（`script-src` へのフォールバックに頼らない）。
+
+`admin/test/build/output.test.ts` が admin/dist と site/dist の両方について
+**インライン `<script>` 0 件・インラインイベントハンドラ属性 0 件・`javascript:` 0 件**を
+固定しているので、**この厳格さは既存の何も壊さない。**
+
+**テストの書き方に注意。** 素朴な `not.toContain("'unsafe-inline'")` は
+**`style-src` 側の `'unsafe-inline'` に当たって誤検出する。** `;` で分割し、
+**ディレクティブ名の完全一致**で引くこと（`script-src` を探して `script-src-attr` を
+巻き込まないこと）。この落とし穴自体もテストにしてある。
+
+### `'wasm-unsafe-eval'` を消さないこと
+
+admin のバンドルは **shiki** の oniguruma **WebAssembly** を base64 で JS チャンクに埋め込み
+（実測 622,325 B）、`atob` してから `WebAssembly.instantiate` をバッファに対して呼ぶ。
+**`'wasm-unsafe-eval'` が無いと WebAssembly はブロックされ、プレビューのシンタックス
+ハイライトだけが静かに壊れる**（プレビューと公開ページの見た目が食い違う）。
+
+**`'unsafe-eval'` と取り違えないこと。** 前者は WebAssembly だけを許し JS の `eval()` は
+許さないので XSS 防御は損なわれないが、後者は `eval()` を開けてしまい防御が崩れる。
+
+### `style-src` の `'unsafe-inline'` は外せない
+
+実測で site/dist にはインライン `<style>` が **10 個**あり（Astro のスコープ付きスタイル）、
+shiki はトークンごとに `style="color:#..."` 属性を吐く。厳格な `style-src 'self'` は
+**両方を壊す。** インラインスタイルはスクリプトを実行しないので、`script-src` の厳格さと
+引き換えにはならない。送出口は `img-src 'self'` と `connect-src` の限定で塞がっており、
+`'unsafe-inline'` は外部 URL を許可しないので `@import url(https://evil/...)` も弾かれる。
+
+**site が `<style>` を吐く限りこのフェーズでは外せない。** `output.test.ts` が
+「インライン `<style>` が実在すること」も主張しているので、**外せる状態になったら気づける。**
+
+### `<meta http-equiv>` では配らない
+
+**`frame-ancestors` は `<meta>` では無視される**（CSP 仕様が `report-uri` / `frame-ancestors` /
+`sandbox` を meta で無効と明記している）。クリックジャッキング対策を落としたくないので
+**ヘッダ一択**。加えて meta は HTML 応答にしか乗らず、パース位置より前のリソースには効かない。
+**2 箇所で二重管理するとドリフトするので併用もしない。**
+
+### HSTS に `includeSubDomains` と `preload` を付けない
+
+`max-age` は 1 年（31536000）だが、**`includeSubDomains` も `preload` も付けない。**
+`*.cloudfront.net` は**他人と共有するドメイン**なので、サブドメイン全体に HSTS を
+宣言するのは「自分のものでないホストに対する宣言」になる。preload リストへの登録は
+取り消しが難しく、共有ドメインでは特に不可逆な副作用が大きい。
+
+**独自ドメインに移ったら、この 2 つを付けるかどうかを改めて決めること**
+（そのときは自分のドメインなので付けてよい）。
+
+### CSP の効果はこの環境で観測できない
+
+実測で **jsdom は CSP を一切強制しない**（`script-src-attr 'none'` を与えた場合と
+与えない場合で `<div onclick>` の発火は**どちらも 1 回**で同一。`<img onerror>` が
+どちらも 0 回なのは **jsdom が画像を取りに行かないだけ**で CSP のおかげではない）。
+**「CSP が onerror を止めた」という緑のテストは原理的に書けず、書けば嘘になる。**
+
+検証は 3 層に分けてある。
+
+| 層 | 何を言えるか | どこ |
+| --- | --- | --- |
+| テンプレート | ポリシー文字列とビヘイビアへの結線が正しい | `infra/test/distribution-response-headers.test.ts` |
+| 整合 | アプリが必要とするものを許可し漏れていない | `admin/test/unit/csp-contract.test.ts` |
+| 実配信 | ヘッダが実際に届いている | `npm run -w admin auth-smoke` |
+
+**残る「ブラウザが本当にスクリプトを止めたか」は手動確認に送る**（DEVELOPERS.md）。
+
+### デプロイ順序
+
+**CSP は admin より先か同時に出すこと。** トークンをブラウザに置く変更（Phase 5 の admin）が、
+緩和の無い状態で先行してはならない。CSP は `cdk deploy`、admin は `aws s3 sync` で
+**経路が別**なので片方だけ先に出せてしまう。
+
+CSP は既存のサイトを壊さない（実測: site/dist はインライン `<script>` 0 件・
+インラインイベントハンドラ 0 件・外部スクリプト参照 0 件）ので、**admin より先に出しても
+副作用が無い。**
 
 ## デプロイ手順（Phase 4）
 
