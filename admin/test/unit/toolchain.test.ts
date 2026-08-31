@@ -264,9 +264,24 @@ describe('admin/tsconfig.json', () => {
   });
 
   it('compilerOptions.types が ["node"] に限定されている', () => {
-    // 限定しないと tsc がルート node_modules/@types を暗黙に全部拾う。
-    // api / infra と同じ形。**@types/node を admin では宣言しない**のも同じ理由で、
-    // 2 本入ると types:["node"] が重複定義で落ちる。
+    // **設定は変えていないが、理由は TS 7 で変わった。この 1 行は今や空振りである。**
+    //
+    // 5.9.3 では「ルート node_modules/@types を暗黙に全部拾わせない柵」だった。
+    // **TS 7 は types の既定を [] にしたので、柵として守る対象がもう無い。**
+    // 7.0.2 実測で、types を消してもエラー 0 件・`tsc --listFiles` の出力も一致する。
+    // 消さないのは 5.x へ戻す道を塞がないため（後退先の 6.0.3 / 5.9.3 では本当に効く）。
+    // 測定の全文は infra/test/toolchain.test.ts の同名テストにある。
+    //
+    // **型検査はもうこの値を見ていない**（変異で確認済み: ["node","chai"] に広げても
+    // tsc は rc=0 のまま。赤くなるのは 3 ワークスペースのこのテストだけ）。
+    // **「緑だから守られている」ではなく「テストだけが見ている」と読むこと。**
+    //
+    // なお **@types/node を admin では宣言しない**（ルートの 1 本を使う）。
+    // 2 本入ると types:["node"] が重複定義で落ちる。この制約は TS 7 でも変わらない。
+    //
+    // **`types` に `vite/client` を足して `*.css` を解決する誘惑がここに来る。**
+    // 採らない。その解法はこのアサーションを緩めることを要求する。`*.css` は
+    // `src/assets.d.ts` の ambient 宣言で解決してある（同ファイルに理由を書いた）。
     expect(adminTsConfig().compilerOptions?.['types']).toEqual(['node']);
   });
 
@@ -279,6 +294,15 @@ describe('admin/tsconfig.json', () => {
   it('skipLibCheck が true（astro の .d.ts を admin の型検査に持ち込まないため）', () => {
     // api/tsconfig.json と同じ理由。contract テストが site の postSchema を
     // 実物で import する結果、astro / shiki / unstorage の .d.ts が引きずり込まれる。
+    //
+    // # **types と違い、これは空振りではない**（TS 7.0.2 で再測定した）
+    //
+    // admin から skipLibCheck を外すと **29 件**（api は 124 件）。内訳は
+    // TS2307 20 / TS2304 6 / TS2305 2 / TS2503 1。次に疑われたときの基準線として残す。
+    //
+    // うち TS2305 の 2 件は TS 7 に固有で、`astro/dist/core/config/tsconfig.d.ts` が
+    // `Module '"typescript"' has no exported member 'CompilerOptions'` になる
+    // （**TS 7 が JS コンパイラ API を落とした**ことが astro の .d.ts に現れたもの）。
     expect(adminTsConfig().compilerOptions?.['skipLibCheck']).toBe(true);
   });
 });

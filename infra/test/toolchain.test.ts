@@ -144,9 +144,48 @@ describe('infra/package.json の pretest', () => {
 
 describe('infra/tsconfig.json の型ライブラリ', () => {
   it('compilerOptions.types が ["node"] に限定されている', () => {
-    // 限定しないと tsc がルート node_modules/@types を暗黙に全部 type library として
-    // 拾う。site ワークスペース由来の壊れた @types が混ざると infra の型検査が
-    // 「error TS2688: Cannot find type definition file for 'sax'」で落ちる。
+    // **設定は変えていないが、理由は TS 7 で変わった。この 1 行は今や空振りである。**
+    // 3 ワークスペースで同じ話なので、実測の全文はここにだけ書く（api / admin は要約）。
+    //
+    // # 5.9.3 のとき何をしていたか — 「他所の @types を入れない柵」
+    //
+    // types を省略すると tsc がルートの node_modules/@types を **暗黙に全部** type
+    // library として読んだ。実測（5.9.3・types 省略）で @types 13 パッケージ / 139 ファイルが
+    // プログラムに入る: aws-lambda, chai, debug, deep-eql, estree, estree-jsx, hast,
+    // mdast, ms, nlcst, node, sax, unist。site 由来の壊れた @types が混ざると infra が
+    // 「error TS2688: Cannot find type definition file for 'sax'」で落ちた。
+    // （**@types/sax が空だった問題は上流で解消済み。** 現在 1.2.7 の index.d.ts は 3921 バイト。
+    //   歴史的な経緯としてだけ残す）
+    //
+    // # TS 7 で何が変わったか — **types の既定が [] になった**
+    //
+    // 暗黙の全部読み込みが無くなった。**柵として守る対象がもう存在しない。**
+    // 7.0.2 での実測:
+    //
+    //   - types を消しても api / infra / admin ともエラー 0 件・rc=0
+    //   - `tsc --listFiles` の出力が types の有無で **完全に一致する**
+    //   - `process` / `Buffer` を裸で書いても types 無しで通る。@types/node は
+    //     `node:*` の import 経由で既にプログラムへ入っており、その global 宣言が
+    //     そのまま見えるため。**types フィールドは関与していない**
+    //
+    // 最小再現では今も効く: `node:*` を 1 つも import しないプロジェクトで
+    // `process.version` を書くと、types 省略の 7.0.2 は
+    // `error TS2591: Cannot find name 'process'` になり、types:["node"] を足すと通る
+    // （5.9.3 は types 省略でも通る）。**このリポジトリはその条件に当たらない。**
+    //
+    // # それでも消さない理由
+    //
+    // 1. **5.x へ戻す道を塞がないため。** 移行が問題を起こしたときの後退先は 6.0.3 か
+    //    5.9.3 で、そこでは柵として本当に効く。今消すと、戻した日に @types/sax 系の
+    //    事故が黙って復活する
+    // 2. node を対象にしているという明示的な宣言としては正しく、コストが無い
+    //
+    // # このアサーションが実際に守っているもの（正直に書く）
+    //
+    // **型検査はもうこの値を見ていない。** 変異で確認済み: types を ["node","chai"] に
+    // 広げても `tsc --noEmit` は rc=0 のままで、赤くなったのは api / infra / admin の
+    // **このテスト 3 本だけ**だった。つまり現在この行のドリフトを検出できるのは
+    // テストだけである。**「緑だから守られている」ではなく「テストだけが見ている」と読むこと。**
     expect(readJson<TsConfig>('../tsconfig.json').compilerOptions?.['types']).toEqual(['node']);
   });
 });

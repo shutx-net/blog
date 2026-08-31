@@ -229,8 +229,23 @@ describe('api/package.json のかたち', () => {
 
 describe('api/tsconfig.json', () => {
   it('compilerOptions.types が ["node"] に限定されている', () => {
-    // 限定しないと tsc がルート node_modules/@types を暗黙に全部 type library として
-    // 拾い、他ワークスペース由来の壊れた @types で型検査が落ちる（infra と同じ理由）。
+    // **設定は変えていないが、理由は TS 7 で変わった。この 1 行は今や空振りである。**
+    //
+    // 5.9.3 では「ルート node_modules/@types を暗黙に全部読ませない柵」だった
+    // （実測: types 省略で @types 13 パッケージ / 139 ファイルが入る）。**TS 7 は
+    // types の既定を [] にしたので、柵として守る対象がもう無い。** 7.0.2 実測で、
+    // types を消してもエラー 0 件・`tsc --listFiles` の出力も完全に一致する。
+    // `process` を裸で書いても通る（@types/node は `node:*` の import 経由で既に
+    // プログラムに入っており、types フィールドは関与していない）。
+    //
+    // 消さないのは **5.x へ戻す道を塞がないため**。後退先の 6.0.3 / 5.9.3 では
+    // 柵として本当に効くので、今消すと戻した日に事故が黙って復活する。
+    // 測定の全文と最小再現は infra/test/toolchain.test.ts の同名テストにある。
+    //
+    // **型検査はもうこの値を見ていない**（変異で確認済み: ["node","chai"] に広げても
+    // tsc は rc=0 のまま。赤くなるのは 3 ワークスペースのこのテストだけ）。
+    // **「緑だから守られている」ではなく「テストだけが見ている」と読むこと。**
+    //
     // **@types/aws-lambda はこの設定の影響を受けない** — types が制御するのは
     // 「グローバルとして自動で読み込む @types」だけで、明示的な
     // `import type { ... } from 'aws-lambda'` は通常のモジュール解決で解決される。
@@ -248,7 +263,20 @@ describe('api/tsconfig.json', () => {
     // test/contract/frontmatter-schema.test.ts が site の postSchema を実物で import
     // する結果、astro / shiki / unstorage の .d.ts が api の tsc に引きずり込まれる。
     // それらは DOM lib と省略可能な peer 依存を前提に書かれており、api の
-    // lib:["ES2023"] / types:["node"] では 130 件超のエラーになる（実測）。
+    // lib:["ES2023"] / types:["node"] ではエラーの山になる。
+    //
+    // # **types と違い、これは空振りではない**（TS 7.0.2 で再測定した）
+    //
+    // api から skipLibCheck を外すと **124 件**（admin は 29 件）。内訳は
+    // TS2304 56 / TS2307 48 / TS2694 8 / TS2749 5 / TS2552 3 / TS2305 2 で、
+    // 出どころは astro 59・unstorage の各ドライバ・@shikijs/*。
+    // **次に疑われたときに再測定せずに済むよう数字を残す。**
+    //
+    // うち TS2305 の 2 件は TS 7 に固有で、`astro/dist/core/config/tsconfig.d.ts` が
+    // `Module '"typescript"' has no exported member 'CompilerOptions' / 'TypeAcquisition'`
+    // になる。**TS 7 が JS コンパイラ API を落とした**ことが astro の .d.ts に現れたもので、
+    // skipLibCheck がこれも隠している。このリポジトリ自身は typescript を tsc CLI として
+    // しか使っていないので実害は無いが、astro を上げたときに再発しうる。
     //
     // **lib に "DOM" を足して解決してはいけない。** api は Lambda のコードで、
     // window や HTMLElement が型として見えてよい理由が無い。skipLibCheck が
