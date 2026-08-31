@@ -135,6 +135,31 @@ export class AdminAuth extends Construct {
       refreshTokenValidity: Duration.days(1),
     });
 
+    // **ManagedLoginVersion 2 のドメインは、これが無いとログイン画面が出ない。**
+    //
+    // 実測（2026-08-31）: ブランディング未作成の状態で /oauth2/authorize を踏むと
+    // **403 と "Login pages unavailable. Please contact an administrator."** が返る。
+    // ユーザも OAuth 設定も正しいのに、画面そのものが存在しない状態になる。
+    //
+    // AWS のドキュメントが原因を明記している:
+    //
+    // > A ManagedLoginVersion value of 2 does not activate managed login pages for your
+    // > app client. When you create an app client programmatically, your app client has
+    // > no branding style. ... **When you use the console, Amazon Cognito assigns a
+    // > default branding style automatically. When you use the API or an SDK, you must
+    // > create a branding style yourself.**
+    //
+    // **コンソールで作れば付いていたものが、CDK で作ったので付かなかった。**
+    // 「マネコンなら動くのに IaC だと動かない」という、原因の見えにくい差である。
+    //
+    // useCognitoProvidedValues: true は Cognito の既定スタイルを使う指定。
+    // 見た目を変えたくなったら settings / assets を足す（2MB 上限あり）。
+    new cognito.CfnManagedLoginBranding(this, 'AdminLoginBranding', {
+      userPoolId: this.userPool.userPoolId,
+      clientId: this.userPoolClient.userPoolClientId,
+      useCognitoProvidedValues: true,
+    });
+
     // ---- 運用者と admin がここから値を拾う（物理値をコードに埋めない） ----
 
     new CfnOutput(this, 'AdminUserPoolId', {
