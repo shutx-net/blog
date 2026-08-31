@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -392,4 +392,63 @@ describe('**認証の知識が src/auth/ の外に漏れていない**', () => {
       expect(detectedIn(rule as SeamRule).filter((file) => file.startsWith(directory))).toEqual([]);
     },
   );
+});
+
+/**
+ * **`main.ts` は組み立てるだけ。**
+ *
+ * ブラウザが無いので `main.ts` 自体は実行して確かめられない。だから
+ * **判断をそこに置かない**、というのが Phase 4 からの方針で、ここではそれを機械化する。
+ * 分岐は `app.ts` 側（DOM テストから駆動できる）に置く。
+ */
+describe('**main.ts に判断を置かない**', () => {
+  const source = (): string => readFileSync(`${SRC_DIR}main.ts`, 'utf8');
+
+  /** コメントと import 文を落とした「実際に走るコード」だけを見る。 */
+  const code = (): string =>
+    source()
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('*') && !line.trim().startsWith('/*'))
+      .filter((line) => !line.trim().startsWith('//'))
+      .join('\n');
+
+  it('main.ts が実在する', () => {
+    expect(existsSync(`${SRC_DIR}main.ts`)).toBe(true);
+  });
+
+  it.each([
+    ['if', /\bif\s*\(/],
+    ['三項演算子・オプショナル連鎖・null 合体', /\?/],
+    ['&&', /&&/],
+  ])('%s が現れない', (_label, pattern) => {
+    expect(pattern.test(code())).toBe(false);
+  });
+
+  it('検出規則そのものが機能する', () => {
+    expect(/\bif\s*\(/.test('if (root === null) throw new Error("x");')).toBe(true);
+    expect(/\?/.test('const a = b ?? c;')).toBe(true);
+    expect(/&&/.test('const a = b && c;')).toBe(true);
+  });
+
+  it('**createCognitoAuthTransport を import している**（繋ぎ忘れの検出）', () => {
+    // これを見ないと「実装したが繋いでいない」で全部緑になる。
+    expect(source()).toContain('createCognitoAuthTransport');
+  });
+
+  it('**createStubAuthTransport を import していない**（差し替えが実際に起きた）', () => {
+    expect(source()).not.toContain('createStubAuthTransport');
+  });
+
+  it.each(['completeCallback', 'beginSignIn', 'signOut', 'createSessionStore'])(
+    '%s を繋いでいる',
+    (name) => {
+      expect(source()).toContain(name);
+    },
+  );
+
+  it('**main.ts だけがブラウザのアドレス情報と履歴 API に触る**', () => {
+    // 遷移と URL の書き換えはここに閉じている。jsdom で検証できない唯一の部分。
+    expect(source()).toMatch(/\blocation\b/);
+    expect(source()).toMatch(/replaceState/);
+  });
 });

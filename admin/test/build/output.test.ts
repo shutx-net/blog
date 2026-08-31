@@ -133,6 +133,50 @@ describe('生成物の衛生', () => {
     expect(DEV_ORIGIN.test('File URL host must be "localhost" or empty')).toBe(false);
   });
 
+  it('**eager チャンクに client_secret の綴りが無い**', () => {
+    // public client なので secret は存在しない。**将来書き込む誤りを
+    // ビルド成果物の側から落とす**（このリポジトリは public である）。
+    const targets = [
+      `${DIST}index.html`,
+      ...referencedUrls(indexHtml()).map((url) => DIST + url.replace(/^\/admin\//, '')),
+    ];
+    expect(targets.length).toBeGreaterThan(1);
+    for (const path of targets) {
+      expect(readFileSync(path, 'utf8'), `${path} に client_secret が入っている`).not.toContain(
+        'client_secret',
+      );
+    }
+  });
+
+  it('**バンドルに Web Storage を触るコードが載っている**', () => {
+    // test/unit/auth-seam.test.ts の走査は「1 ファイルにしか書かれていない」しか
+    // 言わない。**実際にバンドルへ載っていることは別の主張**である。
+    // 載っていなければ、下書きもセッションもリダイレクトを越えられない。
+    const entries = referencedUrls(indexHtml())
+      .filter((url) => url.endsWith('.js'))
+      .map((url) => readFileSync(DIST + url.replace(/^\/admin\//, ''), 'utf8'));
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.some((source) => source.includes('sessionStorage'))).toBe(true);
+  });
+
+  it('**ビルド成果物にインラインイベントハンドラ属性が無い**', () => {
+    // `script-src-attr 'none'` が既存の何も壊さないことの確認。
+    // ここが赤くなったら「CSP がその機能を殺す」の予告になる。
+    const html = indexHtml();
+    const handlers = [...html.matchAll(/\son[a-z]+\s*=\s*["']/gi)].map((match) => match[0]);
+    expect(handlers).toEqual([]);
+  });
+
+  it('インラインイベントハンドラの検出規則そのものが機能する', () => {
+    // 上は「無いこと」の主張なので、規則が壊れていても緑になる。
+    const pattern = /\son[a-z]+\s*=\s*["']/gi;
+    expect(pattern.test('<img src=x onerror="alert(1)">')).toBe(true);
+  });
+
+  it('**javascript: で始まる href / src がビルド成果物に無い**', () => {
+    expect(indexHtml()).not.toMatch(/(?:href|src)\s*=\s*["']\s*javascript:/i);
+  });
+
   it('index.html に noindex が入っている', () => {
     // 認証が入るまで /admin/ の外殻は公開状態で見える。
     // robots.txt への Disallow は site 側への hand-off。

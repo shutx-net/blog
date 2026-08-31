@@ -56,7 +56,7 @@ export interface AppDeps {
  * **キーは `@blog/api` の `AUTH_FAILURE_RESPONSES` の `error` と一致していなければならない。**
  * その突き合わせは `test/contract/auth-failure-messages.test.ts`（node 環境）が行う。
  *
- * **ここで api から import しない。** `@blog/api/src/auth.ts` は `./auth/cognito.ts` 経由で
+ * **ここで api から import しない。** `@blog/api/src/auth.ts` は認可の実装モジュール経由で
  * `aws-jwt-verify` を引き込むので、import するとそれがブラウザのバンドルに入る
  * （ブラウザに配る依存を増やさないという Phase 4 からの判断に反する）。
  * **代わりに、綴りの一致を contract テストが機械的に見ている。**
@@ -117,6 +117,18 @@ const describeCallback = (result: CallbackResult): string | undefined => {
     return `ログインできなかった（${result.error}${detail}）`;
   }
   return `ログインを完了できなかった（${result.reason}）。もう一度ログインすること`;
+};
+
+/**
+ * エディタの根を取り出す。**`main.ts` に条件分岐を書かせないためにここにある。**
+ *
+ * 無ければ投げる（黙って握りつぶさない）。`main.ts` に `if` を書くと、
+ * ブラウザ無しでは実行できない領域に判断が 1 つ増える。
+ */
+export const requireRoot = (doc: ParentNode): HTMLElement => {
+  const root = doc.querySelector<HTMLElement>('#editor');
+  if (root === null) throw new Error('admin: #editor が見つからない');
+  return root;
 };
 
 /**
