@@ -288,3 +288,44 @@ describe('CfnOutput（admin と運用者がここから拾う）', () => {
     expect(value).toContain('https://');
   });
 });
+
+/**
+ * Managed Login のブランディング。
+ *
+ * **これが無いとログイン画面が存在しない。** 実測（2026-08-31）:
+ * ユーザも OAuth 設定も正しいのに `/oauth2/authorize` が 403 と
+ * "Login pages unavailable. Please contact an administrator." を返した。
+ *
+ * AWS のドキュメントが原因を明記している。ManagedLoginVersion 2 のドメインでは
+ * 「コンソールで作れば既定スタイルが自動で付くが、API / SDK で作った場合は
+ * 自分で作らなければならない」。**マネコンなら動くのに IaC だと動かない**という、
+ * 原因の見えにくい差である。
+ */
+describe('Managed Login のブランディング', () => {
+  const brandings = (): Array<{ Properties?: Record<string, unknown> }> =>
+    Object.values(template.findResources('AWS::Cognito::ManagedLoginBranding'));
+
+  it('**ちょうど 1 つ存在する**（無いとログイン画面が出ない）', () => {
+    expect(
+      brandings(),
+      'ManagedLoginBranding が無いと /oauth2/authorize が ' +
+        '"Login pages unavailable" を返す。ドメインが ManagedLoginVersion 2 のため',
+    ).toHaveLength(1);
+  });
+
+  it('このプールとこのクライアントに紐づいている', () => {
+    const props = brandings()[0]?.Properties ?? {};
+    // 別プール・別クライアントに付けても、このクライアントのログインは直らない。
+    expect(JSON.stringify(props.UserPoolId)).toContain('UserPool');
+    expect(JSON.stringify(props.ClientId)).toContain('AdminClient');
+  });
+
+  it('既定スタイルを使う（settings / assets を持ち込まない）', () => {
+    const props = brandings()[0]?.Properties ?? {};
+    expect(props.UseCognitoProvidedValues).toBe(true);
+    // 見た目を作り込むなら settings/assets を足すが、今は要件が無い。
+    // 持ち込むと 2MB 上限とテンプレートの肥大を抱えることになる。
+    expect(props.Settings).toBeUndefined();
+    expect(props.Assets).toBeUndefined();
+  });
+});
