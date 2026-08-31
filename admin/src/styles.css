@@ -130,3 +130,17 @@ button[disabled] {
   padding: 0.75rem;
   border-radius: 4px;
 }
+
+/*
+ * ログイン / サインアウト。**フォームの外**に置いてある（index.html のコメント）。
+ * `hidden` 属性で出し分けるので、表示の制御に JavaScript のスタイル操作は要らない。
+ */
+.auth-bar {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: var(--gap);
+}
+
+.auth-bar button[hidden] {
+  display: none;
+}

@@ -11,6 +11,18 @@
     <main id="editor">
       <h1>記事を書く</h1>
 
+      <!--
+        ログインは**明示的な操作**。起動時に自動でリダイレクトしない
+        （設定ミスでループする・未認証状態が観測できなくなる・開いただけで書きかけが飛ぶ）。
+        **フォームの外に置く。** type="button" でも <form> 内にあると Enter の挙動が紛らわしい。
+        **インライン <script> を足さないこと** — test/build/output.test.ts が 0 件を固定しており、
+        CSP（script-src に 'unsafe-inline' を入れない）を成立させるための invariant である。
+      -->
+      <div class="auth-bar">
+        <button id="signin" type="button">ログイン</button>
+        <button id="signout" type="button" hidden>サインアウト</button>
+      </div>
+
       <form id="post-form" autocomplete="off">
         <div class="field">
           <label for="slug">slug</label>
