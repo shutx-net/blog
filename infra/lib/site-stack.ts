@@ -9,6 +9,7 @@ import type { Construct } from 'constructs';
 import { AdminAuth } from './admin-auth.ts';
 import { MediaBucket } from './media-bucket.ts';
 import { PostingApi } from './posting-api.ts';
+import { HSTS_MAX_AGE_SECONDS, REFERRER_POLICY, buildCsp } from './response-headers.ts';
 
 // cdk synth がどこから実行されるか分からないので、cwd 基準の相対パスにしない。
 // "type": "module" なので __dirname は存在しない。
@@ -158,6 +159,46 @@ export class SiteStack extends Stack {
       githubAppClientId: 'not-configured',
     });
 
+    // セキュリティヘッダ。**Phase 5 で新設**（実測で、それまでの実配信は
+    // CSP / HSTS / nosniff を 1 つも返していなかった）。
+    //
+    // **サイトと admin で 1 つのポリシーを共有する。** admin はデフォルトビヘイビアで
+    // 配信されているので、`/admin/*` 専用のビヘイビアを新設しなくてよい
+    // （新設すると distribution-behavior.test.ts と distribution-media-behavior.test.ts の
+    // ビヘイビア件数・順序のアサーションを書き換えることになる）。
+    //
+    // **ホストは construct から導出する。** 物理名を書くと、片方だけ変わったときに
+    // 「ログインだけ動かない」「画像だけ上がらない」という最も分かりにくい壊れ方をする。
+    const responseHeaders = new cloudfront.ResponseHeadersPolicy(this, 'SecurityHeaders', {
+      responseHeadersPolicyName: `${Stack.of(this).stackName}-security-headers`,
+      comment: 'CSP ほか。admin のプレビューに実在する XSS 経路の緩和（Phase 5）',
+      securityHeadersBehavior: {
+        contentSecurityPolicy: {
+          contentSecurityPolicy: buildCsp({
+            cognitoOrigin: adminAuth.domain.baseUrl(),
+            mediaOrigin: `https://${this.mediaBucket.bucketRegionalDomainName}`,
+          }),
+          override: true,
+        },
+        contentTypeOptions: { override: true },
+        referrerPolicy: {
+          referrerPolicy: REFERRER_POLICY as cloudfront.HeadersReferrerPolicy,
+          override: true,
+        },
+        // frame-ancestors の二重化。古いブラウザ向け。
+        frameOptions: { frameOption: cloudfront.HeadersFrameOption.DENY, override: true },
+        // **includeSubdomains も preload も付けない。**
+        // *.cloudfront.net は他人と共有するドメインなので、サブドメイン全体に
+        // HSTS を宣言するのは自分のものでないホストに対する宣言になる。
+        strictTransportSecurity: {
+          accessControlMaxAge: Duration.seconds(HSTS_MAX_AGE_SECONDS),
+          includeSubdomains: false,
+          preload: false,
+          override: true,
+        },
+      },
+    });
+
     // runtime を省略すると既定は JS_1_0。1.0 は const / let / endsWith を保証しないので
     // 必ず 2.0 を明示する。ここが消えるとテンプレートは通るのにデプロイ後に壊れる。
     const rewriteUriFunction = new cloudfront.Function(this, 'RewriteUriFunction', {
@@ -175,6 +216,8 @@ export class SiteStack extends Stack {
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(siteBucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        // **admin もここから配信される**（/admin/* 専用のビヘイビアは無い）。
+        responseHeadersPolicy: responseHeaders,
         functionAssociations: [
           {
             function: rewriteUriFunction,
@@ -198,6 +241,10 @@ export class SiteStack extends Stack {
         [MEDIA_PATH_PATTERN]: {
           origin: origins.S3BucketOrigin.withOriginAccessControl(this.mediaBucket),
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          // **メディアにも付ける。** SVG は許可していない（api の
+          // ALLOWED_CONTENT_TYPES に image/svg+xml は無い）が、入口の制限と
+          // 二重化しておく。
+          responseHeadersPolicy: responseHeaders,
         },
         // 投稿 API。**/media/* より後に書く**（上の API_PATH_PATTERN のコメント）。
         [API_PATH_PATTERN]: {

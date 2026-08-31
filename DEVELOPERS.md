@@ -2,9 +2,10 @@
 
 ツールチェーンは Nix flake で固定している。ホストに Node や AWS CLI を入れる必要はない。
 
-> **4 つのワークスペースすべてが動く。** ただし `admin/` は**ログインが未実装**で、
-> エディタとプレビューは使えるが投稿はできない（api は `AUTH_MODE=cognito` なので
-> トークンの無いリクエストに 401 を返す。これは正しい挙動）。
+> **4 つのワークスペースすべてが動く。** `admin/` の**ログインは Phase 5 で実装済み**
+> （Cognito の認可コードフロー + PKCE）。ただし **ユーザプールにユーザを作るのは帯域外の作業**
+> なので、下の「Cognito（管理画面のログイン）」の手順を先に 1 度だけ実行すること。
+> ログインしていない状態でもエディタとプレビューは動く（送信だけができない）。
 
 ## 必要なもの
 
@@ -76,7 +77,7 @@ npm install
 | --- | --- | --- |
 | `site/` | Astro。読者向けの本体 | 有効 |
 | `infra/` | AWS CDK | 有効 |
-| `admin/` | 管理画面（静的 SPA） | 有効。ただしログイン未実装 |
+| `admin/` | 管理画面（静的 SPA） | 有効（**ログイン実装済み**。認可コードフロー + PKCE、トークンは `sessionStorage`） |
 | `api/` | Lambda（投稿 API） | 有効（**`AUTH_MODE=cognito`**。Cognito の ID トークンで認証する） |
 
 ```sh
@@ -265,6 +266,75 @@ curl -s -X POST "$LOGIN/oauth2/token" \
   -d grant_type=authorization_code -d "client_id=$CLIENT_ID" \
   -d "code=$CODE" -d "redirect_uri=https://<distribution-domain>/admin/" | jq -r .id_token
 ```
+
+#### 管理画面からログインする（Phase 5）
+
+`/admin/` を開いて「ログイン」を押すだけ。**起動しただけでは何も起きない**
+（自動リダイレクトはしない）。実装の詳細は `admin/src/auth/` と
+`admin/src/auth/THREAT-MODEL.md` にある。
+
+    ブラウザ -> /oauth2/authorize (PKCE S256 + state) -> Managed Login
+            -> /admin/?code=... -> /oauth2/token で交換 -> sessionStorage
+
+**トークンは `sessionStorage` に置く。** タブを閉じれば消えるので、ブラウザを
+再起動するたびに再ログインが要る。**これは意図した trade-off** であり、
+理由は `admin/src/auth/THREAT-MODEL.md` に書いてある（24 時間有効な refresh トークンを
+ディスクに残さないことを優先している）。変えたくなったらまずそれを読むこと。
+
+設定のドリフト（コンソールから誰かがクライアント設定を変えた等）は smoke で検出できる。
+
+```sh
+npm run -w admin auth-smoke
+```
+
+**AWS 認証情報が無いときは `describe-user-pool-client` の 1 件だけ skip して残りを走らせる**
+（skip したことは必ず出力される）。認証情報を使うときは `aws sso login --profile blog` を先に。
+
+#### ブラウザでしか確かめられないこと（**必ず人間が 1 度やること**）
+
+このリポジトリの flake にブラウザは無く、jsdom では以下が原理的に検証できない。
+**テストが全部緑でもここが壊れている可能性がある。**
+
+1. **`location.assign()` による実リダイレクト。** jsdom は
+   「Not implemented: navigation to another Document」を出して**何もしない**
+   （例外も投げず URL も変わらない）。テストは注入した関数で URL 文字列だけを見ている。
+2. **`crypto.subtle` の secure context 要件。** 本番は https、開発は `http://localhost` で
+   どちらも secure context に入るはずだが、ブラウザでしか確かめられない。
+3. **`sessionStorage` がタブの寿命に紐づき、Cognito への全画面遷移と復帰を越えて保持されること。**
+   **PKCE の verifier と下書きの両方がこの性質に依存している。**
+4. **タブ間の `storage` イベント。** jsdom では発火 0 件（実測）。タブ間同期は scope 外。
+5. **Managed Login（`ManagedLoginVersion: 2`）の実画面。** `ManagedLoginBranding` が
+   未作成で、`/login` の直叩きは 403 とともに既定の HTML を返す（実測）。
+   通常の経路（`/oauth2/authorize` から 302）でどう見えるかは未確認。
+6. **CSP が実際にスクリプトを止めること。** 実測で **jsdom は CSP を一切強制しない**
+   （`script-src-attr 'none'` を与えても `<div onclick>` は発火する）。
+   **「CSP が onerror を止めた」という緑のテストは書けない。**
+
+##### 手順（ユーザを作ったあとに 1 度だけ）
+
+1. `/admin/` を開く。**自動で Cognito に飛ばないこと。**
+2. 何か入力する。
+3. 「ログイン」を押す -> Cognito の画面に飛ぶ。
+4. 戻ってきて **入力が残っていること**（= 上の 3 の確認）。
+5. アドレスバーに `?code=` が残っていないこと。
+6. 投稿できること。
+7. サインアウト -> 再訪で未認証になること。**下書きは消えていないこと。**
+8. devtools のコンソールに **CSP 違反が 1 件も出ていないこと**。
+9. コードフェンス入りの記事で **シンタックスハイライトに色が付くこと**
+   （付かなければ CSP が `'wasm-unsafe-eval'` を落として wasm を止めている）。
+10. **画像アップロードが通ること**（`connect-src` にメディアバケットが入っているか）。
+
+#### ローカル開発ではログインできない
+
+`CallbackURLs` は `https://<distribution-domain>/admin/` の 1 本だけで、
+`http://localhost:5173/admin/` は入っていない。実測で不一致は `redirect_mismatch` になり、
+Cognito 自身の `/error` に飛ぶ（**攻撃者の URL には飛ばない**）。
+
+`npm run -w admin dev` でエディタとプレビューは動くが、**ログインと投稿は試せない。**
+`redirect_uri` はオリジンから導出しているので、infra 側で `callbackUrls` に
+`http://localhost:5173/admin/` を足せば admin は無変更で通る。**ただし public client の
+callback に localhost を足すことは、開発者の端末で動く任意のアプリが `code` を
+受け取れることを意味する**ので、足すかどうかは意識的に決めること。
 
 #### API に付けるヘッダ
 

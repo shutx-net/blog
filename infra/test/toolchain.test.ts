@@ -265,6 +265,44 @@ describe('infra/README.md が実装に追いついている', () => {
     }
   });
 
+  it('**cfn-guard の節に Phase 5 の行が追記されている**', () => {
+    const text = readme();
+    expect(text).toMatch(/Phase 5[^\n]*0 件|0 件[^\n]*Phase 5/);
+    // Phase 5 で追加したリソース種別が列挙されていること。
+    // 「6 件のまま＝ツールが動いていない」と誤解されないための既存の規律。
+    expect(text).toContain('AWS::CloudFront::ResponseHeadersPolicy');
+  });
+
+  it('**CSP の記述があり、script-src に unsafe-inline を入れない理由が書かれている**', () => {
+    const text = readme();
+    expect(text).toContain('Content-Security-Policy');
+    expect(text).toContain("script-src");
+    expect(text).toContain("'unsafe-inline'");
+  });
+
+  it("**'wasm-unsafe-eval' が必要な理由（shiki の wasm）が書かれている**", () => {
+    // これが無いと、次に CSP を締めようとした人が「不要な緩和」だと思って消し、
+    // **プレビューのハイライトだけが静かに壊れる。**
+    const text = readme();
+    expect(text).toContain("'wasm-unsafe-eval'");
+    expect(text).toContain('shiki');
+    expect(text).toContain('WebAssembly');
+  });
+
+  it('**meta では frame-ancestors が無視されることが書かれている**', () => {
+    // 配り方をヘッダにした根拠。次の人が meta に移そうとしたときの歯止め。
+    const text = readme();
+    expect(text).toContain('frame-ancestors');
+    expect(text).toMatch(/meta[^\n]*無視|無視[^\n]*meta/);
+  });
+
+  it('**HSTS に includeSubDomains と preload を付けない理由が書かれている**', () => {
+    const text = readme();
+    expect(text).toContain('includeSubDomains');
+    expect(text).toContain('preload');
+    expect(text).toContain('cloudfront.net');
+  });
+
   it('**cfn-lint の E3004（循環参照）についての記述がある**', () => {
     // メディアバケットの CORS で最も踏みやすい罠。cdk synth は素通しするので、
     // 「cfn-lint を回す理由」が README に書かれていないと次の人が省略する。
