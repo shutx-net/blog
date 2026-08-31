@@ -155,6 +155,30 @@ describe('**CSP の中身（ディレクティブ名で厳密に引く）**', ()
     expect(directive('script-src')).not.toContain("'unsafe-inline'");
   });
 
+  it("**`style-src-attr` を設定しない。** 対称に見えるが、足すと shiki が色を失う", () => {
+    // `script-src-attr 'none'` と並べると「style 側も閉じるべき」に見える。**閉じてはいけない。**
+    //
+    // shiki はコードフェンスを `style="color:#F97583"` のような **属性**で色付けする
+    // （実測: ts のフェンス 1 本で `style=` 属性 8 個、`<style>` ブロック 0 個）。
+    // `style-src-attr` を設定すると `style=` 属性はそちらに支配され、
+    // `style-src` の `'unsafe-inline'` は**届かなくなる**。設定しないことで
+    // `style-src` にフォールバックし、属性が許可される。
+    //
+    // **バイト一致テストはこれを捕まえない。** 公開済み記事にコードフェンスがまだ無いので
+    // `site/dist` の `style=` 属性は 0 個であり、`published-html.test.ts` は素通りする。
+    // admin/test/parity/corpus.test.ts と同じ穴で、こちらは CSP 側の対になる。
+    expect(
+      directives().has('style-src-attr'),
+      "style-src-attr を足すと shiki のシンタックスハイライトが無色になる。" +
+        "script-src-attr 'none' との非対称は意図的である",
+    ).toBe(false);
+  });
+
+  it("`script-src-attr` は 'none' のまま（インラインイベントハンドラを止める本体）", () => {
+    // onerror= / onload= を止めているのはこれ。style 側と違い、ここは閉じる。
+    expect(directive('script-src-attr')).toEqual(["'none'"]);
+  });
+
   it('**素朴な検査では誤検出することの確認**（style-src 側に unsafe-inline がある）', () => {
     // not.toContain("'unsafe-inline'") を CSP 全体に掛けると落ちる。
     // ディレクティブ名で引く必要があることを、テスト自身が示しておく。
