@@ -150,11 +150,34 @@ describe('api の開発依存', () => {
     }
   });
 
-  it('typescript が "5.9.3" で、infra の typescript と一致する', () => {
-    // ワークスペース間でコンパイラをずらさない。7.x は type:module 化と
-    // ネイティブバイナリを伴う別物で、infra が 5.9.3 に固定されている以上ずらす理由がない。
+  it('typescript が "7.0.2" で、infra の typescript と一致する', () => {
+    // ワークスペース間でコンパイラをずらさない。**3 つとも同じ文字列であること**を
+    // api と admin の両側から見ている（片側だけだと 1 つ上げ忘れても緑になる）。
+    //
+    // # なぜ 5.9.3 から 7.0.2 に上げたか
+    //
+    // **据え置くほうが規約違反になるから。** AGENTS.md の不採用条件は
+    // 「12 か月以上リリースが無い」。5.9.3 は **2025-09-30 公開**なので
+    // **2026-09-30 にこの条件へ抵触する**。自分たちで決めた規約に自分たちが
+    // 違反する状態を、期限が来る前に解消したのがこの変更である。
+    //
+    // 7.0.2 は 2026-07-08 公開の Go 移植版（`latest`）。AGENTS.md の 3 条件は実測で
+    // すべて通過している: archived=false（microsoft/TypeScript は 2026-08-31 push、
+    // microsoft/typescript-go も同日 push）、deprecated フィールド無し、
+    // 公開から 54 日。maintainers 7 名、Apache-2.0 で 5.9.3 と同じ。
+    //
+    // **速度は採否の理由ではない**（AGENTS.md は保守を最上位に置く）。副次的な
+    // 実測値として api 4610ms -> 779ms、infra 6822ms -> 396ms、admin 2468ms -> 337ms。
+    //
+    // # 上げるときに実際に効いた差分は 1 行だけだった
+    //
+    // `noUncheckedSideEffectImports` の既定が TS 6.0 で true になり、admin の
+    // `import './styles.css'` が TS2882 で落ちた（`admin/src/assets.d.ts` で解決済み）。
+    // それ以外は api / infra / admin とも無修正で `tsc --noEmit` が exit 0。
+    // **JS コンパイラ API（`import ts from 'typescript'`）は 7.x で落ちたが、
+    // このツリーは typescript を tsc CLI としてしか使っていない**ので影響が無い。
     const apiTs = apiPkg().devDependencies?.['typescript'];
-    expect(apiTs).toBe('5.9.3');
+    expect(apiTs).toBe('7.0.2');
     expect(apiTs).toBe(infraPkg().devDependencies?.['typescript']);
   });
 
