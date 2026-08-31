@@ -446,6 +446,25 @@ shiki はトークンごとに `style="color:#..."` 属性を吐く。厳格な 
 
 **残る「ブラウザが本当にスクリプトを止めたか」は手動確認に送る**（DEVELOPERS.md）。
 
+#### 手動確認の結果（2026-08-31、Edge で実施）
+
+エディタの本文に `<img src=x onerror="alert(1)">` を入力したときのコンソール:
+
+```
+GET https://d8gsxbwzr6ft8.cloudfront.net/admin/x 404 (Not Found)
+Executing inline event handler violates the following Content Security Policy
+directive 'script-src-attr 'none''. ... The action has been blocked.
+```
+
+**アラートは出ない。** 画像の読み込みが失敗して `onerror` の発火が試みられ、CSP が止めている。
+
+**これは jsdom では原理的に観測できない。** テストが「CSP がブロックする」と主張していないのは
+そのためで（jsdom は CSP を強制しない。対照実験で確認済み）、上の 3 層はいずれも
+「ポリシーが正しく届いている」までしか言っていない。**実際に止まることの証拠はこの記録だけである。**
+
+CSP を変更したら、この確認をやり直すこと。特に `script-src` に `'unsafe-inline'` が
+入ると、この防御は無言で消える。
+
 ### デプロイ順序
 
 **CSP は admin より先か同時に出すこと。** トークンをブラウザに置く変更（Phase 5 の admin）が、
