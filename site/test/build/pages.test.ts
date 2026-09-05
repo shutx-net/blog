@@ -6,6 +6,7 @@ import { parseFrontmatter } from "@astrojs/markdown-remark";
 import { describe, expect, it } from "vitest";
 
 import { POSTS_PER_PAGE } from "../../src/lib/posts.ts";
+import { postsDirUrl } from "../../src/posts-dir.ts";
 import { resolveSiteUrl } from "../../src/site-url.ts";
 
 // dist/ is produced once by test/setup/build-site.ts (globalSetup). These tests
@@ -34,14 +35,26 @@ const collectDistFiles = (dir: string, prefix = ""): string[] =>
 // Derived from the fixtures and POSTS_PER_PAGE rather than hard-coded, so that
 // changing the page size or adding a post cannot leave these assertions quietly
 // asserting the wrong shape.
-const postsDir = fileURLToPath(new URL("../../src/content/posts/", import.meta.url));
-const publishedCount = readdirSync(postsDir)
-  .filter((name) => name.endsWith(".md"))
-  .filter((name) => {
-    const { frontmatter } = parseFrontmatter(readFileSync(join(postsDir, name), "utf8"));
-    return frontmatter.draft !== true;
-  }).length;
+// Resolved the same way content.config.ts resolves the glob base, so this counts
+// the corpus the build above actually rendered rather than a second directory
+// that merely used to be the same one.
+const postsDir = fileURLToPath(postsDirUrl(process.env, new URL("../../", import.meta.url)));
+const postFiles = readdirSync(postsDir).filter((name) => name.endsWith(".md"));
+const draftCount = postFiles.filter((name) => {
+  const { frontmatter } = parseFrontmatter(readFileSync(join(postsDir, name), "utf8"));
+  return frontmatter.draft === true;
+}).length;
+const publishedCount = postFiles.length - draftCount;
 const expectedPages = Math.ceil(publishedCount / POSTS_PER_PAGE);
+
+/** The strings the leak scan below hunts for, and where each one comes from. */
+const DRAFT_MARKERS = [
+  // draft-post.md's title, which a listing that forgot isPublished would print.
+  "Draft post",
+  // a tag carried by no published post, so a getStaticPaths that forgot it would
+  // emit a whole /tags/draft-only/ directory.
+  "draft-only",
+];
 
 describe("404 page", () => {
   // Half of the OAC 403 problem: an S3 REST origin behind OAC answers 403, not
@@ -159,12 +172,33 @@ describe("draft leakage", () => {
     expect(distFiles.length).toBeGreaterThan(1);
   });
 
+  // The scan below is the one assertion in this file that goes quietly green
+  // when the corpus empties: filter() over a dist/ that never contained a draft
+  // returns [] and reports success. "has output to scan" does not catch it --
+  // it only requires that pages exist, not that any of them had a draft to
+  // exclude. So the corpus is pinned from the input side, twice.
+  it("has a draft in the corpus to keep out", () => {
+    expect(draftCount, `${postsDir} has no draft; the leak scan below cannot fail`)
+      .toBeGreaterThan(0);
+  });
+
+  // ...and the markers themselves have to still be in the corpus. Renaming
+  // draft-post.md's title or dropping its draft-only tag would leave the scan
+  // running against strings that appear nowhere, which is green for the wrong
+  // reason.
+  it.each(DRAFT_MARKERS)("still has %j somewhere in the corpus", (marker) => {
+    const corpus = postFiles.map((name) => readFileSync(join(postsDir, name), "utf8"));
+
+    expect(corpus.some((raw) => raw.includes(marker))).toBe(true);
+  });
+
   // Written across files rather than per page on purpose. Centralising the draft
   // predicate in src/lib/posts.ts does not stop a page from forgetting to pass it,
   // and this is the only guard that also covers pages that do not exist yet -- it
   // fails naming the offending dist/ file, e.g. ["rss.xml"].
   it("leaves no trace of a draft in any generated file", () => {
-    const leaking = distFiles.filter((file) => /Draft post|draft-only/.test(readDist(file)));
+    const pattern = new RegExp(DRAFT_MARKERS.join("|"));
+    const leaking = distFiles.filter((file) => pattern.test(readDist(file)));
 
     expect(leaking).toEqual([]);
   });

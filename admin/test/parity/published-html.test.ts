@@ -4,10 +4,15 @@ import { parseFrontmatter } from '@astrojs/markdown-remark';
 import { describe, expect, it } from 'vitest';
 
 import { postSchema } from '@blog/site/src/content.config.ts';
+import { postsDirUrl } from '@blog/site/src/posts-dir.ts';
 import { renderPreview } from '../../src/preview/pipeline.ts';
 
-const POSTS_DIR = fileURLToPath(new URL('../../../site/src/content/posts/', import.meta.url));
-const DIST_DIR = fileURLToPath(new URL('../../../site/dist/', import.meta.url));
+// **site の glob base と同じ関数で解決する。** ここが site のビルドと違う
+// ディレクトリを指すと、dist と突き合わせても別の集合を比べることになり、
+// 一致テストが「何も証明していないのに緑」になる。
+const SITE_ROOT = new URL('../../../site/', import.meta.url);
+const POSTS_DIR = fileURLToPath(postsDirUrl(process.env, SITE_ROOT));
+const DIST_DIR = fileURLToPath(new URL('dist/', SITE_ROOT));
 
 interface Post {
   slug: string;
@@ -108,6 +113,29 @@ describe('公開済み HTML と renderPreview のバイト一致', () => {
         `下書き ${draft.slug} が dist に出ている`,
       ).toBe(false);
     }
+  });
+
+  // **corpus → dist だけでなく dist → corpus も見る。**
+  //
+  // 下の $slug テストは「corpus の各記事が dist にある」ことしか言わないので、
+  // dist が別のディレクトリからビルドされていて余分な記事を含んでいても緑になる。
+  // 集合の一致にすれば、読む側とビルド側が同じ corpus を見ていることが片方向に
+  // 崩れた時点で落ちる。
+  //
+  // 現時点ではこの主張は mutation では動かせない — フィクスチャは実記事の
+  // バイト一致コピーで、両者の差は draft の test.md だけ、つまり dist に出る
+  // 集合が同一だから。**記事が blog-content へ移って src/content/posts/ が空に
+  // なった時点で、これが POSTS_DIR の配線ミスを捕まえる唯一の主張になる。**
+  it('dist の記事ページ集合が corpus の公開記事集合と一致する', () => {
+    const postsRoot = `${DIST_DIR}posts/`;
+    const inDist = existsSync(postsRoot)
+      ? readdirSync(postsRoot, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => entry.name)
+          .sort()
+      : [];
+
+    expect(inDist).toEqual(published.map((post) => post.slug).sort());
   });
 
   it('site/dist が存在する', () => {
