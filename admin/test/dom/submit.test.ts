@@ -168,6 +168,40 @@ describe('応答の読み替え', () => {
     expect(root.querySelector('#status')?.getAttribute('data-kind')).toBe('ok');
   });
 
+  it('**deployTriggered:false のとき「デプロイ未起動」を成功と区別して表示する**', async () => {
+    // 記事はコミット済みだが、ワークフローの起動に失敗した状態。
+    // 同じ見た目にすると、利用者はサイトが更新されると信じて待ち続ける。
+    const root = mount();
+    const fetchSpy = queueFetch([
+      json(201, { commitSha: 'abc123', path: 'posts/a-post.md', deployTriggered: false }),
+    ]);
+    start(root, fetchSpy.impl);
+    fillValid(root);
+    submit(root);
+
+    await vi.waitFor(() => {
+      expect(statusText(root)).toContain('abc123');
+    });
+    expect(statusText(root)).toContain('デプロイ');
+    // **成功と同じ見た目にしない。** data-kind=ok は「公開まで通った」の意味で使う。
+    expect(root.querySelector('#status')?.getAttribute('data-kind')).not.toBe('ok');
+  });
+
+  it('deployTriggered:true のときは通常の成功表示', async () => {
+    const root = mount();
+    const fetchSpy = queueFetch([
+      json(201, { commitSha: 'abc123', path: 'posts/a-post.md', deployTriggered: true }),
+    ]);
+    start(root, fetchSpy.impl);
+    fillValid(root);
+    submit(root);
+
+    await vi.waitFor(() => {
+      expect(statusText(root)).toContain('abc123');
+    });
+    expect(root.querySelector('#status')?.getAttribute('data-kind')).toBe('ok');
+  });
+
   it('503 auth_not_configured のとき「認証が未設定」と表示する', async () => {
     const root = mount();
     const fetchSpy = queueFetch([json(503, { error: 'auth_not_configured' })]);

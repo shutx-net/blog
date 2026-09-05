@@ -4,6 +4,7 @@ import { loadConfig } from './config.ts';
 import type { Deps, Logger } from './deps.ts';
 import { createHandler } from './event.ts';
 import { createPostPublisher } from './github/commit.ts';
+import { createDeployDispatcher } from './github/dispatch.ts';
 import { createTokenProvider } from './github/token.ts';
 import { createMediaPresigner } from './media/presign.ts';
 import { dispatch } from './router.ts';
@@ -35,21 +36,64 @@ const secretReader = createSecretReader({
   logger,
 });
 
-const tokenProvider = createTokenProvider({
+/**
+ * 記事をコミットするためのトークン。**contents:write を content repo にだけ。**
+ *
+ * これがワークフローを起動する権限を持たないことが、権限を分けた目的そのもの。
+ */
+const contentTokenProvider = createTokenProvider({
   secretReader,
   clientId: config.githubAppClientId,
   owner: config.githubOwner,
-  repo: config.githubRepo,
+  installationRepo: config.githubContentRepo,
+  repositories: [config.githubContentRepo],
+  permissions: { contents: 'write' },
   logger,
   now: () => Date.now(),
 });
 
+/**
+ * デプロイを起動するためのトークン。**actions:write を code repo にだけ。**
+ *
+ * contents を含めない。含めるとこの Lambda がサイトのソースとワークフローを
+ * 書き換えられるようになり、分離の利得が消える。
+ */
+const codeTokenProvider = createTokenProvider({
+  secretReader,
+  clientId: config.githubAppClientId,
+  owner: config.githubOwner,
+  installationRepo: config.githubCodeRepo,
+  repositories: [config.githubCodeRepo],
+  permissions: { actions: 'write' },
+  logger,
+  now: () => Date.now(),
+});
+
+/**
+ * **未設定なら作らない。** これが「dispatch は opt-in」の実体。
+ *
+ * 作らなければ Deps.deployDispatcher が undefined になり、router は
+ * dispatch を呼ばないだけでなく、codeTokenProvider を 1 度も使わない
+ * ＝ actions:write のトークンを鋳造しない。
+ */
+const deployDispatcher =
+  config.deployWorkflowFile === undefined
+    ? undefined
+    : createDeployDispatcher({
+        tokenProvider: codeTokenProvider,
+        owner: config.githubOwner,
+        repo: config.githubCodeRepo,
+        workflowFile: config.deployWorkflowFile,
+        logger,
+      });
+
 const deps: Deps = {
   authorizer: createAuthorizer(config.auth, { logger }),
   publisher: createPostPublisher({
-    tokenProvider,
+    tokenProvider: contentTokenProvider,
     owner: config.githubOwner,
-    repo: config.githubRepo,
+    repo: config.githubContentRepo,
+    postsPathPrefix: config.postsPathPrefix,
     logger,
   }),
   presigner: createMediaPresigner({
@@ -59,9 +103,12 @@ const deps: Deps = {
     now: () => Date.now(),
   }),
   secretReader,
-  tokenProvider,
+  // ヘルスチェックが叩くのは記事側。**書き込み経路と同じ資格情報で確認する**
+  // ことに意味があるので、権限の広いほうを選ばない。
+  tokenProvider: contentTokenProvider,
   logger,
   authMode: config.auth.mode,
+  deployDispatcher,
   now: () => Date.now(),
 };
 

@@ -6,6 +6,9 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
+// **api の定数をそのまま使う。** 同じ文字列を 2 箇所に書くと、片方だけ直した日に
+// Lambda が blog-content の中へ site/src/content/posts/ を作る。
+import { SITE_POSTS_PATH_PREFIX } from '../../api/src/github/commit.ts';
 import { AdminAuth } from './admin-auth.ts';
 import { MediaBucket } from './media-bucket.ts';
 import { PostingApi } from './posting-api.ts';
@@ -170,7 +173,13 @@ export class SiteStack extends Stack {
         allowedUsername: ADMIN_USERNAME,
       },
       githubOwner: 'shutx-net',
-      githubRepo: 'blog',
+      // **Phase 2 では両方とも blog。** 設定可能にするだけで、値は今日のまま。
+      // 記事リポジトリへの切り替えは blog-content を作る PR で行う。
+      githubContentRepo: 'blog',
+      githubCodeRepo: 'blog',
+      postsPathPrefix: SITE_POSTS_PATH_PREFIX,
+      // deployWorkflowFile は**設定しない**。push でデプロイが走っているあいだに
+      // dispatch すると、同じコミットに対してデプロイが 2 本走る。
       // GitHub App の client ID。**秘密ではない**ので public リポジトリに置いてよい。
     // 秘密は秘密鍵のほうだけで、そちらは Secrets Manager にあり CDK は値を持たない。
     githubAppClientId: GITHUB_APP_CLIENT_ID,

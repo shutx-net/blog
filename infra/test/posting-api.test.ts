@@ -8,6 +8,7 @@ import {
   AUTH_MODE_COGNITO,
   AUTH_MODE_DENY_ALL,
 } from '../../api/src/config.ts';
+import { SITE_POSTS_PATH_PREFIX } from '../../api/src/github/commit.ts';
 import { ADMIN_USERNAME, SiteStack } from '../lib/site-stack.ts';
 
 /** cognito モードのときだけ現れる環境変数。 */
@@ -352,11 +353,34 @@ describe('Lambda 関数', () => {
         'COGNITO_USER_POOL_ID',
         'GITHUB_APP_CLIENT_ID',
         'GITHUB_APP_SECRET_ID',
+        'GITHUB_CODE_REPO',
+        'GITHUB_CONTENT_REPO',
         'GITHUB_OWNER',
-        'GITHUB_REPO',
         'MEDIA_BUCKET',
+        'POSTS_PATH_PREFIX',
       ].sort(),
     );
+  });
+
+  it('**GITHUB_REPO が消えている**（分割前の名前が残らない）', () => {
+    // 残っていると「どちらのリポジトリか」が曖昧なまま両方の意味で読まれる。
+    expect(Object.keys(lambdaEnvironment())).not.toContain('GITHUB_REPO');
+  });
+
+  it('**Phase 2 では両方のリポジトリが今日と同じ blog を指す**', () => {
+    // 設定可能にするだけのフェーズ。値を変えるのは切り替えの PR。
+    const env = lambdaEnvironment();
+    expect(env['GITHUB_CONTENT_REPO']).toBe('blog');
+    expect(env['GITHUB_CODE_REPO']).toBe('blog');
+  });
+
+  it('**記事パスの接頭辞が今日の値である**', () => {
+    expect(lambdaEnvironment()['POSTS_PATH_PREFIX']).toBe(SITE_POSTS_PATH_PREFIX);
+  });
+
+  it('**DEPLOY_WORKFLOW_FILE を設定していない**（dispatch は opt-in）', () => {
+    // 設定すると push 起点のデプロイと二重に走る。切り替えの PR で初めて設定する。
+    expect(Object.keys(lambdaEnvironment())).not.toContain('DEPLOY_WORKFLOW_FILE');
   });
 
   it('**cognito-idp の IAM 権限を 1 つも足していない**', () => {

@@ -230,10 +230,15 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
         // **成功したときだけ下書きを捨てる。** 残すと次に開いたときに復活する。
         // 失敗時は消さない（書き直せなければならない）。
         if (store !== undefined) clearDraft(store);
-        editor.setStatus(
-          `公開しました: ${String(record['commitSha'] ?? '')} ${String(record['path'] ?? '')}`,
-          'ok',
-        );
+        const where = `${String(record['commitSha'] ?? '')} ${String(record['path'] ?? '')}`;
+        // **記事は保存されているが、デプロイが起動していない状態を成功と混ぜない。**
+        // 同じ見た目にすると、利用者はサイトが更新されると信じて待ち続ける。
+        // キーが無い = dispatch が無効（今日の既定）なので、成功として扱う。
+        if (record['deployTriggered'] === false) {
+          editor.setStatus(`保存しました（デプロイ未起動。手動で再実行が必要）: ${where}`);
+          return;
+        }
+        editor.setStatus(`公開しました: ${where}`, 'ok');
       })
       .catch((error: unknown) => {
         editor.setStatus(describeFailure(error), 'error');

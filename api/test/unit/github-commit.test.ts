@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ConcurrentUpdateError,
-  POSTS_DIR,
+  SITE_POSTS_PATH_PREFIX,
   TARGET_BRANCH,
   createPostPublisher,
 } from '../../src/github/commit.ts';
@@ -70,11 +70,12 @@ const installFetch = (responder: (call: FetchCall) => Response = defaultResponde
 
 const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
-const publisher = (log = logger()) =>
+const publisher = (log = logger(), postsPathPrefix = SITE_POSTS_PATH_PREFIX) =>
   createPostPublisher({
     tokenProvider: { getToken: vi.fn(async () => 'ghs_test_token') },
     owner: 'shutx-net',
     repo: 'blog',
+    postsPathPrefix,
     logger: log,
   });
 
@@ -305,8 +306,26 @@ describe('ref の更新', () => {
 });
 
 describe('パスの封じ込め', () => {
-  it('POSTS_DIR が site/src/content/posts/ である', () => {
-    expect(POSTS_DIR).toBe('site/src/content/posts/');
+  it('SITE_POSTS_PATH_PREFIX が site/src/content/posts/ である', () => {
+    // **記事リポジトリを分離する前の値。** infra はこの定数を渡し、
+    // 切り替えのときだけ 'posts/' に変える。
+    expect(SITE_POSTS_PATH_PREFIX).toBe('site/src/content/posts/');
+  });
+
+  it('**記事パスの接頭辞は注入値である**（定数を素通ししない）', async () => {
+    // 記事リポジトリ側では 'posts/' になる。ハードコードのままだと
+    // 切り替えたときに blog-content の中に site/src/content/posts/ が生える。
+    const { calls } = installFetch();
+    await publisher(logger(), 'posts/').publish(input());
+    const tree = (callOf(calls, 3).body?.['tree'] as Array<Record<string, unknown>>) ?? [];
+    expect(tree[0]?.['path']).toBe('posts/hello-world.md');
+  });
+
+  it('接頭辞を変えても slug の検証は効く', async () => {
+    installFetch();
+    await expect(publisher(logger(), 'posts/').publish(input({ slug: '../escape' }))).rejects.toThrow(
+      /slug must match/,
+    );
   });
 
   it.each(['../etc/passwd', 'a/b', './x', 'a\\b', '', '.', '..', 'a b'])(
@@ -324,8 +343,8 @@ describe('パスの封じ込め', () => {
     const tree = (callOf(calls, 3).body?.['tree'] as Array<Record<string, unknown>>) ?? [];
     const path = String(tree[0]?.['path']);
     expect(path).toBe('site/src/content/posts/node-24-notes.md');
-    expect(path.startsWith(POSTS_DIR)).toBe(true);
-    expect(path.slice(POSTS_DIR.length)).not.toContain('/');
+    expect(path.startsWith(SITE_POSTS_PATH_PREFIX)).toBe(true);
+    expect(path.slice(SITE_POSTS_PATH_PREFIX.length)).not.toContain('/');
   });
 });
 

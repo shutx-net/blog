@@ -1,5 +1,5 @@
 import { AUTH_FAILURE_RESPONSES } from './auth.ts';
-import type { Deps } from './deps.ts';
+import type { Deps, PublishResponse } from './deps.ts';
 import type { ApiRequest, ApiResponse } from './http.ts';
 import { InvalidJsonBodyError, errorResponse, isJsonContentType, jsonResponse, parseJsonObject } from './http.ts';
 import { renderMarkdown } from './posts/frontmatter.ts';
@@ -68,7 +68,19 @@ const createPost = async ({ body, deps }: RouteContext): Promise<ApiResponse> =>
     // コミットにも同じように適用する。
     message: `feat(site): 記事 ${post.slug} を追加`,
   });
-  return jsonResponse(201, result);
+
+  // **ここから先は記事が既にコミットされている。** 何が起きても 201 を返し、
+  // publish をやり直さない。やり直すと同じ記事が 2 コミットされる。
+  if (deps.deployDispatcher === undefined) return jsonResponse(201, result);
+
+  try {
+    await deps.deployDispatcher.dispatch();
+  } catch (error) {
+    // 名前だけを残す。dispatch 側が本文を読まない規律を、ログでも崩さない。
+    deps.logger.error('deploy dispatch failed after publish', { name: (error as Error).name });
+    return jsonResponse(201, { ...result, deployTriggered: false } satisfies PublishResponse);
+  }
+  return jsonResponse(201, { ...result, deployTriggered: true } satisfies PublishResponse);
 };
 
 const presignMedia = async ({ body, deps }: RouteContext): Promise<ApiResponse> => {

@@ -11,7 +11,9 @@ const baseEnv = (): Record<string, string | undefined> => ({
   AUTH_MODE: AUTH_MODE_DENY_ALL,
   GITHUB_APP_CLIENT_ID: 'Iv23liTESTCLIENTID',
   GITHUB_OWNER: 'shutx-net',
-  GITHUB_REPO: 'blog',
+  GITHUB_CONTENT_REPO: 'blog-content',
+  GITHUB_CODE_REPO: 'blog',
+  POSTS_PATH_PREFIX: 'posts/',
   GITHUB_APP_SECRET_ID: 'arn:aws:secretsmanager:ap-northeast-1:111111111111:secret:x-AbCdEf',
   MEDIA_BUCKET: 'blogsitestack-mediabucket-example',
   AWS_REGION: 'ap-northeast-1',
@@ -33,7 +35,9 @@ const REQUIRED_BY_MODE: Record<string, { env: () => Record<string, string | unde
     names: [
       'GITHUB_APP_CLIENT_ID',
       'GITHUB_OWNER',
-      'GITHUB_REPO',
+      'GITHUB_CONTENT_REPO',
+      'GITHUB_CODE_REPO',
+      'POSTS_PATH_PREFIX',
       'GITHUB_APP_SECRET_ID',
       'MEDIA_BUCKET',
       'AWS_REGION',
@@ -44,7 +48,9 @@ const REQUIRED_BY_MODE: Record<string, { env: () => Record<string, string | unde
     names: [
       'GITHUB_APP_CLIENT_ID',
       'GITHUB_OWNER',
-      'GITHUB_REPO',
+      'GITHUB_CONTENT_REPO',
+      'GITHUB_CODE_REPO',
+      'POSTS_PATH_PREFIX',
       'GITHUB_APP_SECRET_ID',
       'MEDIA_BUCKET',
       'AWS_REGION',
@@ -133,8 +139,8 @@ describe('その他の必須設定', () => {
     names.map((name) => [mode, name, env] as const),
   );
 
-  it('走査対象が空でない（6 + 9 = 15 件）', () => {
-    expect(requiredCases).toHaveLength(15);
+  it('走査対象が空でない（8 + 11 = 19 件）', () => {
+    expect(requiredCases).toHaveLength(19);
   });
 
   it.each(requiredCases)('AUTH_MODE=%s で %s が無いと例外を投げる', (_mode, name, env) => {
@@ -150,9 +156,41 @@ describe('その他の必須設定', () => {
   it('設定値を読み出せる', () => {
     const config = loadConfig(baseEnv());
     expect(config.githubOwner).toBe('shutx-net');
-    expect(config.githubRepo).toBe('blog');
     expect(config.mediaBucket).toBe('blogsitestack-mediabucket-example');
     expect(config.region).toBe('ap-northeast-1');
+  });
+
+  it('**記事リポジトリとコードリポジトリを別々に読む**', () => {
+    // 記事は private の blog-content、ワークフローを起動する先は public の blog。
+    // 1 つの GITHUB_REPO に畳むと、権限を分けた 2 本のトークンを作り分けられない。
+    const config = loadConfig(baseEnv());
+    expect(config.githubContentRepo).toBe('blog-content');
+    expect(config.githubCodeRepo).toBe('blog');
+  });
+
+  it('記事パスの接頭辞を環境変数から読む', () => {
+    // ハードコードのままだと、記事リポジトリ内の 'posts/' へ切り替えるのに
+    // Lambda の再ビルドが要る。設定にしておけば env の差し替えだけで済む。
+    expect(loadConfig(baseEnv()).postsPathPrefix).toBe('posts/');
+  });
+
+  it('**DEPLOY_WORKFLOW_FILE は任意で、未設定なら undefined**', () => {
+    // 未設定 = dispatch しない、という opt-in をここで固定する。
+    // 既定で dispatch すると、push 起点のデプロイと二重に走る。
+    const env = baseEnv();
+    expect(env['DEPLOY_WORKFLOW_FILE']).toBeUndefined();
+    expect(loadConfig(env).deployWorkflowFile).toBeUndefined();
+  });
+
+  it('DEPLOY_WORKFLOW_FILE を設定すれば読める', () => {
+    const config = loadConfig({ ...baseEnv(), DEPLOY_WORKFLOW_FILE: 'deploy.yml' });
+    expect(config.deployWorkflowFile).toBe('deploy.yml');
+  });
+
+  it('DEPLOY_WORKFLOW_FILE が空文字なら未設定として扱う', () => {
+    // GitHub も CDK も「未設定」を空文字に展開することがある。空文字を
+    // ワークフロー名として送ると 404 になるので、ここで未設定に畳む。
+    expect(loadConfig({ ...baseEnv(), DEPLOY_WORKFLOW_FILE: '' }).deployWorkflowFile).toBeUndefined();
   });
 
   it('秘密の値を環境変数から読まない', () => {
