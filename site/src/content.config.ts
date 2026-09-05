@@ -7,6 +7,8 @@ import { defineCollection } from "astro/content/config";
 import { glob } from "astro/loaders";
 import { z } from "astro/zod";
 
+import { resolvePostsDir } from "./posts-dir.ts";
+
 export const postSchema = z.object({
   title: z.string().min(1),
   description: z.string().min(1),
@@ -25,8 +27,16 @@ export const postSchema = z.object({
     .default([]),
 });
 
+// base is resolved against the astro project root. It comes from a pure function
+// rather than a literal because the posts live in a separate private repository
+// and are checked out onto the default path at deploy time, while the test runs
+// point POSTS_DIR at test/fixtures/posts to stay hermetic.
+//
+// Note that an empty collection is NOT a build failure: a missing base directory
+// and a pattern matching nothing both produce a warning and exit code 0. Nothing
+// here can catch that -- the guard is the post-count check in the deploy workflow.
 const posts = defineCollection({
-  loader: glob({ pattern: "**/*.md", base: "./src/content/posts" }),
+  loader: glob({ pattern: "**/*.md", base: resolvePostsDir(process.env) }),
   schema: postSchema,
 });
 

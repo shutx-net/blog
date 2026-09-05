@@ -4,10 +4,15 @@ import { parseFrontmatter } from '@astrojs/markdown-remark';
 import { describe, expect, it } from 'vitest';
 
 import { postSchema } from '@blog/site/src/content.config.ts';
+import { postsDirUrl } from '@blog/site/src/posts-dir.ts';
 import { renderPreview } from '../../src/preview/pipeline.ts';
 
-const POSTS_DIR = fileURLToPath(new URL('../../../site/src/content/posts/', import.meta.url));
-const DIST_DIR = fileURLToPath(new URL('../../../site/dist/', import.meta.url));
+// **site の glob base と同じ関数で解決する。** ここが site のビルドと違う
+// ディレクトリを指すと、dist と突き合わせても別の集合を比べることになり、
+// 一致テストが「何も証明していないのに緑」になる。
+const SITE_ROOT = new URL('../../../site/', import.meta.url);
+const POSTS_DIR = fileURLToPath(postsDirUrl(process.env, SITE_ROOT));
+const DIST_DIR = fileURLToPath(new URL('dist/', SITE_ROOT));
 
 interface Post {
   slug: string;

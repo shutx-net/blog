@@ -6,6 +6,7 @@ import { parseFrontmatter } from "@astrojs/markdown-remark";
 import { describe, expect, it } from "vitest";
 
 import { collections, postSchema } from "../../src/content.config.ts";
+import { postsDirUrl } from "../../src/posts-dir.ts";
 
 // src/content.config.ts imports defineCollection/glob/z from astro's real module
 // subpaths rather than the astro:content virtual module, which is what lets this
@@ -25,7 +26,10 @@ const withoutKey = (key: string): Record<string, unknown> => {
   return clone;
 };
 
-const postsDir = fileURLToPath(new URL("../../src/content/posts/", import.meta.url));
+// Resolved the same way content.config.ts resolves the glob base, so this reads
+// whichever corpus the run is actually building -- the fixtures under test, the
+// real posts when POSTS_DIR is unset.
+const postsDir = fileURLToPath(postsDirUrl(process.env, new URL("../../", import.meta.url)));
 const postFiles = readdirSync(postsDir)
   .filter((name) => name.endsWith(".md"))
   .sort();
