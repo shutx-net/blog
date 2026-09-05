@@ -39,7 +39,9 @@ const ENV: Record<string, string> = {
   COGNITO_ALLOWED_USERNAME: 'shutx',
   GITHUB_APP_CLIENT_ID: 'Iv23liTEST',
   GITHUB_OWNER: 'shutx-net',
-  GITHUB_REPO: 'blog',
+  GITHUB_CONTENT_REPO: 'blog',
+  GITHUB_CODE_REPO: 'blog',
+  POSTS_PATH_PREFIX: 'site/src/content/posts/',
   GITHUB_APP_SECRET_ID: 'arn:aws:secretsmanager:ap-northeast-1:111111111111:secret:x-AbCdEf',
   MEDIA_BUCKET: 'blogsitestack-mediabucket-example',
   AWS_REGION: 'ap-northeast-1',
@@ -50,7 +52,9 @@ const DENY_ALL_ENV: Record<string, string> = {
   AUTH_MODE: 'deny-all',
   GITHUB_APP_CLIENT_ID: 'Iv23liTEST',
   GITHUB_OWNER: 'shutx-net',
-  GITHUB_REPO: 'blog',
+  GITHUB_CONTENT_REPO: 'blog',
+  GITHUB_CODE_REPO: 'blog',
+  POSTS_PATH_PREFIX: 'site/src/content/posts/',
   GITHUB_APP_SECRET_ID: 'arn:aws:secretsmanager:ap-northeast-1:111111111111:secret:x-AbCdEf',
   MEDIA_BUCKET: 'blogsitestack-mediabucket-example',
   AWS_REGION: 'ap-northeast-1',
@@ -168,7 +172,7 @@ describe('esbuild のバンドル', () => {
   it('環境変数が 1 つでも欠けると起動しない', () => {
     // ENV は AUTH_MODE=cognito の一式なので、このループは COGNITO_* 3 つも回る。
     // **ENV を直せば自動で走査対象が増える形**にしてある。
-    expect(Object.keys(ENV)).toHaveLength(10);
+    expect(Object.keys(ENV)).toHaveLength(12);
     for (const missing of Object.keys(ENV)) {
       const env = { ...ENV };
       delete env[missing];

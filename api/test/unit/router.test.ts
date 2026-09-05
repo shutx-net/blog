@@ -517,3 +517,86 @@ describe('認証の拒否は 401 と 503 だけ（403 と 404 を絶対に返さ
     expect(bodyOf(response)['error']).toBe('not_found');
   });
 });
+
+describe('公開後のデプロイ起動', () => {
+  const postRequest = (): ApiRequest =>
+    jsonPost('/api/posts', {
+      slug: 'hello-world',
+      title: 'タイトル',
+      description: '説明',
+      body: '本文',
+    });
+
+  it('**deployDispatcher が未設定なら dispatch せず、deployTriggered も返さない**', async () => {
+    // Phase 2 の既定。push 起点のデプロイが既に走っているので、
+    // ここで dispatch すると同じコミットに対してデプロイが 2 本走る。
+    const { deps } = spyDeps(allowAuthorizer);
+    expect(deps.deployDispatcher).toBeUndefined();
+
+    const response = await dispatch(postRequest(), deps);
+    expect(response.statusCode).toBe(201);
+    expect(Object.keys(JSON.parse(String(response.body)))).not.toContain('deployTriggered');
+  });
+
+  it('publish が成功したら dispatch を 1 回呼び、deployTriggered:true を返す', async () => {
+    const { deps } = spyDeps(allowAuthorizer);
+    const deployDispatcher = { dispatch: vi.fn(async () => undefined) };
+    const response = await dispatch(postRequest(), { ...deps, deployDispatcher });
+
+    expect(deployDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(response.statusCode).toBe(201);
+    expect(JSON.parse(String(response.body))['deployTriggered']).toBe(true);
+  });
+
+  it('**dispatch が失敗しても 201 を返し、deployTriggered:false と commitSha を載せる**', async () => {
+    // 記事は既にコミットされている。500 を返すと利用者は「保存に失敗した」と読み、
+    // 同じ記事をもう一度投稿する。
+    const { deps } = spyDeps(allowAuthorizer);
+    const deployDispatcher = {
+      dispatch: vi.fn(async () => {
+        throw new Error('GitHub workflow dispatch failed with status 403');
+      }),
+    };
+    const response = await dispatch(postRequest(), { ...deps, deployDispatcher });
+
+    expect(response.statusCode).toBe(201);
+    const body = JSON.parse(String(response.body)) as Record<string, unknown>;
+    expect(body['deployTriggered']).toBe(false);
+    expect(body['commitSha']).toBe('x');
+  });
+
+  it('**dispatch が失敗しても publish を再試行しない**', async () => {
+    // 最も高くつく失敗モード。再試行すると同じ記事が 2 コミットされる。
+    const { deps, publisher } = spyDeps(allowAuthorizer);
+    const deployDispatcher = {
+      dispatch: vi.fn(async () => {
+        throw new Error('boom');
+      }),
+    };
+    await dispatch(postRequest(), { ...deps, deployDispatcher });
+    expect(publisher.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('**publish が失敗したら dispatch を呼ばない**', async () => {
+    const { deps } = spyDeps(allowAuthorizer);
+    const publisher = {
+      publish: vi.fn(async () => {
+        throw new Error('publish failed');
+      }),
+    };
+    const deployDispatcher = { dispatch: vi.fn(async () => undefined) };
+    await dispatch(postRequest(), { ...deps, publisher, deployDispatcher }).catch(() => undefined);
+    expect(deployDispatcher.dispatch).toHaveBeenCalledTimes(0);
+  });
+
+  it('dispatch の失敗を error でログに残す', async () => {
+    const { deps, logger } = spyDeps(allowAuthorizer);
+    const deployDispatcher = {
+      dispatch: vi.fn(async () => {
+        throw new Error('GitHub workflow dispatch failed with status 403');
+      }),
+    };
+    await dispatch(postRequest(), { ...deps, deployDispatcher });
+    expect(logger.error).toHaveBeenCalled();
+  });
+});

@@ -66,7 +66,25 @@ export interface PostingApiProps {
   /** エンドユーザ認証の設定。**deny-all に戻すのが切り戻し手段**（README の手順）。 */
   auth: PostingApiAuth;
   githubOwner: string;
-  githubRepo: string;
+  /**
+   * 記事をコミットする先のリポジトリ。
+   *
+   * **コード側と分けているのは、Lambda が鋳造するトークンの権限を分けるため。**
+   * 記事用は contents:write をこちらにだけ、デプロイ起動用は actions:write を
+   * githubCodeRepo にだけ与える。
+   */
+  githubContentRepo: string;
+  /** デプロイのワークフローがあるリポジトリ。 */
+  githubCodeRepo: string;
+  /** 記事リポジトリ内のディレクトリ。末尾のスラッシュを含む。 */
+  postsPathPrefix: string;
+  /**
+   * 起動するワークフローのファイル名。**省略すると Lambda は dispatch しない。**
+   *
+   * 記事が code repo にあるあいだは push でデプロイが走るので、設定すると
+   * 同じコミットに対してデプロイが 2 本走る。切り替えの PR で初めて設定する。
+   */
+  deployWorkflowFile?: string;
   /**
    * GitHub App の client ID。**秘密ではない**（秘密鍵が無ければ何もできない）。
    *
@@ -223,7 +241,15 @@ export class PostingApi extends Construct {
         // 「cognito なら COGNITO_* が 3 つ揃っている」を条件付き不変条件として固定している）。
         ...authEnvironment,
         GITHUB_OWNER: props.githubOwner,
-        GITHUB_REPO: props.githubRepo,
+        GITHUB_CONTENT_REPO: props.githubContentRepo,
+        GITHUB_CODE_REPO: props.githubCodeRepo,
+        POSTS_PATH_PREFIX: props.postsPathPrefix,
+        // **未指定ならキーごと出さない。** 空文字で出すと api 側が
+        // 「設定された」と読む経路を作ることになる（config.ts の optional は
+        // 空文字を未設定に畳むが、CDK 側でも同じ意味にしておく）。
+        ...(props.deployWorkflowFile === undefined
+          ? {}
+          : { DEPLOY_WORKFLOW_FILE: props.deployWorkflowFile }),
         GITHUB_APP_CLIENT_ID: props.githubAppClientId,
         // 値ではなく ARN を渡す。鍵そのものは実行時に Secrets Manager から読む。
         GITHUB_APP_SECRET_ID: secret.secretArn,

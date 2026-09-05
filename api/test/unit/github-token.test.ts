@@ -62,7 +62,9 @@ const provider = (log = logger(), now: () => number = () => NOW_MS) =>
     secretReader: { readPrivateKey: vi.fn(async () => privateKeyPem) },
     clientId: 'Iv23liABC',
     owner: 'shutx-net',
-    repo: 'blog',
+    installationRepo: 'blog',
+    repositories: ['blog'],
+    permissions: { contents: 'write' },
     logger: log,
     now,
   });
@@ -132,6 +134,66 @@ describe('installation id の解決とトークン交換', () => {
       repositories: ['blog'],
       permissions: { contents: 'write' },
     });
+  });
+
+  it('**repositories と permissions は deps の値をそのまま送る**', async () => {
+    // 記事用（blog-content に contents:write）とデプロイ起動用（blog に actions:write）で
+    // 権限が違う。固定値に戻すと、片方のトークンがもう片方の権限まで持つ。
+    const { calls } = installFetch((call) => {
+      if (call.url.endsWith('/repos/shutx-net/blog-content/installation')) return okJson({ id: 12345678 });
+      if (call.url.endsWith('/app/installations/12345678/access_tokens')) {
+        return okJson({ token: TOKEN, expires_at: EXPIRES_AT }, 201);
+      }
+      return okJson({ message: 'unexpected' }, 500);
+    });
+    const contentProvider = createTokenProvider({
+      secretReader: { readPrivateKey: vi.fn(async () => privateKeyPem) },
+      clientId: 'Iv23liABC',
+      owner: 'shutx-net',
+      installationRepo: 'blog-content',
+      repositories: ['blog-content'],
+      permissions: { contents: 'write' },
+      logger: logger(),
+      now: () => NOW_MS,
+    });
+    await contentProvider.getToken();
+    expect((calls[1] as FetchCall).body).toEqual({
+      repositories: ['blog-content'],
+      permissions: { contents: 'write' },
+    });
+  });
+
+  it('**actions:write の provider は contents を要求しない**', async () => {
+    const { calls } = installFetch(defaultResponder);
+    const codeProvider = createTokenProvider({
+      secretReader: { readPrivateKey: vi.fn(async () => privateKeyPem) },
+      clientId: 'Iv23liABC',
+      owner: 'shutx-net',
+      installationRepo: 'blog',
+      repositories: ['blog'],
+      permissions: { actions: 'write' },
+      logger: logger(),
+      now: () => NOW_MS,
+    });
+    await codeProvider.getToken();
+    expect((calls[1] as FetchCall).body).toEqual({
+      repositories: ['blog'],
+      permissions: { actions: 'write' },
+    });
+  });
+
+  it('**2 つの provider がトークンキャッシュを共有しない**', async () => {
+    // キャッシュがモジュールスコープに漏れると、先に呼ばれたほうのトークンが
+    // もう片方に返る = 権限の違うトークンが混ざる。
+    const { calls } = installFetch(defaultResponder);
+    const a = provider();
+    const b = provider();
+    await a.getToken();
+    const afterFirst = calls.length;
+    await b.getToken();
+    // b は自分で交換をやり直す（キャッシュを引き継がない）。
+    expect(calls.length).toBeGreaterThan(afterFirst);
+    expect(calls.some((call) => call.url.endsWith('/access_tokens'))).toBe(true);
   });
 
   it('installation 解決のリクエストにボディを付けない', async () => {

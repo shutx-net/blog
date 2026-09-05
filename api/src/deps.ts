@@ -14,6 +14,24 @@ export interface PublishResult {
   path: string;
 }
 
+/**
+ * 201 のレスポンスボディ。
+ *
+ * **deployTriggered を PublishResult に混ぜないのは、publisher が関与しないから。**
+ * publisher の責務はコミットまでで、デプロイの起動はルータが publisher の外で行う。
+ * 同じ型にすると「publisher が設定し忘れた undefined」と「dispatch が無効」が
+ * 区別できなくなる。
+ */
+export interface PublishResponse extends PublishResult {
+  /**
+   * デプロイの起動に成功したか。**dispatch を試みたときだけ現れる。**
+   *
+   * キーが無い = dispatch が無効（DEPLOY_WORKFLOW_FILE 未設定）。
+   * false = 記事はコミット済みだがワークフローが起動していない。
+   */
+  deployTriggered?: boolean;
+}
+
 export interface PostPublisher {
   publish(input: PublishInput): Promise<PublishResult>;
 }
@@ -50,6 +68,16 @@ export interface InstallationTokenProvider {
   getToken(options?: SecretVersionOptions): Promise<string>;
 }
 
+/**
+ * デプロイのワークフローを起動する。
+ *
+ * 記事が別リポジトリに移ると code repo には push が起きないので、
+ * `on: push` では発火しない。これが唯一の起動経路になる。
+ */
+export interface DeployDispatcher {
+  dispatch(): Promise<void>;
+}
+
 /** 秘密を絶対に渡さない前提のロガー。テストは受け取った全引数を走査する。 */
 export interface Logger {
   info(...args: unknown[]): void;
@@ -72,6 +100,14 @@ export interface Deps {
   tokenProvider: InstallationTokenProvider;
   logger: Logger;
   authMode: AuthMode;
+  /**
+   * デプロイの起動器。**未設定なら dispatch しない。**
+   *
+   * オプショナルにしているのが opt-in の実体である。記事がまだ code repo に
+   * あるあいだは push でデプロイが走るので、ここで起動すると同じコミットに
+   * 対してデプロイが 2 本走る。
+   */
+  deployDispatcher?: DeployDispatcher;
   /** 注入するクロック（ミリ秒）。Date.now() を関数内で読むと時計依存のテストになる。 */
   now: () => number;
 }

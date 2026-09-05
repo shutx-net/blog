@@ -11,8 +11,14 @@ import { GITHUB_API_BASE, GITHUB_API_VERSION } from './token.ts';
  */
 export const TARGET_BRANCH = 'main';
 
-/** 記事の実体はここだけ（設計判断2）。site/src/content.config.ts の glob base と一致させる。 */
-export const POSTS_DIR = 'site/src/content/posts/';
+/**
+ * 記事リポジトリを分離する前の接頭辞。**infra が今日この値を渡す。**
+ *
+ * 分離後は blog-content 内の 'posts/' になる。**定数を直接使わないこと** —
+ * 値は deps 経由で注入する（ハードコードのままだと、切り替えたときに
+ * blog-content の中に site/src/content/posts/ が生える）。
+ */
+export const SITE_POSTS_PATH_PREFIX = 'site/src/content/posts/';
 
 /** Git の通常ファイル。docs の列挙は 100644 / 100755 / 040000 / 160000 / 120000。 */
 const FILE_MODE = '100644';
@@ -34,6 +40,8 @@ export interface PostPublisherDeps {
   tokenProvider: InstallationTokenProvider;
   owner: string;
   repo: string;
+  /** 記事を置くディレクトリ。末尾のスラッシュを含む。 */
+  postsPathPrefix: string;
   logger: Logger;
 }
 
@@ -44,11 +52,11 @@ export interface PostPublisherDeps {
  * 検証は「安全な形だけを通す」allowlist で行う。'../' を除去する blocklist 方式は、
  * 除去後に再び '../' が現れる入力（'....//'）で破れる。
  */
-const pathForSlug = (slug: string): string => {
+const pathForSlug = (prefix: string, slug: string): string => {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
     throw new Error('slug must match /^[a-z0-9]+(?:-[a-z0-9]+)*$/');
   }
-  return `${POSTS_DIR}${slug}.md`;
+  return `${prefix}${slug}.md`;
 };
 
 export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
@@ -85,7 +93,7 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
   const publish = async (input: PublishInput): Promise<PublishResult> => {
     // **GitHub を呼ぶ前に検証する。** 検証で落ちる入力で 1 本でもリクエストが飛ぶと、
     // 失敗が「途中まで書けた」状態になりうる。
-    const path = pathForSlug(input.slug);
+    const path = pathForSlug(deps.postsPathPrefix, input.slug);
     const token = await deps.tokenProvider.getToken();
 
     // 1. blob。base64 で送る — YAML front matter と本文に何が来ても安全に運べる。

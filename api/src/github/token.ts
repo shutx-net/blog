@@ -27,7 +27,25 @@ export interface TokenProviderDeps {
   /** GitHub App の client ID。JWT の iss になる。**秘密ではない。** */
   clientId: string;
   owner: string;
-  repo: string;
+  /**
+   * installation id を引くために使うリポジトリ。
+   *
+   * **repositories と別のフィールドにしているのは、両者の役割が違うから。**
+   * こちらは「App がどこにインストールされているか」を引くための入口で、
+   * repositories は「発行するトークンが触れる範囲」。同じ値になることが多いが、
+   * 同一視すると『範囲を狭めたつもりが installation の解決先まで変わる』事故になる。
+   */
+  installationRepo: string;
+  /** 発行するトークンが触れるリポジトリ。 */
+  repositories: string[];
+  /**
+   * 発行するトークンの権限。
+   *
+   * **固定値に戻さないこと。** 記事用は blog-content に contents:write、
+   * デプロイ起動用は blog に actions:write。1 つに畳むと、記事を書くための
+   * トークンがワークフローを起動する権限まで持つ（逆も同じ）。
+   */
+  permissions: Record<string, string>;
   logger: Logger;
   /** 注入するクロック（ミリ秒）。 */
   now: () => number;
@@ -95,10 +113,14 @@ export const createTokenProvider = (deps: TokenProviderDeps): InstallationTokenP
 
   const resolveInstallationId = async (jwt: string): Promise<number> => {
     // docs: "You must use a JWT to access this endpoint."
-    const response = await request('GET', `/repos/${deps.owner}/${deps.repo}/installation`, jwt);
+    const response = await request(
+      'GET',
+      `/repos/${deps.owner}/${deps.installationRepo}/installation`,
+      jwt,
+    );
     if (!response.ok) {
       throw new Error(
-        `GitHub App installation lookup for ${deps.owner}/${deps.repo} failed with status ${response.status}`,
+        `GitHub App installation lookup for ${deps.owner}/${deps.installationRepo} failed with status ${response.status}`,
       );
     }
     const payload = (await response.json()) as { id?: unknown };
@@ -111,11 +133,11 @@ export const createTokenProvider = (deps: TokenProviderDeps): InstallationTokenP
   const exchange = async (jwt: string, id: number): Promise<Response> =>
     // docs: "If permissions is not specified, the installation access token will have
     // all of the permissions that were granted to the app." — 明示してスコープダウンする。
-    // contents: write だけで Git Data API の 6 本すべてが通る（.github/workflows/ を
-    // 書くときだけ workflows: write が要るが、本 API は site/ しか書かない）。
+    // **値は呼び出し側が決める。** 記事用は contents:write（Git Data API の 6 本が通る）、
+    // デプロイ起動用は actions:write。ここに固定値を書くと分離の意味が消える。
     request('POST', `/app/installations/${id}/access_tokens`, jwt, {
-      repositories: [deps.repo],
-      permissions: { contents: 'write' },
+      repositories: deps.repositories,
+      permissions: deps.permissions,
     });
 
   const attempt = async (

@@ -49,7 +49,30 @@ export interface Config {
   /** JWT の iss。**秘密ではない**（秘密鍵が無ければ何もできない）。 */
   githubAppClientId: string;
   githubOwner: string;
-  githubRepo: string;
+  /**
+   * 記事をコミットする先。private の blog-content。
+   *
+   * **コードのリポジトリと分けているのは、トークンの権限を分けるため。**
+   * 1 つに畳むと、記事を書くためのトークンがコードとワークフローにも書けてしまう。
+   */
+  githubContentRepo: string;
+  /** デプロイのワークフローがあるリポジトリ。public の blog。 */
+  githubCodeRepo: string;
+  /**
+   * 記事リポジトリ内のディレクトリ。末尾のスラッシュを含む。
+   *
+   * 分離前は 'site/src/content/posts/'、分離後は 'posts/'。
+   * **site/src/content.config.ts の glob base と意味を揃えること。**
+   */
+  postsPathPrefix: string;
+  /**
+   * 起動するワークフローのファイル名。**未設定なら dispatch しない。**
+   *
+   * opt-in にしているのは、push 起点のデプロイが動いている間に dispatch すると
+   * 同じコミットに対してデプロイが 2 本走るため。記事リポジトリを切り替える
+   * PR で初めて設定する。
+   */
+  deployWorkflowFile?: string;
   /** Secrets Manager の ARN か名前。CDK の CfnOutput から運用者が拾う。 */
   githubAppSecretId: string;
   mediaBucket: string;
@@ -60,7 +83,9 @@ export interface Config {
 const REQUIRED = [
   'GITHUB_APP_CLIENT_ID',
   'GITHUB_OWNER',
-  'GITHUB_REPO',
+  'GITHUB_CONTENT_REPO',
+  'GITHUB_CODE_REPO',
+  'POSTS_PATH_PREFIX',
   'GITHUB_APP_SECRET_ID',
   'MEDIA_BUCKET',
   'AWS_REGION',
@@ -79,6 +104,19 @@ const require = (env: Env, name: (typeof REQUIRED)[number] | (typeof REQUIRED_FO
   const value = env[name];
   // 値そのものを例外に載せない。設定値がログに出る書き癖を作らないため。
   if (value === undefined || value.length === 0) throw new Error(`${name} is not set`);
+  return value;
+};
+
+/**
+ * 任意の環境変数を読む。**空文字は未設定として扱う。**
+ *
+ * CDK も GitHub Actions も「値がない」を空文字に展開することがある。空文字を
+ * そのまま設定値として通すと、dispatch の宛先が '' になり 404 を延々と繰り返す。
+ * ここで undefined に畳んでおけば、**未設定 = 機能が無効**という 1 つの意味に収束する。
+ */
+const optional = (env: Env, name: string): string | undefined => {
+  const value = env[name];
+  if (value === undefined || value.length === 0) return undefined;
   return value;
 };
 
@@ -119,7 +157,10 @@ export const loadConfig = (env: Env): Config => ({
   auth: loadAuth(env),
   githubAppClientId: require(env, 'GITHUB_APP_CLIENT_ID'),
   githubOwner: require(env, 'GITHUB_OWNER'),
-  githubRepo: require(env, 'GITHUB_REPO'),
+  githubContentRepo: require(env, 'GITHUB_CONTENT_REPO'),
+  githubCodeRepo: require(env, 'GITHUB_CODE_REPO'),
+  postsPathPrefix: require(env, 'POSTS_PATH_PREFIX'),
+  deployWorkflowFile: optional(env, 'DEPLOY_WORKFLOW_FILE'),
   githubAppSecretId: require(env, 'GITHUB_APP_SECRET_ID'),
   mediaBucket: require(env, 'MEDIA_BUCKET'),
   region: require(env, 'AWS_REGION'),
