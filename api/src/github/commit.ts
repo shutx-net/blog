@@ -12,13 +12,20 @@ import { GITHUB_API_BASE, GITHUB_API_VERSION } from './token.ts';
 export const TARGET_BRANCH = 'main';
 
 /**
- * 記事リポジトリを分離する前の接頭辞。**infra が今日この値を渡す。**
+ * 記事リポジトリを分離する**前**の接頭辞。code repo の中での記事の置き場所。
  *
- * 分離後は blog-content 内の 'posts/' になる。**定数を直接使わないこと** —
- * 値は deps 経由で注入する（ハードコードのままだと、切り替えたときに
- * blog-content の中に site/src/content/posts/ が生える）。
+ * **もう infra は渡さない。** 残しているのは、切り替えが後戻りしていないことを
+ * posting-api.test.ts が名指しで主張するため（`not.toBe(SITE_POSTS_PATH_PREFIX)`）。
  */
 export const SITE_POSTS_PATH_PREFIX = 'site/src/content/posts/';
+
+/**
+ * blog-content の中での記事の置き場所。**infra が今日この値を渡す。**
+ *
+ * **定数を直接使わないこと** — 値は deps 経由で注入する。ハードコードすると、
+ * 宛先リポジトリだけ切り替えた日に blog-content の中へ site/src/content/posts/ が生える。
+ */
+export const CONTENT_POSTS_PATH_PREFIX = 'posts/';
 
 /** Git の通常ファイル。docs の列挙は 100644 / 100755 / 040000 / 160000 / 120000。 */
 const FILE_MODE = '100644';

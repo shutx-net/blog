@@ -89,8 +89,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run -w admin typecheck
-      # admin の parity テストは site/dist の公開済み HTML と突き合わせるので、
-      # **先に site をビルドしないと落ちる。** admin の pretest は自分の vite build
-      # しか走らせない（他ワークスペースのビルドを暗黙に呼ぶと依存が見えなくなる）。
-      - run: npm run -w site build
+      # admin の parity テストは site/dist の公開済み HTML と突き合わせる。
+      # **そのビルドは admin の pretest が行う** — フィクスチャを指す POSTS_DIR
+      # つきで走らせる必要があるので、ここで素の `npm run -w site build` を
+      # 挟んではいけない。記事は別リポジトリにあり CI では checkout しないため、
+      # 素のビルドは記事 0 本の dist を作って上書きするだけになる。
       - run: npm run -w admin test
