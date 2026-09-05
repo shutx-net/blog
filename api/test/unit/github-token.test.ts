@@ -182,6 +182,29 @@ describe('installation id の解決とトークン交換', () => {
     });
   });
 
+  it('**installation の解決先と、トークンを効かせる範囲は別々に指定できる**', async () => {
+    // App は 1 つの installation に複数リポジトリを持つので、どのリポジトリから
+    // installation を引くかと、発行するトークンをどこに効かせるかは独立している。
+    // ここを同一視すると「範囲を狭めたつもりが解決先まで変わる」事故になる。
+    const { calls } = installFetch(defaultResponder);
+    await createTokenProvider({
+      secretReader: { readPrivateKey: vi.fn(async () => privateKeyPem) },
+      clientId: 'Iv23liABC',
+      owner: 'shutx-net',
+      installationRepo: 'blog',
+      repositories: ['blog-content'],
+      permissions: { contents: 'write' },
+      logger: logger(),
+      now: () => NOW_MS,
+    }).getToken();
+
+    expect((calls[0] as FetchCall).url).toContain('/repos/shutx-net/blog/installation');
+    expect((calls[1] as FetchCall).body).toEqual({
+      repositories: ['blog-content'],
+      permissions: { contents: 'write' },
+    });
+  });
+
   it('**2 つの provider がトークンキャッシュを共有しない**', async () => {
     // キャッシュがモジュールスコープに漏れると、先に呼ばれたほうのトークンが
     // もう片方に返る = 権限の違うトークンが混ざる。
