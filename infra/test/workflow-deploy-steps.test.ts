@@ -986,8 +986,9 @@ describe('publish されるスラッグ集合の照合を実際に走らせる',
     });
   });
 
-  it('**入れ子のスラッグが混ざれば落ちる**', () => {
-    // 今回の欠陥そのもの。件数は同じでも、URL と RSS の guid が変わる。
+  it('dist だけが入れ子なら落ちる（集合の不一致）', () => {
+    // corpus は平坦、dist は入れ子。**これは実際には起きない組み合わせ**で、
+    // 集合の比較だけで捕まる。下の「両方が入れ子」と混同しないこと。
     withTempDir((dir) => {
       const slugs = publishedSlugs();
       seedContent(dir, slugs);
@@ -995,6 +996,46 @@ describe('publish されるスラッグ集合の照合を実際に走らせる',
       const result = runGuardScript(slugGuardScript(), dir);
       expect(result.status, '入れ子のまま publish されようとしている').not.toBe(0);
       expect(result.output).toContain('::error::');
+    });
+  });
+
+  it('**content repo のルートを丸ごと置いた形（corpus も dist も入れ子）で落ちる**', () => {
+    // **これが実際に起きた事故の形。** run 34019234594 は README.md の
+    // スキーマ違反で落ちたが、README が無ければビルドは成功し、記事は
+    // `/posts/posts/hello-world/` として publish されていた。
+    //
+    // **集合の比較ではこれを止められない。** expected は記事ディレクトリからの
+    // 相対パスで作るので、corpus が入れ子なら期待値も `posts/hello-world` になり、
+    // dist 側も同じなので一致してしまう。内部整合しか見ていない。
+    //
+    // 止めるのは「スラッグが平坦であること」の直接の主張だけ。
+    withTempDir((dir) => {
+      const slugs = publishedSlugs();
+      // 事故と同じ形: 記事ディレクトリの下に posts/ があり、その中に .md がある。
+      const nested = join(dir, POSTS_DIR, 'posts');
+      mkdirSync(nested, { recursive: true });
+      for (const slug of slugs) writePost(join(nested, `${slug}.md`));
+      // astro はこれを id `posts/<slug>` として publish する。
+      for (const slug of slugs) writeDistPost(dir, `posts/${slug}`);
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(
+        result.status,
+        'corpus と dist が同じだけ入れ子でも止まらなければならない',
+      ).not.toBe(0);
+      expect(result.output).toContain('::error::');
+    });
+  });
+
+  it('corpus だけが入れ子でも落ちる（ビルドが読み損ねた場合）', () => {
+    // 記事は入れ子にあるのに dist が平坦、という食い違い。集合でも捕まるが、
+    // 平坦性の主張が expected 側にも効いていることを固定する。
+    withTempDir((dir) => {
+      const slugs = publishedSlugs();
+      const nested = join(dir, POSTS_DIR, 'posts');
+      mkdirSync(nested, { recursive: true });
+      for (const slug of slugs) writePost(join(nested, `${slug}.md`));
+      for (const slug of slugs) writeDistPost(dir, slug);
+      expect(runGuardScript(slugGuardScript(), dir).status).not.toBe(0);
     });
   });
 

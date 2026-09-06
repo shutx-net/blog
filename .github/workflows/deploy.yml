@@ -274,6 +274,25 @@ jobs:
             fi
           )"
 
+          # **集合の比較より先に、スラッグが平坦であることを見る。**
+          #
+          # expected は記事ディレクトリからの相対パスで作るので、corpus が入れ子なら
+          # 期待値も `posts/hello-world` になり、dist 側も同じで**一致してしまう。**
+          # 集合の比較は corpus と dist の内部整合しか見ていない。実際の事故
+          # （content repo のルートを丸ごと置く）では両方が同じだけ入れ子になるので、
+          # ここで平坦性を直接主張しないと素通りする。
+          #
+          # 記事は `/posts/<slug>/` の 1 階層で publish される設計
+          # （admin も api の CONTENT_POSTS_PATH_PREFIX も入れ子を作らない）。
+          # 意図して入れ子にするときは、この主張も同じ PR で変えること。
+          nested="$(printf '%s\n%s\n' "$expected" "$actual" | grep '/' | sort -u || true)"
+          if [ -n "$nested" ]; then
+            echo '::error::post slugs must be flat, but these carry a path separator:'
+            printf '%s\n' "$nested"
+            echo 'the content repository root was probably checked out onto the posts directory.'
+            exit 1
+          fi
+
           count="$(printf '%s' "$expected" | grep -c . || true)"
           if [ "$count" -lt "$minimum" ]; then
             echo "::error::only $count publishable post(s) under $posts, expected at least $minimum. Refusing to publish."
