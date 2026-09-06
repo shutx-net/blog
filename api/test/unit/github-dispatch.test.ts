@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createDeployDispatcher } from '../../src/github/dispatch.ts';
+import { DeployDispatchError, createDeployDispatcher } from '../../src/github/dispatch.ts';
 import { GITHUB_API_VERSION } from '../../src/github/token.ts';
 
 const TOKEN = 'ghs_dispatch_token';
@@ -142,11 +142,48 @@ describe('失敗の扱い', () => {
     expect(error.message).not.toContain('ECONNREFUSED');
   });
 
-  it('204 以外の 2xx も成功として扱わない', async () => {
-    // docs の Response は 204 のみ。200 が返るのは想定外の経路なので、
-    // 「起動した」と言い切らずに失敗として扱う。
-    installFetch(() => new Response(null, { status: 200 }));
-    await expect(dispatcher().dispatch()).rejects.toThrow(/200/);
+  it('**status の失敗は reason と status を持つ**', async () => {
+    // router がログに何を書けるかは、ここで何を載せたかで決まる。
+    // message だけだと router 側は文字列を再パースするしかない。
+    installFetch(() => new Response(null, { status: 403 }));
+    const error = await rejection(dispatcher().dispatch());
+
+    expect(error).toBeInstanceOf(DeployDispatchError);
+    expect((error as DeployDispatchError).reason).toBe('status');
+    expect((error as DeployDispatchError).status).toBe(403);
+    expect((error as DeployDispatchError).transportErrorName).toBeUndefined();
+  });
+
+  it('**transport の失敗は reason と例外名を持ち、status を持たない**', async () => {
+    // status を持たないことが「HTTP 応答が無かった」の唯一の印になる。
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const error = new Error('connect ECONNREFUSED');
+        error.name = 'TypeError';
+        throw error;
+      }),
+    );
+    const error = await rejection(dispatcher().dispatch());
+
+    expect(error).toBeInstanceOf(DeployDispatchError);
+    expect((error as DeployDispatchError).reason).toBe('transport');
+    expect((error as DeployDispatchError).transportErrorName).toBe('TypeError');
+    expect((error as DeployDispatchError).status).toBeUndefined();
+  });
+
+  it('5xx も失敗として扱う', async () => {
+    installFetch(() => new Response(null, { status: 500 }));
+    const error = await rejection(dispatcher().dispatch());
+    expect((error as DeployDispatchError).status).toBe(500);
+  });
+
+  it('**3xx を成功として扱わない**', async () => {
+    // fetch は既定でリダイレクトを追うので、3xx がここまで来るのは想定外の経路。
+    // 2xx だけを成功にするので、緩和の巻き添えで通ってしまわないことを固定する。
+    installFetch(() => new Response(null, { status: 302 }));
+    const error = await rejection(dispatcher().dispatch());
+    expect((error as DeployDispatchError).status).toBe(302);
   });
 
   it('トークンをログに出さない', async () => {
@@ -159,5 +196,40 @@ describe('失敗の扱い', () => {
       .map((arg) => JSON.stringify(arg))
       .join(' ');
     expect(written).not.toContain(TOKEN);
+  });
+});
+
+describe('成功の判定', () => {
+  it('204 は成功で、warn を出さない', async () => {
+    const log = logger();
+    installFetch(() => new Response(null, { status: 204 }));
+    await dispatcher(log).dispatch();
+
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalled();
+  });
+
+  it('**204 以外の 2xx も成功として扱う**', async () => {
+    // 実測（2026-09-06 10:47 の投稿）で、GitHub が run を作った
+    // （actor=shutx-blog[bot] の workflow_dispatch が起動し完走した）のに
+    // Lambda が失敗と判定した。偽陰性は管理画面に嘘を表示させ、案内した
+    // 復旧手順（gh workflow run）に従うと二重デプロイになる。
+    // 「起動したのに失敗と言う」ほうが「想定外の 2xx を成功と呼ぶ」より害が大きい。
+    const log = logger();
+    installFetch(() => new Response(null, { status: 200 }));
+
+    await expect(dispatcher(log).dispatch()).resolves.toBeUndefined();
+  });
+
+  it('**204 以外の 2xx は warn で実際のステータスを残す**', async () => {
+    // 成功として通すが、黙って通さない。docs の Response は 204 のみなので、
+    // 他の 2xx が来ているなら次の調査の起点になる。
+    const log = logger();
+    installFetch(() => new Response(null, { status: 202 }));
+    await dispatcher(log).dispatch();
+
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    const written = JSON.stringify(log.warn.mock.calls);
+    expect(written).toContain('202');
   });
 });

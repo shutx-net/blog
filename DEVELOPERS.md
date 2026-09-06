@@ -178,6 +178,31 @@ gh workflow run deploy.yml -R shutx-net/blog --ref main
 ```
 
 管理画面が「保存はできたがデプロイを起動できなかった」と表示したときも同じコマンドで復旧する。
+**ただし、実行する前に run が既に立っていないか確認すること。**
+
+```sh
+gh run list -R shutx-net/blog --workflow=deploy.yml --limit 5
+```
+
+`actor` が `shutx-blog[bot]` の `workflow_dispatch` が投稿の直後に立っていれば、
+**起動は成功している**ので再実行は要らない（デプロイが 2 本走るだけになる）。
+
+起動していない場合、Lambda のログに理由が残っている。
+
+```sh
+aws logs tail BlogSiteStack-PostingApiFunctionLogGroupCAC55A4B-GblcBe1AHAYb --since 30m
+```
+
+`deploy dispatch failed after publish` の `reason` で切り分ける。
+
+| `reason` | 意味 | 見るところ |
+| --- | --- | --- |
+| `status` | GitHub が応答して拒否した。`status` フィールドに HTTP ステータスが出る | 403 なら GitHub App の **Actions: Read and write** と installation の再承認 |
+| `transport` | HTTP 応答が無かった。`transportErrorName` に例外名が出る | ネットワーク側。**GitHub に届いた可能性は残るので、上の run 一覧を先に見る** |
+| `unknown` | `DeployDispatchError` 以外が投げられた | 実装の不具合。`name` を手掛かりに追う |
+
+**本文とメッセージは意図的に記録していない。** 応答が要求をエコーする実装に変わったとき、
+installation token がログに落ちるため。載せてよいのは列挙値と HTTP ステータスだけ。
 
 ### 資格情報
 
