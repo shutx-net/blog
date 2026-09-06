@@ -16,6 +16,11 @@ node_modules/
 # そこにあるものと衝突する。
 site/src/content/posts/
 
+# その checkout の降ろし先。**記事ディレクトリではない** — actions/checkout は
+# リポジトリのルートを path に置くので、記事ディレクトリを直接指すと README.md が
+# コレクションに混ざり、記事が 1 階層深くなって URL と RSS の guid が変わる。
+content-repo/
+
 # Astro
 site/dist/
 site/.astro/

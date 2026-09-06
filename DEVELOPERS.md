@@ -113,29 +113,49 @@ npm が `os` / `cpu` に一致する 1 つだけを入れる。
 `site/test/fixtures/posts/` を使う）。実記事で見たいときだけ:
 
 ```sh
-git clone git@github.com:shutx-net/blog-content.git site/src/content/posts
+git clone git@github.com:shutx-net/blog-content.git content-repo
+cp content-repo/posts/*.md site/src/content/posts/
 ```
 
-`site/src/content/posts` は `resolvePostsDir` の既定値で、デプロイ時に
-`actions/checkout` が展開するのと同じ場所。**clone しない状態で
-`npm run -w site build` を走らせると記事 0 本のサイトができるが、これは正常**
-（astro は空のコレクションを警告するだけでビルドを成功させる）。
+**記事ディレクトリに直接 clone しないこと。** `site/src/content/posts` は
+`resolvePostsDir` の既定値で、コレクションの base はそこ。`blog-content` は
+`README.md` + `posts/*.md` という構成なので、そこへ丸ごと clone すると:
+
+- `README.md` がコレクションに混ざる（フロントマターが無いのでスキーマ検証で落ちる）
+- 記事が 1 階層深くなり、`entry.id` が `posts/hello-world` になって
+  **URL と RSS の `<guid>` が変わる**
+
+`deploy.yml` も同じ理由で `content-repo` に checkout してから `posts/` だけを移している。
+
+**clone しない状態で `npm run -w site build` を走らせると記事 0 本のサイトができるが、
+これは正常**（astro は空のコレクションを警告するだけでビルドを成功させる）。
 
 ### 記事が 0 本のまま publish されない仕組み
 
-`deploy.yml` に 2 つのガードがある。
+`deploy.yml` に 3 つのガードがある。
 
-1. content checkout の直後、ビルド前に **`.md` の本数**が下限以上か
+1. 移送の直後、ビルド前に **`.md` の本数**が下限以上か
 2. ビルド後、S3 sync の前に **`rss.xml` の `<item>` 数**が下限以上か
+3. 同じくビルド後、**publish されるスラッグ集合が checkout した記事と過不足なく一致するか**
+
+3 が要るのは、**1 と 2 はどちらも「数」しか見ていない**から。content repo のルートを
+丸ごと降ろすと、記事は `posts/hello-world` という id で見つかり、件数は変わらないまま
+`/posts/posts/hello-world/` として publish される。RSS の
+`<guid isPermaLink="true">` が変わる = 購読者への全記事再配信で、この系で唯一
+取り消せない出力。集合の一致を見れば、記事の取りこぼしも、余分な出力も、
+draft の leak も同じ 1 本で捕まる。
 
 **下限はワークフロー内の整数リテラル。** ディスクから計算する形にすると、記事が
 0 本のとき下限も 0 になって主張が空振りする。**記事を意図的に下限より減らすときは、
 `deploy.yml` の `minimum=` も同じ PR で下げること。** 下げ忘れるとデプロイが止まる
 （安全側に倒れるだけなので、サイトは前の状態のまま残る）。
 
-`infra/test/workflow-deploy-steps.test.ts` がこの 2 つのスクリプトを**実際に実行して**
-検証している。テキスト一致だけだと、シェルの意味論を間違えたガードを止められない
-（`grep -c` は一致した行数を返すので、改行を含まない `rss.xml` では常に 1 になる）。
+`infra/test/workflow-deploy-steps.test.ts` がこれらのスクリプトを**実際に実行して**
+検証している。テキスト一致だけだと、シェルの意味論を間違えたガードも、`path:` の値
+としては妥当な文字列も止められない（`grep -c` は一致した行数を返すので改行を含まない
+`rss.xml` では常に 1 になるし、`path: site/src/content/posts` は YAML として何も
+おかしくない）。移送の検証は **`actions/checkout` が作るのと同じ形**
+（`README.md` + `posts/` + `.git/`）を組み立てて走らせている。
 
 ### 記事リポジトリに直接コミットしたとき
 

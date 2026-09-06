@@ -91,9 +91,20 @@ jobs:
 
       # 記事の実体は private な shutx-net/blog-content にある。
       #
-      # **path は resolvePostsDir の既定値と同じにしてある。** そうすることで
-      # 本番のビルドに環境変数を 1 つも渡さずに済み、「設定を書き忘れたら空サイト」
-      # という経路を新設しないで済む（POSTS_DIR を使うのはテストだけ）。
+      # **path は記事ディレクトリではない。** actions/checkout はリポジトリの
+      # **ルート**を path に置く。blog-content は README.md + posts/*.md という
+      # 構成なので、path を site/src/content/posts にすると実際にはこうなる:
+      #
+      #     site/src/content/posts/README.md     <- glob の **/*.md にマッチする
+      #     site/src/content/posts/posts/*.md    <- 記事が 1 階層深い
+      #     site/src/content/posts/.git/
+      #
+      # README はフロントマターが無いのでスキーマ検証で落ちる（run 34019234594）。
+      # **より危険なのは README が無い場合で、`**/*.md` は再帰なので記事自体は
+      # 見つかる。** ただし entry.id が `posts/hello-world` になり
+      # `/posts/posts/hello-world/` として publish される。RSS の
+      # <guid isPermaLink="true"> が変わる = 購読者への全記事再配信で、
+      # この系で唯一取り消せない出力。item 数は変わらないので rss ガードは通る。
       #
       # 資格情報は**読み取り専用の deploy key**。GitHub App の秘密鍵を Actions の
       # secret に複製する道（create-github-app-token）は採らない。その鍵は
@@ -105,9 +116,36 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: shutx-net/blog-content
-          path: site/src/content/posts
+          path: content-repo
           ssh-key: ${{ secrets.CONTENT_DEPLOY_KEY }}
           persist-credentials: false
+
+      # **記事だけを取り出して、resolvePostsDir の既定値の位置へ置く。**
+      #
+      # 移した先が既定値と一致しているので、本番のビルドには環境変数を 1 つも
+      # 渡さない（「env を書き忘れたら空サイト」という経路を新設しない）。
+      # POSTS_DIR を使うのはテストだけ。
+      #
+      # **移送元が無いときは set -eu に頼らず明示的に落とす。** レイアウトが
+      # 変わったときに読める理由が出るようにする。
+      #
+      # 移送のあと content-repo ごと捨てる。README.md という .md ファイルを
+      # 作業ツリーに残さない — 今回の欠陥はまさにそれがコレクションに紛れたもので、
+      # 残しておく理由が無い。
+      - name: Move the posts into the content collection
+        run: |
+          set -eu
+          src='content-repo/posts'
+          dest='site/src/content/posts'
+          if [ ! -d "$src" ]; then
+            echo "::error::$src is missing; the content checkout did not run, or blog-content no longer keeps its posts under posts/."
+            exit 1
+          fi
+          rm -rf "$dest"
+          mkdir -p "$(dirname "$dest")"
+          mv "$src" "$dest"
+          rm -rf content-repo
+          echo "moved $(find "$dest" -type f -name '*.md' | wc -l) markdown file(s) into $dest"
 
       # **astro は記事 0 本でもビルドに成功する。**
       #
@@ -188,6 +226,70 @@ jobs:
             echo "::error::rss.xml carries $items item(s), expected at least $minimum. Refusing to publish."
             exit 1
           fi
+
+      # **本数では足りない。**
+      #
+      # content repo のルートを丸ごと降ろすと、記事は `posts/hello-world` という
+      # id で見つかり、**item 数は変わらないまま** `/posts/posts/hello-world/` として
+      # publish される。RSS の <guid isPermaLink="true"> が変わるので購読者に全記事が
+      # 再配信される。取り消せない。上の 2 つのガードはどちらも素通りする。
+      #
+      # だから数えるのではなく、**checkout した記事の集合と publish される
+      # スラッグの集合が過不足なく一致すること**を見る。記事の取りこぼしも、
+      # 余分な出力も、draft の leak も、同じ 1 本で捕まる。
+      #
+      # 下限も併せて見るのは、**両方が空でも集合としては一致してしまう**ため。
+      #
+      # draft の判定はフロントマターの `draft: true` を直接読む。astro のスキーマ
+      # （draft は z.boolean().default(false)）と管理画面が書く形に合わせてある。
+      - name: Require the published slugs to match the checked-out posts
+        run: |
+          set -eu
+          minimum=3
+          posts='site/src/content/posts'
+          dist='site/dist/posts'
+
+          if [ ! -d "$posts" ]; then
+            echo "::error::$posts is missing; there is nothing to compare the build against."
+            exit 1
+          fi
+
+          expected="$(
+            find "$posts" -type f -name '*.md' | while IFS= read -r file; do
+              front="$(sed -n '1{/^---$/!q;};1d;/^---[[:space:]]*$/q;p' "$file")"
+              if printf '%s\n' "$front" | grep -qiE '^draft:[[:space:]]*true[[:space:]]*$'; then
+                continue
+              fi
+              rel="${file#"$posts"/}"
+              printf '%s\n' "${rel%.md}"
+            done | sort
+          )"
+
+          actual="$(
+            if [ -d "$dist" ]; then
+              find "$dist" -mindepth 2 -type f -name 'index.html' | while IFS= read -r file; do
+                dir="${file%/index.html}"
+                printf '%s\n' "${dir#"$dist"/}"
+              done | sort
+            fi
+          )"
+
+          count="$(printf '%s' "$expected" | grep -c . || true)"
+          if [ "$count" -lt "$minimum" ]; then
+            echo "::error::only $count publishable post(s) under $posts, expected at least $minimum. Refusing to publish."
+            exit 1
+          fi
+
+          if [ "$expected" != "$actual" ]; then
+            echo '::error::the published post slugs do not match the checked-out posts.'
+            echo '--- expected (from the content checkout, drafts excluded) ---'
+            printf '%s\n' "$expected"
+            echo '--- actual (from site/dist/posts) ---'
+            printf '%s\n' "$actual"
+            exit 1
+          fi
+
+          echo "published post slugs match the content checkout: $count"
 
       - name: Build the admin UI
         run: npm run -w admin build
