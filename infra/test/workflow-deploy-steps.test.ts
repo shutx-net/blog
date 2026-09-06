@@ -1039,6 +1039,23 @@ describe('publish されるスラッグ集合の照合を実際に走らせる',
     });
   });
 
+  it('件数が同じでも中身が違えば落ちる', () => {
+    // **本数の比較と集合の比較を区別する唯一のケース。**
+    // 平坦性の主張を足したことで、入れ子は集合の比較を通らずに止まるように
+    // なった。それだけだと「集合を数に弱める」変異が誰にも捕まらなくなるので、
+    // 件数が一致したまま中身が食い違う形をここで固定する
+    // （記事を改名して dist に古いページが残る、等）。
+    withTempDir((dir) => {
+      const slugs = publishedSlugs();
+      seedContent(dir, slugs);
+      for (const slug of slugs.slice(0, -1)) writeDistPost(dir, slug);
+      writeDistPost(dir, 'renamed-post');
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(result.status, '件数だけ合っていて中身が違う').not.toBe(0);
+      expect(result.output).toContain('::error::');
+    });
+  });
+
   it('dist に余分があれば落ちる', () => {
     withTempDir((dir) => {
       const slugs = publishedSlugs();
