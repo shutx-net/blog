@@ -1,4 +1,3 @@
-import { fileURLToPath } from 'node:url';
 import { CfnOutput, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import type * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -8,14 +7,14 @@ import type * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { CfnSecret } from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
+import { API_BUNDLE_DIR, buildApiBundle } from '../../api/build.ts';
 
 // cdk synth がどこから実行されるか分からないので cwd 基準の相対パスにしない。
 // "type": "module" なので __dirname は存在しない（site-stack.ts と同じ理由）。
 //
-// **ここは api ワークスペースのビルド成果物である。** infra/package.json の pretest が
-// `npm run build -w ../api` を先に走らせる。ビルドせずに synth すると、テンプレートは
-// 通るのに古いアセットが使われる（test/synth-artifact.test.ts が assets.json と突き合わせている）。
-const API_BUNDLE_PATH = fileURLToPath(new URL('../../api/dist', import.meta.url));
+// **パスも生成器も api 側の定義を実物で import する。** infra が別に組み立てると、
+// 「テストが検証したバンドル」と「本番に載るバンドル」がずれる余地が生まれる。
+const API_BUNDLE_PATH = API_BUNDLE_DIR;
 
 /**
  * メディアのキー接頭辞。
@@ -223,6 +222,21 @@ export class PostingApi extends Construct {
         : { AUTH_MODE: 'deny-all' };
 
     // ---- Lambda ----
+    //
+    // **固める直前に、いまのソースから作り直す。**
+    //
+    // Code.fromAsset はディレクトリの中身をそのまま固めるだけで、それがソースと
+    // 一致しているかは見ない。かつて変異テストが pretest 経由で api/dist を汚し、
+    // ソースだけ復旧したため、**本番の Lambda がソースと 6 バイト食い違ったまま**
+    // 動いた（dispatch の成功判定が 2xx ではなく 204 ちょうどのままだった）。
+    // テスト 2119 件は緑で、git status もクリーンだった。
+    //
+    // 「成果物が新鮮か調べる」のではなく作り直すのは、**調べる方式には必ず
+    // 取りこぼしが残る**から（何を入力と見なすか。node_modules の入れ替えは？
+    // mtime を保つコピーは？）。作り直す方式にはその余地が無い。
+    // esbuild は 100ms 前後で、1 プロセス 1 回に抑えてある。
+    buildApiBundle();
+
     const handler = new lambda.Function(this, 'Function', {
       runtime: lambda.Runtime.NODEJS_24_X,
       // esbuild の出力は dist/index.mjs。**.js にすると node が CommonJS として読み、
