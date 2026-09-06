@@ -3,6 +3,7 @@ import type { AuthFailureReason, Authorizer } from '../../src/auth.ts';
 import { AUTH_FAILURE_REASONS, AUTH_FAILURE_RESPONSES, denyAllAuthorizer } from '../../src/auth.ts';
 import type { ApiRequest, ApiResponse } from '../../src/http.ts';
 import type { Deps } from '../../src/deps.ts';
+import { DeployDispatchError } from '../../src/github/dispatch.ts';
 import { ROUTES, dispatch } from '../../src/router.ts';
 import { KeyNotProvisionedError } from '../../src/secret.ts';
 
@@ -598,5 +599,70 @@ describe('公開後のデプロイ起動', () => {
     };
     await dispatch(postRequest(), { ...deps, deployDispatcher });
     expect(logger.error).toHaveBeenCalled();
+  });
+
+  it('**status の失敗はステータスと reason をログに残す**', async () => {
+    // 実測（2026-09-06 10:47）で name しか残っておらず、transport と status の
+    // どちらで落ちたのか断定できなかった。両方 name === 'Error' だったため。
+    // **原因が一目で分かることが、この修正の主目的。**
+    const { deps, logger } = spyDeps(allowAuthorizer);
+    const deployDispatcher = {
+      dispatch: vi.fn(async () => {
+        throw new DeployDispatchError({ reason: 'status', status: 403 });
+      }),
+    };
+    await dispatch(postRequest(), { ...deps, deployDispatcher });
+
+    const written = JSON.stringify(logger.error.mock.calls);
+    expect(written).toContain('status');
+    expect(written).toContain('403');
+  });
+
+  it('**transport の失敗は status を載せず、reason で区別できる**', async () => {
+    // status が無いことが「HTTP 応答が無かった」の印になる。
+    // ここが status 側と同じ見た目になると、区別できない元の状態に戻る。
+    const { deps, logger } = spyDeps(allowAuthorizer);
+    const deployDispatcher = {
+      dispatch: vi.fn(async () => {
+        throw new DeployDispatchError({ reason: 'transport', transportErrorName: 'TypeError' });
+      }),
+    };
+    await dispatch(postRequest(), { ...deps, deployDispatcher });
+
+    const record = logger.error.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(record['reason']).toBe('transport');
+    expect(record['transportErrorName']).toBe('TypeError');
+    expect(record).not.toHaveProperty('status');
+  });
+
+  it('**素の Error でも落ちず、201 と deployTriggered:false を保つ**', async () => {
+    // DeployDispatcher は interface なので、別の実装が素の Error を投げうる。
+    // ここで例外が漏れると 500 になり、利用者は「保存に失敗した」と読んで再投稿する。
+    const { deps, logger } = spyDeps(allowAuthorizer);
+    const deployDispatcher = {
+      dispatch: vi.fn(async () => {
+        throw new Error('boom');
+      }),
+    };
+    const response = await dispatch(postRequest(), { ...deps, deployDispatcher });
+
+    expect(response.statusCode).toBe(201);
+    expect(JSON.parse(String(response.body))['deployTriggered']).toBe(false);
+    const record = logger.error.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(record['reason']).toBe('unknown');
+    expect(record['name']).toBe('Error');
+  });
+
+  it('dispatch の失敗ログに例外メッセージを載せない', async () => {
+    // dispatch 側が本文を読まない規律を、ログでも崩さない。
+    const { deps, logger } = spyDeps(allowAuthorizer);
+    const secret = 'ghs_leaked_secret_value';
+    const deployDispatcher = {
+      dispatch: vi.fn(async () => {
+        throw new Error(`dispatch failed ${secret}`);
+      }),
+    };
+    await dispatch(postRequest(), { ...deps, deployDispatcher });
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain(secret);
   });
 });

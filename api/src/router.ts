@@ -2,6 +2,7 @@ import { AUTH_FAILURE_RESPONSES } from './auth.ts';
 import type { Deps, PublishResponse } from './deps.ts';
 import type { ApiRequest, ApiResponse } from './http.ts';
 import { InvalidJsonBodyError, errorResponse, isJsonContentType, jsonResponse, parseJsonObject } from './http.ts';
+import { DeployDispatchError } from './github/dispatch.ts';
 import { renderMarkdown } from './posts/frontmatter.ts';
 import { PostValidationError, validatePost } from './posts/validate.ts';
 import { MediaValidationError } from './media/presign.ts';
@@ -49,6 +50,28 @@ const githubAppHealth = async ({ request, deps }: RouteContext): Promise<ApiResp
   }
 };
 
+/**
+ * dispatch の失敗を、秘密を含まない構造化フィールドに落とす。
+ *
+ * **status の有無が transport と status を分ける印。** name だけを残していた頃は
+ * 両方の経路が `Error` を投げていたため、ログから原因を断定できなかった
+ * （2026-09-06 の投稿で実際に詰まった）。
+ *
+ * DeployDispatcher は interface なので、別の実装が素の Error を投げうる。
+ * その場合も落とさず `reason: 'unknown'` として残す。
+ */
+const describeDispatchFailure = (error: unknown): Record<string, unknown> => {
+  const name = error instanceof Error ? error.name : typeof error;
+  if (!(error instanceof DeployDispatchError)) return { name, reason: 'unknown' };
+
+  const record: Record<string, unknown> = { name, reason: error.reason };
+  if (error.status !== undefined) record['status'] = error.status;
+  if (error.transportErrorName !== undefined) {
+    record['transportErrorName'] = error.transportErrorName;
+  }
+  return record;
+};
+
 const createPost = async ({ body, deps }: RouteContext): Promise<ApiResponse> => {
   let post;
   try {
@@ -76,8 +99,9 @@ const createPost = async ({ body, deps }: RouteContext): Promise<ApiResponse> =>
   try {
     await deps.deployDispatcher.dispatch();
   } catch (error) {
-    // 名前だけを残す。dispatch 側が本文を読まない規律を、ログでも崩さない。
-    deps.logger.error('deploy dispatch failed after publish', { name: (error as Error).name });
+    // **メッセージは載せない。** dispatch 側が本文を読まない規律を、ログでも崩さない。
+    // 載せてよいのは、こちらが決めた列挙値と HTTP ステータスだけ。
+    deps.logger.error('deploy dispatch failed after publish', describeDispatchFailure(error));
     return jsonResponse(201, { ...result, deployTriggered: false } satisfies PublishResponse);
   }
   return jsonResponse(201, { ...result, deployTriggered: true } satisfies PublishResponse);
