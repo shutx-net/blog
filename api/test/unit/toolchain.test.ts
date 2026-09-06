@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
+import { API_BUNDLE_FILE, API_ENTRY, apiBundleOptions } from '../../build.ts';
+
 interface PackageJson {
   name?: string;
   private?: boolean;
@@ -206,17 +208,32 @@ describe('api/package.json のかたち', () => {
     expect(apiPkg().private).toBe(true);
   });
 
-  it('scripts.build が esbuild を ESM / node24 / dist/index.mjs で呼ぶ', () => {
-    // **出力は .mjs であって .js ではない。** node は .js を既定で CommonJS として
-    // 読むので、--format=esm の出力を .js に置くと Lambda が起動時に SyntaxError で落ちる。
+  it('scripts.build が build.ts に委ねている（定義を 2 箇所に置かない）', () => {
+    // **ビルドの定義は api/build.ts ただ 1 つ。** infra の synth も同じものを呼ぶ。
+    // ここに esbuild のフラグを書き戻すと、package.json と build.ts が食い違った日に
+    // 「テストが検証したバンドル」と「本番に載るバンドル」が別物になる。
     const build = apiPkg().scripts?.['build'];
     expect(build, 'scripts.build が必要（AGENTS.md の `npm run -w api build`）').toBeDefined();
-    expect(build).toContain('esbuild');
-    expect(build).toContain('--format=esm');
-    expect(build).toContain('--target=node24');
-    expect(build).toContain('--outfile=dist/index.mjs');
-    expect(build, '--outfile=dist/index.js は Lambda が CommonJS として読む').not.toContain(
-      '--outfile=dist/index.js ',
+    expect(build).toBe('node build.ts');
+  });
+
+  it('**バンドルの設定が ESM / node24 / dist/index.mjs である**', () => {
+    // 書き写した設定ではなく、**実際に buildSync へ渡される戻り値**を検査する。
+    const options = apiBundleOptions(API_ENTRY, API_BUNDLE_FILE);
+
+    expect(options.format).toBe('esm');
+    // Lambda のランタイム（nodejs24.x）と揃っていること。
+    expect(options.target).toBe('node24');
+    expect(options.platform).toBe('node');
+    expect(options.bundle).toBe(true);
+    // 推移依存の CommonJS が require を呼ぶので、ESM 出力には createRequire が要る。
+    expect(options.banner?.['js']).toContain('createRequire');
+
+    // **出力は .mjs であって .js ではない。** node は .js を既定で CommonJS として
+    // 読むので、ESM の出力を .js に置くと Lambda が起動時に SyntaxError で落ちる。
+    expect(API_BUNDLE_FILE.endsWith('/dist/index.mjs')).toBe(true);
+    expect(API_BUNDLE_FILE.endsWith('.js'), 'dist/index.js は Lambda が CommonJS として読む').toBe(
+      false,
     );
   });
 

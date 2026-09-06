@@ -235,7 +235,7 @@ npm run -w site preview          # ビルド結果をローカル配信
 npm run -w site test             # unit + build 検証
 npm run -w site test:unit        # unit のみ（速い）
 
-npm run -w api build             # esbuild で api/dist/index.mjs にバンドル
+npm run -w api build             # api/build.ts が api/dist/index.mjs にバンドル
 npm run -w api test              # pretest で build も走る（build 成果物を読むテストがある）
 npm run -w api typecheck
 
@@ -320,6 +320,25 @@ gh variable list -R shutx-net/blog     # 3 つ入っているか確認
 
 未設定のまま走らせても `${{ vars.X }}` は空文字に展開されるだけでエラーにならないので、
 `deploy.yml` の**最初のステップ**が 3 つの有無を確認して落とす。落ちたときは上のコマンドで確認する。
+
+### Lambda のバンドルは synth のたびに作り直される
+
+`infra/lib/posting-api.ts` は `Code.fromAsset` に渡す**直前に `api/build.ts` の
+`buildApiBundle()` を呼ぶ**。したがって `cdk synth` / `cdk diff` / `cdk deploy` は、
+その時点のソースから作ったバンドルを固める。**手で `npm run -w api build` を先に走らせる必要はない。**
+
+そうしている理由。`Code.fromAsset` はディレクトリの中身をそのまま固めるだけで、それがソースと
+一致しているかは見ない。**実際に事故が起きた** — 変異テストが `pretest` 経由で `api/dist` を汚し、
+ソースだけ復旧したため、**本番の Lambda がソースと 6 バイト食い違ったまま動いた**
+（dispatch の成功判定が 2xx ではなく 204 ちょうどのままで、GitHub が返す 200 を失敗と判定していた）。
+そのときテストは 2119 件緑、`git status` もクリーンだった。
+
+「成果物が新鮮かどうか調べて古ければ落とす」方式は採らなかった。**何を入力と見なすかで必ず
+取りこぼしが残る**（`node_modules` の入れ替えは？ mtime を保つコピーは？）。作り直す方式には
+その余地が無い。esbuild は 100ms 前後で、1 プロセス 1 回に抑えてある。
+
+**裏を返すと、ソースが汚れていればそのまま本番に出る。** 変異テストの後始末は
+`git status` で確認すること。`api/dist` の状態は気にしなくてよい。
 
 ### `cdk deploy` は CI から実行しない（意図的）
 

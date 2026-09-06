@@ -73,6 +73,17 @@ npx -w infra cdk deploy <Stack>
 - CDK CLI は nix ではなく npm の devDependency。`aws-cdk` と `aws-cdk-lib` のバージョンをずらさないため、
   必ず `npx -w infra cdk` で呼ぶ
 
+### Lambda のバンドル
+
+- **ビルドの定義は `api/build.ts` ただ 1 つ。** `npm run -w api build` も infra の synth も
+  同じ `buildApiBundle()` を呼ぶ。esbuild のフラグを `package.json` や `infra/` に書き戻さない
+- **`cdk synth` / `cdk deploy` は、固める直前にソースからバンドルを作り直す。**
+  `Code.fromAsset` はディレクトリの中身をそのまま固めるだけで、ソースと一致しているかを見ないため。
+  「成果物が新鮮か調べる」方式は採らない — 何を入力と見なすかで必ず取りこぼしが残る
+- したがって **`api/dist` を手で汚しても本番には出ない。** 逆に言えば
+  **ソースが汚れていればそのまま本番に出る。** 変異テストの後始末は `git status` で確認すること
+  （実際に、変異したバンドルが本番に載って 6 バイト食い違ったまま動いた事故がある）
+
 ### Markdown
 
 - Astro の既定プロセッサは Sätteri（Rust）だが、**このプロジェクトは `@astrojs/markdown-remark` を明示的に使う。**

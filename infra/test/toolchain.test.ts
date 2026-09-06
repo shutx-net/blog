@@ -83,8 +83,8 @@ describe('npm workspaces のルート', () => {
   });
 
   it('workspaces 配列に "api" が含まれる', () => {
-    // infra の synth は api/dist のバンドルをアセットとして読む。api がワークスペースで
-    // なくなると pretest の `npm run build -w ../api` が 'No workspaces found' で落ちる。
+    // infra の synth は api/build.ts を import してバンドルを作る。api がワークスペースで
+    // なくなると esbuild が入らず、synth 自体が落ちる。
     // api 側（api/test/unit/toolchain.test.ts）からも同じことを主張している。**両方から
     // 見るのは意図的**で、片方だけだと片方を消したときに気づけない。
     const root = rootPkg();
@@ -117,28 +117,17 @@ describe('infra/package.json の pretest', () => {
     expect(infraPkg().scripts?.pretest).not.toContain('BlogSiteStack');
   });
 
-  it('**api のバンドルを先にビルドする**', () => {
-    // Code.fromAsset が api/dist を読むので、synth の前に api のバンドルが要る。
-    // ビルドせずに synth すると **テンプレートは通るのに中身が古い**。
-    expect(infraPkg().scripts?.pretest).toContain('npm run build -w ../api');
-  });
-
-  it("**'-w api' という（infra からは解決できない）形になっていない**", () => {
-    // 実測: infra を cwd にした `npm run -w api build` も
-    // `npm --prefix .. run -w api build` も 'No workspaces found: --workspace=api' で失敗する。
-    // **パス形式（-w ../api）だけが通る。**
-    const pretest = infraPkg().scripts?.pretest ?? '';
-    expect(pretest).not.toMatch(/-w\s+api(\s|$)/);
-    expect(pretest).not.toContain('--prefix ..');
-  });
-
-  it('api のビルドが cdk synth **より前** に来る', () => {
-    const pretest = infraPkg().scripts?.pretest ?? '';
-    const buildAt = pretest.indexOf('npm run build -w ../api');
-    const synthAt = pretest.indexOf('cdk synth');
-    expect(buildAt).toBeGreaterThanOrEqual(0);
-    expect(synthAt).toBeGreaterThanOrEqual(0);
-    expect(buildAt, 'api のビルドが synth より後ろにある').toBeLessThan(synthAt);
+  it('**api のビルドを別のステップとして持たない**', () => {
+    // かつてここは `npm run build -w ../api && cdk synth` で、「ビルドを synth より
+    // 前に置く」ことが新鮮さの保証だった。**その保証は成立していなかった** —
+    // pretest が守れるのはテストの前だけで、`cdk deploy` は素通りする。実際に
+    // 変異したバンドルがそのまま本番に載った。
+    //
+    // いまは posting-api.ts が Code.fromAsset の直前に buildApiBundle() を呼ぶので、
+    // synth する経路すべてが作り直す。**ここにビルドを書き戻すと、順序が保証だという
+    // 誤解が戻る。** 本当の保証は test/lambda-bundle-freshness.test.ts が
+    // 実際に古い成果物を置いて確かめている。
+    expect(infraPkg().scripts?.pretest).not.toContain('npm run build');
   });
 });
 
