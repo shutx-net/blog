@@ -1,5 +1,13 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -122,6 +130,29 @@ const contentCheckoutStep = (): WorkflowStep => {
 };
 
 /**
+ * checkout した content repo から記事だけを取り出して所定の位置へ移すステップ。
+ *
+ * **このステップが存在することが今回の修正の本体。** `content-repo/posts` を読み、
+ * `site/src/content/posts` を書く run ステップとして特定する。
+ */
+const moveStepsFound = (): { step: WorkflowStep; index: number }[] =>
+  deployJobStepsOrdered()
+    .map((step, index) => ({ step, index }))
+    .filter(({ step }) => {
+      const run = String(step.run ?? '');
+      return run.includes(CONTENT_POSTS_SOURCE) && run.includes(POSTS_DIR);
+    });
+
+const moveStep = (): { step: WorkflowStep; index: number } => {
+  const found = moveStepsFound();
+  expect(
+    found,
+    `${CONTENT_POSTS_SOURCE} を ${POSTS_DIR} へ移すステップがちょうど 1 つあること`,
+  ).toHaveLength(1);
+  return found[0] as { step: WorkflowStep; index: number };
+};
+
+/**
  * 下限を宣言している run ステップを、その下限つきで返す。
  *
  * **下限はワークフロー内の整数リテラルでなければならない。** ディスクの記事数から
@@ -143,9 +174,28 @@ const guardsWithMinimum = (): { step: WorkflowStep; index: number; minimum: numb
 const indexOfStep = (predicate: (step: WorkflowStep) => boolean): number =>
   deployJobStepsOrdered().findIndex(predicate);
 
-const POSTS_COUNT_GUARD = 'site/src/content/posts';
 const RSS_GUARD = 'rss.xml';
 const SITE_BUILD = 'npm run -w site build';
+
+/**
+ * ビルド前のガードを見分ける述語。
+ *
+ * **`site/src/content/posts` を含むことだけでは足りない。** ビルド後のスラッグ照合
+ * ガードも同じディレクトリを読むので、`site/dist` を見ているかどうかで分ける。
+ * これは表記の都合ではなく実質的な区別で、ビルド前には dist が存在しない。
+ */
+const isPreBuildPostsGuard = (step: WorkflowStep): boolean => {
+  const run = String(step.run ?? '');
+  // 下限の宣言も条件に入れる。**移送ステップも記事ディレクトリを書くので、
+  // ディレクトリ名だけではガードと区別できない。**
+  return /\bminimum=\d+\b/.test(run) && run.includes(POSTS_DIR) && !run.includes('site/dist');
+};
+
+/** ビルド後にスラッグ集合を照合するガードを見分ける述語。 */
+const isSlugGuard = (step: WorkflowStep): boolean => {
+  const run = String(step.run ?? '');
+  return /\bminimum=\d+\b/.test(run) && run.includes(POSTS_DIR) && run.includes(DIST_POSTS);
+};
 
 /** デプロイロールが実際に持っているアクション（テンプレートから読む）。 */
 const grantedActions = (): string[] => {
@@ -175,12 +225,40 @@ const grantedActions = (): string[] => {
 const CONTENT_REPOSITORY = 'shutx-net/blog-content';
 
 /**
- * content を展開する先。**`resolvePostsDir` の既定値と一致していなければならない。**
+ * 記事コレクションの base。**`resolvePostsDir` の既定値と一致していなければならない。**
  *
  * 一致させることで本番経路に環境変数が 1 つも増えない。ここがずれると
  * 「ビルドは成功するのに記事が 0 本」という、astro が exit 0 を返す最悪の形になる。
  */
-const CONTENT_CHECKOUT_PATH = 'site/src/content/posts';
+const POSTS_DIR = 'site/src/content/posts';
+
+/**
+ * content repo を降ろす先。**記事ディレクトリそのものではない。**
+ *
+ * `actions/checkout` は**リポジトリのルート**を `path` に置く。blog-content は
+ * `README.md` + `posts/*.md` という構成なので、`path` を記事ディレクトリにすると
+ * 実際にはこうなる:
+ *
+ *     site/src/content/posts/README.md      <- glob の **\/*.md にマッチする
+ *     site/src/content/posts/posts/*.md     <- 記事が 1 階層深い
+ *     site/src/content/posts/.git/
+ *
+ * README はフロントマターが無いのでスキーマ検証で落ちる（run 34019234594 が
+ * この形で失敗した）。**より危険なのは README が無い場合で、`**\/*.md` は再帰なので
+ * 記事は見つかるが entry.id が `posts/hello-world` になり、
+ * `/posts/posts/hello-world/` として publish される。** RSS の guid が変わる =
+ * 購読者への再配信で、この系で唯一取り消せない出力。item 数は変わらないので
+ * rss ガードは素通りする。
+ *
+ * だから別の場所に降ろし、`posts/` だけを記事ディレクトリへ移す。
+ */
+const CONTENT_CHECKOUT_PATH = 'content-repo';
+
+/** content repo の中で記事が置かれているディレクトリ。 */
+const CONTENT_POSTS_SOURCE = `${CONTENT_CHECKOUT_PATH}/posts`;
+
+/** ビルド成果物のうち記事ページが並ぶ場所。 */
+const DIST_POSTS = 'site/dist/posts';
 
 /** 読み取り専用 deploy key の秘密鍵。 */
 const CONTENT_DEPLOY_KEY_SECRET = 'CONTENT_DEPLOY_KEY';
@@ -458,10 +536,45 @@ describe('記事リポジトリの checkout', () => {
     expect(withoutRepository, 'repository 未指定の checkout（= このリポジトリ）').toHaveLength(1);
   });
 
-  it('content を既定の posts ディレクトリへ直接展開している', () => {
+  it('content を記事ディレクトリへ直接展開していない', () => {
+    // **`actions/checkout` はリポジトリのルートを path に置く。**
+    // blog-content は README.md + posts/*.md なので、path を記事ディレクトリに
+    // すると README がコレクションに混ざり、記事は 1 階層深くなって
+    // entry.id が `posts/hello-world` になる（= URL と RSS の guid が変わる）。
+    const path = String(contentCheckoutStep().with?.path ?? '');
+    expect(path, 'checkout の path が指定されていること').not.toBe('');
+    expect(path, 'content repo のルートを記事ディレクトリに置かないこと').not.toBe(POSTS_DIR);
+    expect(path, `checkout の降ろし先は ${CONTENT_CHECKOUT_PATH}`).toBe(CONTENT_CHECKOUT_PATH);
+  });
+
+  it('content repo の posts/ だけを記事ディレクトリへ移すステップがある', () => {
+    const { step } = moveStep();
+    expect(typeof step.run, '移送は run ステップであること').toBe('string');
+  });
+
+  it('その移送が content checkout より後、記事本数のガードより前にある', () => {
+    // 順序が逆だと、ガードは checkout されたままの形（README 込み・入れ子）を
+    // 数えることになり、何も守らない。
+    const checkoutAt = indexOfStep((step) => step.with?.repository === CONTENT_REPOSITORY);
+    const guardAt = indexOfStep(isPreBuildPostsGuard);
+    expect(checkoutAt, 'content checkout があること').toBeGreaterThan(-1);
+    expect(guardAt, '記事本数のガードがあること').toBeGreaterThan(-1);
+    expect(moveStep().index, '移送は checkout より後').toBeGreaterThan(checkoutAt);
+    expect(moveStep().index, '移送は記事本数のガードより前').toBeLessThan(guardAt);
+  });
+
+  it('移送元が無いときに明示的に落ちる', () => {
+    // `set -eu` だけに頼らない。`mv` が無い相手に対して何を返すかはシェル任せで、
+    // 「静かに 0 本のまま進む」形になりうる。
+    const run = String(moveStep().step.run);
+    expect(run, '移送元の存在を確かめていること').toContain(CONTENT_POSTS_SOURCE);
+    expect(run, '見つからないときに ::error:: を出すこと').toContain('::error::');
+  });
+
+  it('本番のビルドが読むディレクトリが resolvePostsDir の既定値と一致している', () => {
     // **本番は POSTS_DIR を設定せず、既定値がそのまま正解になるようにする。**
     // 「env を書き忘れたら空サイト」という経路を新設しない。
-    expect(contentCheckoutStep().with?.path).toBe(CONTENT_CHECKOUT_PATH);
+    expect(String(moveStep().step.run)).toContain(POSTS_DIR);
   });
 
   it('deploy.yml が POSTS_DIR を設定していない', () => {
@@ -494,16 +607,12 @@ describe('記事が消えたままデプロイされないこと', () => {
   });
 
   it('ビルド前に記事本数を数えるガードがある', () => {
-    const guards = guardsWithMinimum().filter((guard) =>
-      String(guard.step.run).includes(POSTS_COUNT_GUARD),
-    );
-    expect(guards, `${POSTS_COUNT_GUARD} を数えるガード`).toHaveLength(1);
+    const guards = guardsWithMinimum().filter((guard) => isPreBuildPostsGuard(guard.step));
+    expect(guards, `${POSTS_DIR} を数えるガード`).toHaveLength(1);
   });
 
   it('そのガードが content checkout より後、site build より前にある', () => {
-    const guard = guardsWithMinimum().find((candidate) =>
-      String(candidate.step.run).includes(POSTS_COUNT_GUARD),
-    );
+    const guard = guardsWithMinimum().find((candidate) => isPreBuildPostsGuard(candidate.step));
     expect(guard, '記事本数のガードがあること').toBeDefined();
 
     const checkoutAt = indexOfStep((step) => step.with?.repository === CONTENT_REPOSITORY);
@@ -519,11 +628,37 @@ describe('記事が消えたままデプロイされないこと', () => {
     // 押しのけていないことを明示的に主張する。
     const steps = deployJobStepsOrdered();
     const firstRunAt = steps.findIndex((step) => typeof step.run === 'string');
-    const guard = guardsWithMinimum().find((candidate) =>
-      String(candidate.step.run).includes(POSTS_COUNT_GUARD),
-    );
+    const guard = guardsWithMinimum().find((candidate) => isPreBuildPostsGuard(candidate.step));
     expect(guard, '記事本数のガードがあること').toBeDefined();
     expect(guard?.index).not.toBe(firstRunAt);
+  });
+
+  it('ビルド後・sync 前に、publish されるスラッグ集合を checkout と照合している', () => {
+    // **本数では足りない。** content repo のルートを丸ごと降ろしてしまうと、
+    // 記事は `posts/hello-world` という id で見つかり、item 数は変わらないまま
+    // `/posts/posts/hello-world/` として publish される。RSS の guid が変わるので
+    // 購読者に全記事が再配信される。取り消せない。
+    //
+    // 集合の**過不足なし**を見れば、記事の取りこぼしも、余分な出力も、
+    // draft の leak も、同じ 1 本で捕まる。
+    const guard = guardsWithMinimum().find((candidate) => isSlugGuard(candidate.step));
+    expect(guard, 'スラッグ照合のガードがあること').toBeDefined();
+
+    const buildAt = indexOfStep((step) => String(step.run ?? '').includes(SITE_BUILD));
+    const syncAt = indexOfStep((step) => String(step.run ?? '').includes(S3_SYNC));
+    expect(buildAt, 'site build があること').toBeGreaterThan(-1);
+    expect(syncAt, 'sync があること').toBeGreaterThan(-1);
+    expect(guard?.index as number, 'スラッグ照合はビルドより後').toBeGreaterThan(buildAt);
+    expect(guard?.index as number, 'スラッグ照合は sync より前').toBeLessThan(syncAt);
+  });
+
+  it('スラッグ照合が draft を除外している', () => {
+    // 除外しないと、draft を 1 本足しただけでデプロイが止まる（dist には出ないので
+    // 集合が食い違う）。ガードが「うるさいだけ」になると外されるので、ここは効き目の
+    // 問題ではなく運用の問題として固定する。
+    expect(String(moveStep().step.run)).not.toContain('draft');
+    const guard = guardsWithMinimum().find((candidate) => isSlugGuard(candidate.step));
+    expect(String(guard?.step.run), 'draft を見ていること').toContain('draft');
   });
 
   it('ビルド後・sync 前に rss.xml の item 数を検証している', () => {
@@ -542,9 +677,11 @@ describe('記事が消えたままデプロイされないこと', () => {
     expect(guard?.index as number, 'rss の検証は sync より前').toBeLessThan(syncAt);
   });
 
-  it('2 つのガードが同じ下限を使っている', () => {
-    // 片方だけ下げると、もう片方が先に落ちて理由の分かりにくい失敗になる。
-    const minimums = new Set(guardsWithMinimum().map((guard) => guard.minimum));
+  it('すべてのガードが同じ下限を使っている', () => {
+    // 1 つだけ下げると、もう 1 つが先に落ちて理由の分かりにくい失敗になる。
+    const guards = guardsWithMinimum();
+    expect(guards.length, '下限を宣言するガードが 3 つあること').toBe(3);
+    const minimums = new Set(guards.map((guard) => guard.minimum));
     expect([...minimums], 'ガードごとに下限がばらけている').toHaveLength(1);
   });
 });
@@ -576,11 +713,33 @@ const withTempDir = (f: (dir: string) => void): void => {
 };
 
 const postsGuardScript = (): string => {
-  const guard = guardsWithMinimum().find((candidate) =>
-    String(candidate.step.run).includes(POSTS_COUNT_GUARD),
-  );
+  const guard = guardsWithMinimum().find((candidate) => isPreBuildPostsGuard(candidate.step));
   expect(guard, '記事本数のガードがあること').toBeDefined();
   return String(guard?.step.run);
+};
+
+const slugGuardScript = (): string => {
+  const guard = guardsWithMinimum().find((candidate) => isSlugGuard(candidate.step));
+  expect(guard, 'スラッグ照合のガードがあること').toBeDefined();
+  return String(guard?.step.run);
+};
+
+const moveScript = (): string => String(moveStep().step.run);
+
+/** フロントマター付きの記事を書く。draft を明示しなければ公開扱い。 */
+const writePost = (path: string, options: { draft?: boolean } = {}): void => {
+  const draft = options.draft === true ? 'draft: true\n' : '';
+  writeFileSync(
+    path,
+    `---\ntitle: "t"\ndescription: "d"\npubDate: "2026-01-01T00:00:00.000Z"\n${draft}---\n\nbody\n`,
+  );
+};
+
+/** dist 側に記事ページを 1 つ作る。 */
+const writeDistPost = (dir: string, slug: string): void => {
+  const target = join(dir, 'site/dist/posts', slug);
+  mkdirSync(target, { recursive: true });
+  writeFileSync(join(target, 'index.html'), '<html></html>');
 };
 
 const rssGuardScript = (): string => {
@@ -679,6 +838,266 @@ describe('ガードを実際に走らせる', () => {
       const result = runGuardScript(rssGuardScript(), dir);
       expect(result.status).not.toBe(0);
       expect(result.output).toContain('::error::');
+    });
+  });
+});
+
+/**
+ * **checkout が実際に作る形を再現して、移送スクリプトを走らせる。**
+ *
+ * このブロックがこの修正の中心。テキスト一致では今回の欠陥は捕まらなかった
+ * （`path:` の値としては完全に妥当な文字列だった）。`actions/checkout` が
+ * リポジトリの**ルート**を `path` に置くという事実は、実物と同じ形を作って
+ * 通してみるまで現れない。
+ */
+const makeContentCheckout = (dir: string, slugs: readonly string[]): void => {
+  const root = join(dir, CONTENT_CHECKOUT_PATH);
+  const posts = join(root, 'posts');
+  mkdirSync(posts, { recursive: true });
+  // 実物どおり: リポジトリのルートに README があり、記事は posts/ の下にある。
+  writeFileSync(join(root, 'README.md'), '# blog-content\n\nno frontmatter here.\n');
+  mkdirSync(join(root, '.git'), { recursive: true });
+  writeFileSync(join(root, '.git/HEAD'), 'ref: refs/heads/main\n');
+  for (const slug of slugs) writePost(join(posts, `${slug}.md`));
+};
+
+/** 記事ディレクトリ直下のエントリ名。 */
+const entriesInPostsDir = (dir: string): string[] =>
+  readdirSync(join(dir, POSTS_DIR)).sort();
+
+describe('content checkout の形を再現して移送を走らせる', () => {
+  it('記事だけが記事ディレクトリの直下に並ぶ', () => {
+    withTempDir((dir) => {
+      makeContentCheckout(dir, ['hello-world', 'second-post', 'third-post']);
+      const result = runGuardScript(moveScript(), dir);
+      expect(result.status, `移送が失敗した: ${result.output}`).toBe(0);
+      expect(entriesInPostsDir(dir)).toEqual([
+        'hello-world.md',
+        'second-post.md',
+        'third-post.md',
+      ]);
+    });
+  });
+
+  it('README.md を記事ディレクトリに持ち込まない', () => {
+    // これが run 34019234594 を落とした直接の原因。フロントマターが無いので
+    // スキーマ検証で落ちる。
+    withTempDir((dir) => {
+      makeContentCheckout(dir, ['hello-world', 'second-post', 'third-post']);
+      expect(runGuardScript(moveScript(), dir).status).toBe(0);
+      expect(entriesInPostsDir(dir)).not.toContain('README.md');
+    });
+  });
+
+  it('記事を 1 階層深いままにしない', () => {
+    // **README が無ければビルドは成功していた。** `**/*.md` は再帰なので記事は
+    // 見つかるが、entry.id が `posts/hello-world` になり
+    // `/posts/posts/hello-world/` として publish される。RSS の guid が変わる。
+    withTempDir((dir) => {
+      makeContentCheckout(dir, ['hello-world', 'second-post', 'third-post']);
+      expect(runGuardScript(moveScript(), dir).status).toBe(0);
+      expect(entriesInPostsDir(dir), 'posts/ が入れ子のまま残っている').not.toContain('posts');
+      expect(existsSync(join(dir, POSTS_DIR, 'posts')), '入れ子のディレクトリ').toBe(false);
+    });
+  });
+
+  it('.git を記事ディレクトリに残さない', () => {
+    withTempDir((dir) => {
+      makeContentCheckout(dir, ['hello-world', 'second-post', 'third-post']);
+      expect(runGuardScript(moveScript(), dir).status).toBe(0);
+      expect(existsSync(join(dir, POSTS_DIR, '.git'))).toBe(false);
+    });
+  });
+
+  it('移送のあとで記事本数のガードが通る', () => {
+    // 2 つのステップが噛み合っていることを、順番に走らせて確かめる。
+    // 片方だけ正しくても意味がない。
+    withTempDir((dir) => {
+      makeContentCheckout(dir, ['hello-world', 'second-post', 'third-post']);
+      expect(runGuardScript(moveScript(), dir).status).toBe(0);
+      const guard = runGuardScript(postsGuardScript(), dir);
+      expect(guard.status, `移送後にガードが落ちた: ${guard.output}`).toBe(0);
+    });
+  });
+
+  it('移送元が無ければ落ちる（checkout が走らなかった場合）', () => {
+    withTempDir((dir) => {
+      const result = runGuardScript(moveScript(), dir);
+      expect(result.status, '移送元が無いのに通っている').not.toBe(0);
+      expect(result.output).toContain('::error::');
+    });
+  });
+
+  it('content repo に posts/ が無ければ落ちる（レイアウトが変わった場合）', () => {
+    withTempDir((dir) => {
+      const root = join(dir, CONTENT_CHECKOUT_PATH);
+      mkdirSync(root, { recursive: true });
+      writeFileSync(join(root, 'README.md'), '# blog-content\n');
+      writePost(join(root, 'hello-world.md'));
+      const result = runGuardScript(moveScript(), dir);
+      expect(result.status, 'posts/ が無いのに通っている').not.toBe(0);
+      expect(result.output).toContain('::error::');
+    });
+  });
+
+  it('記事ディレクトリが既にあっても上書きできる', () => {
+    // 同じ runner を使い回す形（self-hosted や再実行）で、古い内容が残ったまま
+    // 移送が失敗すると、前回の記事でサイトが publish される。
+    withTempDir((dir) => {
+      makeContentCheckout(dir, ['hello-world', 'second-post', 'third-post']);
+      const stale = join(dir, POSTS_DIR);
+      mkdirSync(stale, { recursive: true });
+      writePost(join(stale, 'stale-post.md'));
+      expect(runGuardScript(moveScript(), dir).status).toBe(0);
+      expect(entriesInPostsDir(dir), '古い記事が残っている').not.toContain('stale-post.md');
+    });
+  });
+});
+
+describe('publish されるスラッグ集合の照合を実際に走らせる', () => {
+  /** content 側に公開記事を n 本、dist 側にも同じものを置く。 */
+  const publishedSlugs = (): string[] =>
+    Array.from({ length: declaredMinimum() }, (_unused, i) => `post-${i}`);
+
+  const seedContent = (dir: string, slugs: readonly string[]): void => {
+    const posts = join(dir, POSTS_DIR);
+    mkdirSync(posts, { recursive: true });
+    for (const slug of slugs) writePost(join(posts, `${slug}.md`));
+  };
+
+  it('content と dist が一致していれば通る', () => {
+    withTempDir((dir) => {
+      const slugs = publishedSlugs();
+      seedContent(dir, slugs);
+      for (const slug of slugs) writeDistPost(dir, slug);
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(result.status, `一致しているのに落ちた: ${result.output}`).toBe(0);
+    });
+  });
+
+  it('dist に 1 つ足りなければ落ちる', () => {
+    withTempDir((dir) => {
+      const slugs = publishedSlugs();
+      seedContent(dir, slugs);
+      for (const slug of slugs.slice(1)) writeDistPost(dir, slug);
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(result.status, '記事が 1 本落ちているのに通っている').not.toBe(0);
+      expect(result.output).toContain('::error::');
+    });
+  });
+
+  it('dist だけが入れ子なら落ちる（集合の不一致）', () => {
+    // corpus は平坦、dist は入れ子。**これは実際には起きない組み合わせ**で、
+    // 集合の比較だけで捕まる。下の「両方が入れ子」と混同しないこと。
+    withTempDir((dir) => {
+      const slugs = publishedSlugs();
+      seedContent(dir, slugs);
+      for (const slug of slugs) writeDistPost(dir, `posts/${slug}`);
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(result.status, '入れ子のまま publish されようとしている').not.toBe(0);
+      expect(result.output).toContain('::error::');
+    });
+  });
+
+  it('**content repo のルートを丸ごと置いた形（corpus も dist も入れ子）で落ちる**', () => {
+    // **これが実際に起きた事故の形。** run 34019234594 は README.md の
+    // スキーマ違反で落ちたが、README が無ければビルドは成功し、記事は
+    // `/posts/posts/hello-world/` として publish されていた。
+    //
+    // **集合の比較ではこれを止められない。** expected は記事ディレクトリからの
+    // 相対パスで作るので、corpus が入れ子なら期待値も `posts/hello-world` になり、
+    // dist 側も同じなので一致してしまう。内部整合しか見ていない。
+    //
+    // 止めるのは「スラッグが平坦であること」の直接の主張だけ。
+    withTempDir((dir) => {
+      const slugs = publishedSlugs();
+      // 事故と同じ形: 記事ディレクトリの下に posts/ があり、その中に .md がある。
+      const nested = join(dir, POSTS_DIR, 'posts');
+      mkdirSync(nested, { recursive: true });
+      for (const slug of slugs) writePost(join(nested, `${slug}.md`));
+      // astro はこれを id `posts/<slug>` として publish する。
+      for (const slug of slugs) writeDistPost(dir, `posts/${slug}`);
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(
+        result.status,
+        'corpus と dist が同じだけ入れ子でも止まらなければならない',
+      ).not.toBe(0);
+      expect(result.output).toContain('::error::');
+    });
+  });
+
+  it('corpus だけが入れ子でも落ちる（ビルドが読み損ねた場合）', () => {
+    // 記事は入れ子にあるのに dist が平坦、という食い違い。集合でも捕まるが、
+    // 平坦性の主張が expected 側にも効いていることを固定する。
+    withTempDir((dir) => {
+      const slugs = publishedSlugs();
+      const nested = join(dir, POSTS_DIR, 'posts');
+      mkdirSync(nested, { recursive: true });
+      for (const slug of slugs) writePost(join(nested, `${slug}.md`));
+      for (const slug of slugs) writeDistPost(dir, slug);
+      expect(runGuardScript(slugGuardScript(), dir).status).not.toBe(0);
+    });
+  });
+
+  it('件数が同じでも中身が違えば落ちる', () => {
+    // **本数の比較と集合の比較を区別する唯一のケース。**
+    // 平坦性の主張を足したことで、入れ子は集合の比較を通らずに止まるように
+    // なった。それだけだと「集合を数に弱める」変異が誰にも捕まらなくなるので、
+    // 件数が一致したまま中身が食い違う形をここで固定する
+    // （記事を改名して dist に古いページが残る、等）。
+    withTempDir((dir) => {
+      const slugs = publishedSlugs();
+      seedContent(dir, slugs);
+      for (const slug of slugs.slice(0, -1)) writeDistPost(dir, slug);
+      writeDistPost(dir, 'renamed-post');
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(result.status, '件数だけ合っていて中身が違う').not.toBe(0);
+      expect(result.output).toContain('::error::');
+    });
+  });
+
+  it('dist に余分があれば落ちる', () => {
+    withTempDir((dir) => {
+      const slugs = publishedSlugs();
+      seedContent(dir, slugs);
+      for (const slug of slugs) writeDistPost(dir, slug);
+      writeDistPost(dir, 'not-in-the-content-repo');
+      expect(runGuardScript(slugGuardScript(), dir).status).not.toBe(0);
+    });
+  });
+
+  it('draft は publish されるべき集合に数えない', () => {
+    // 除外しないと draft を 1 本足すだけでデプロイが止まる。
+    withTempDir((dir) => {
+      const slugs = publishedSlugs();
+      seedContent(dir, slugs);
+      writePost(join(dir, POSTS_DIR, 'a-draft.md'), { draft: true });
+      for (const slug of slugs) writeDistPost(dir, slug);
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(result.status, `draft のせいで落ちた: ${result.output}`).toBe(0);
+    });
+  });
+
+  it('draft が dist にあれば落ちる（leak の検知）', () => {
+    withTempDir((dir) => {
+      const slugs = publishedSlugs();
+      seedContent(dir, slugs);
+      writePost(join(dir, POSTS_DIR, 'a-draft.md'), { draft: true });
+      for (const slug of slugs) writeDistPost(dir, slug);
+      writeDistPost(dir, 'a-draft');
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(result.status, 'draft が publish されようとしている').not.toBe(0);
+      expect(result.output).toContain('::error::');
+    });
+  });
+
+  it('content も dist も空なら落ちる（両方空で一致、を素通ししない）', () => {
+    // 集合の一致だけを見ると、両方が空のとき通ってしまう。**下限がその穴を塞ぐ。**
+    withTempDir((dir) => {
+      mkdirSync(join(dir, POSTS_DIR), { recursive: true });
+      mkdirSync(join(dir, DIST_POSTS), { recursive: true });
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(result.status, '両方空なのに通っている').not.toBe(0);
     });
   });
 });

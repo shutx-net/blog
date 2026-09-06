@@ -31,13 +31,19 @@ npx -w infra cdk deploy <Stack>
 
 - 記事の実体は **private リポジトリ `shutx-net/blog-content` の `posts/*.md` だけ**。データベースはない。
   下書きを public に晒さないため、かつコード側の履歴を記事コミットで動かさないために分離してある
-- **このリポジトリに記事を置かない。** `site/src/content/posts/` は `.gitignore` 済みで、
-  デプロイ時に content repo が read-only の deploy key でそこへ checkout される。
-  `.gitkeep` も置かないこと（`actions/checkout` がそのパスを掃除する）。
-  `site/test/fixtures/posts/*.md` はテスト用フィクスチャで、本番には出ない
+- **このリポジトリに記事を置かない。** `site/src/content/posts/` は `.gitignore` 済み。
+  `.gitkeep` も置かないこと。`site/test/fixtures/posts/*.md` はテスト用フィクスチャで本番には出ない
+- **content repo を `site/src/content/posts` へ直接 checkout しない。**
+  `actions/checkout` はリポジトリの**ルート**を `path` に置くので、`README.md` が
+  コレクションに混ざり、記事が 1 階層深くなって `entry.id` が `posts/hello-world` になる。
+  **URL と RSS の `<guid>` が変わる = 購読者への全記事再配信で、取り消せない。**
+  `content-repo` に降ろしてから `posts/` だけを移すこと（ローカルで clone するときも同じ）
 - **astro は記事 0 本でもビルドに成功する**（glob loader は warn して return するだけ）。
-  だから `deploy.yml` に**記事本数の下限ガード**が整数リテラルで書いてある。
+  だから `deploy.yml` に**ガードが 3 つ**書いてある（本数 / rss item 数 /
+  スラッグの平坦性と集合の一致）。下限は整数リテラル。
   記事を意図的に下限より減らすときは、その数字も同じ PR で下げること
+- **記事のスラッグは平坦**（`/posts/<slug>/` の 1 階層）。`deploy.yml` が直接主張している。
+  数と集合の一致だけでは入れ子を検出できない（corpus も dist も同じだけ深くなるため一致してしまう）
 - 投稿 API は **Git Data API（blob → tree → commit → ref）で 1 コミットにまとめる**。
   Contents API は 1 リクエスト 1 ファイルなので、複数ファイルを書くと中途半端な状態でビルドが走る
 - 記事を 1 本足すと一覧・タグ・ページネーション・RSS・sitemap が全部作り直しになる。部分デプロイという概念はない
