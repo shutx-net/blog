@@ -8,7 +8,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 // **api の定数をそのまま使う。** 同じ文字列を 2 箇所に書くと、片方だけ直した日に
 // Lambda が blog-content の中へ site/src/content/posts/ を作る。
-import { SITE_POSTS_PATH_PREFIX } from '../../api/src/github/commit.ts';
+import { CONTENT_POSTS_PATH_PREFIX } from '../../api/src/github/commit.ts';
 import { AdminAuth } from './admin-auth.ts';
 import { MediaBucket } from './media-bucket.ts';
 import { PostingApi } from './posting-api.ts';
@@ -173,16 +173,19 @@ export class SiteStack extends Stack {
         allowedUsername: ADMIN_USERNAME,
       },
       githubOwner: 'shutx-net',
-      // **Phase 2 では両方とも blog。** 設定可能にするだけで、値は今日のまま。
-      // 記事リポジトリへの切り替えは blog-content を作る PR で行う。
-      githubContentRepo: 'blog',
+      // **記事は private な blog-content、ワークフローは public な blog。**
+      // この 2 つが別であることが分離の実体で、Lambda は記事リポジトリにしか
+      // contents:write を持たない（code repo には actions:write だけ）。
+      githubContentRepo: 'blog-content',
       githubCodeRepo: 'blog',
-      postsPathPrefix: SITE_POSTS_PATH_PREFIX,
-      // deployWorkflowFile は**設定しない**。push でデプロイが走っているあいだに
-      // dispatch すると、同じコミットに対してデプロイが 2 本走る。
+      postsPathPrefix: CONTENT_POSTS_PATH_PREFIX,
+      // **記事が別リポジトリに移ったので、push ではデプロイが走らなくなった。**
+      // dispatch がデプロイの唯一の起動経路になる（Phase 2 では二重デプロイを
+      // 避けるために意図的に未設定にしていた）。
+      deployWorkflowFile: 'deploy.yml',
       // GitHub App の client ID。**秘密ではない**ので public リポジトリに置いてよい。
-    // 秘密は秘密鍵のほうだけで、そちらは Secrets Manager にあり CDK は値を持たない。
-    githubAppClientId: GITHUB_APP_CLIENT_ID,
+      // 秘密は秘密鍵のほうだけで、そちらは Secrets Manager にあり CDK は値を持たない。
+      githubAppClientId: GITHUB_APP_CLIENT_ID,
     });
 
     // セキュリティヘッダ。**Phase 5 で新設**（実測で、それまでの実配信は

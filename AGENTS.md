@@ -29,7 +29,15 @@ npx -w infra cdk deploy <Stack>
 
 ### Git が唯一の正
 
-- 記事の実体は `site/src/content/posts/*.md` だけ。データベースはない
+- 記事の実体は **private リポジトリ `shutx-net/blog-content` の `posts/*.md` だけ**。データベースはない。
+  下書きを public に晒さないため、かつコード側の履歴を記事コミットで動かさないために分離してある
+- **このリポジトリに記事を置かない。** `site/src/content/posts/` は `.gitignore` 済みで、
+  デプロイ時に content repo が read-only の deploy key でそこへ checkout される。
+  `.gitkeep` も置かないこと（`actions/checkout` がそのパスを掃除する）。
+  `site/test/fixtures/posts/*.md` はテスト用フィクスチャで、本番には出ない
+- **astro は記事 0 本でもビルドに成功する**（glob loader は warn して return するだけ）。
+  だから `deploy.yml` に**記事本数の下限ガード**が整数リテラルで書いてある。
+  記事を意図的に下限より減らすときは、その数字も同じ PR で下げること
 - 投稿 API は **Git Data API（blob → tree → commit → ref）で 1 コミットにまとめる**。
   Contents API は 1 リクエスト 1 ファイルなので、複数ファイルを書くと中途半端な状態でビルドが走る
 - 記事を 1 本足すと一覧・タグ・ページネーション・RSS・sitemap が全部作り直しになる。部分デプロイという概念はない

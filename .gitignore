@@ -10,6 +10,12 @@ result-*
 node_modules/
 *.tsbuildinfo
 
+# 記事の実体は private な shutx-net/blog-content にあり、デプロイ時にここへ
+# checkout される。**追跡ファイルを 1 つも置かないこと** — .gitkeep も含めて。
+# actions/checkout は path のディレクトリを自分で作るし、既定の clean が
+# そこにあるものと衝突する。
+site/src/content/posts/
+
 # Astro
 site/dist/
 site/.astro/

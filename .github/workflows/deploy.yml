@@ -89,6 +89,54 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # 記事の実体は private な shutx-net/blog-content にある。
+      #
+      # **path は resolvePostsDir の既定値と同じにしてある。** そうすることで
+      # 本番のビルドに環境変数を 1 つも渡さずに済み、「設定を書き忘れたら空サイト」
+      # という経路を新設しないで済む（POSTS_DIR を使うのはテストだけ）。
+      #
+      # 資格情報は**読み取り専用の deploy key**。GitHub App の秘密鍵を Actions の
+      # secret に複製する道（create-github-app-token）は採らない。その鍵は
+      # blog と blog-content の両方に書けるこの系で最も価値の高い資格情報で、
+      # 今は AWS Secrets Manager にしか存在しない。爆発半径を広げない。
+      #
+      # persist-credentials: false で、以降のステップに git の資格情報を残さない。
+      - name: Check out the posts from the content repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: shutx-net/blog-content
+          path: site/src/content/posts
+          ssh-key: ${{ secrets.CONTENT_DEPLOY_KEY }}
+          persist-credentials: false
+
+      # **astro は記事 0 本でもビルドに成功する。**
+      #
+      # base ディレクトリが存在しない場合も、パターンに 1 件もマッチしない場合も、
+      # glob ローダは warn を出して return するだけで throw しない
+      # （astro 7.2.9 の dist/content/loaders/glob.js:186-198）。したがって
+      # 「checkout が空 → 記事 0 本のサイトを aws s3 sync --delete で publish →
+      # 全記事が消える」はビルドの成否では検知できない。ここで止めるしかない。
+      #
+      # **下限はこのファイルの整数リテラルである。** ディスクの記事数から
+      # 計算する形にすると、記事が 0 本になったとき下限も 0 になって主張が
+      # 空振りする。vars. にしないのも同じ理由（未設定でも空文字に展開される）。
+      #
+      # 記事を意図的に下限より減らすときは、この数字も同じ PR で下げること。
+      - name: Require the content checkout to have produced posts
+        run: |
+          set -eu
+          minimum=3
+          if [ ! -d site/src/content/posts ]; then
+            echo '::error::site/src/content/posts is missing; the content checkout did not run.'
+            exit 1
+          fi
+          found="$(find site/src/content/posts -type f -name '*.md' | wc -l)"
+          echo "posts found: $found (minimum $minimum)"
+          if [ "$found" -lt "$minimum" ]; then
+            echo "::error::only $found post(s) under site/src/content/posts, expected at least $minimum. Refusing to publish and delete the live site."
+            exit 1
+          fi
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.19.0
@@ -113,6 +161,33 @@ jobs:
           # 「絶対 https」「プレースホルダではない」「正規化済み」を機械的に見ている。
           SITE_URL: https://d8gsxbwzr6ft8.cloudfront.net/
         run: npm run -w site build
+
+      # **二重の砦。** 上のガードは checkout されたファイルを数えるだけで、
+      # ビルドが実際にそれを読んだかまでは見ていない（POSTS_DIR の配線が壊れれば
+      # 記事はディスクにあるのに dist は空になる）。ここは出力そのものを数える。
+      #
+      # rss.xml を選ぶのは、**購読者への配信だけが取り消せない出力だから。**
+      # サイトは再デプロイで戻るが、配られたフィードは戻らない。
+      #
+      # **`grep -c` を使わないこと。** あれは一致した「行数」を返す。@astrojs/rss の
+      # 出力は改行を含まない 1 行なので、item が何本あっても常に 1 になり、
+      # このガードは記事の本数によらず必ず落ちる。出現回数は `grep -o | wc -l`。
+      # infra/test/workflow-deploy-steps.test.ts がこのスクリプトを実際に実行して、
+      # 1 行の rss.xml を正しく数えられることを確認している。
+      - name: Require the built site to contain the posts
+        run: |
+          set -eu
+          minimum=3
+          if [ ! -f site/dist/rss.xml ]; then
+            echo '::error::site/dist/rss.xml is missing; the build did not produce a feed.'
+            exit 1
+          fi
+          items="$(grep -o '<item>' site/dist/rss.xml | wc -l)"
+          echo "rss items: $items (minimum $minimum)"
+          if [ "$items" -lt "$minimum" ]; then
+            echo "::error::rss.xml carries $items item(s), expected at least $minimum. Refusing to publish."
+            exit 1
+          fi
 
       - name: Build the admin UI
         run: npm run -w admin build

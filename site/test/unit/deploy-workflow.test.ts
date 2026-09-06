@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -124,5 +125,56 @@ describe("deploy.yml pins SITE_URL for the production build", () => {
     // precondition, so setting SITE_URL in CI would fail the site suite. These two
     // tests guard opposite sides of the same convention.
     expect(rawWorkflow("ci.yml")).not.toContain("SITE_URL");
+  });
+});
+/**
+ * The posts live in a separate private repository (shutx-net/blog-content) and are
+ * checked out onto this path at deploy time. Nothing under it may be tracked here.
+ */
+const POSTS_DIR_IN_REPO = "site/src/content/posts";
+
+const repoRoot = (): string => fileURLToPath(new URL("../../..", import.meta.url));
+
+const trackedUnderPostsDir = (): string[] =>
+  execFileSync("git", ["ls-files", "--", POSTS_DIR_IN_REPO], {
+    cwd: repoRoot(),
+    encoding: "utf8",
+  })
+    .split("\n")
+    .filter((line) => line.length > 0);
+
+describe("the code repository does not carry posts", () => {
+  it("is inside a git work tree, so the check below is not vacuous", () => {
+    // Without this, a checkout that is not a git repository would make
+    // `git ls-files` fail or return nothing, and the assertion would pass for
+    // the wrong reason.
+    const inside = execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd: repoRoot(),
+      encoding: "utf8",
+    }).trim();
+    expect(inside).toBe("true");
+  });
+
+  it("sees the fixtures as tracked, proving git ls-files reaches this tree", () => {
+    // The paired non-vacuity guard: the same command finds files elsewhere.
+    const fixtures = execFileSync("git", ["ls-files", "--", "site/test/fixtures/posts"], {
+      cwd: repoRoot(),
+      encoding: "utf8",
+    })
+      .split("\n")
+      .filter((line) => line.length > 0);
+    expect(fixtures.length).toBeGreaterThan(0);
+  });
+
+  it("tracks no files at all under the posts directory", () => {
+    // A .gitkeep would be worse than useless: actions/checkout cleans the target
+    // path, so a tracked placeholder there is a file the content checkout has to
+    // fight with. The directory is created by the checkout itself.
+    expect(trackedUnderPostsDir()).toEqual([]);
+  });
+
+  it("ignores the posts directory", () => {
+    const gitignore = readFileSync(new URL("../../../.gitignore", import.meta.url), "utf8");
+    expect(gitignore).toContain(POSTS_DIR_IN_REPO);
   });
 });

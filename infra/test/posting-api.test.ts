@@ -8,7 +8,7 @@ import {
   AUTH_MODE_COGNITO,
   AUTH_MODE_DENY_ALL,
 } from '../../api/src/config.ts';
-import { SITE_POSTS_PATH_PREFIX } from '../../api/src/github/commit.ts';
+import { CONTENT_POSTS_PATH_PREFIX, SITE_POSTS_PATH_PREFIX } from '../../api/src/github/commit.ts';
 import { ADMIN_USERNAME, SiteStack } from '../lib/site-stack.ts';
 
 /** cognito モードのときだけ現れる環境変数。 */
@@ -351,6 +351,7 @@ describe('Lambda 関数', () => {
         'COGNITO_ALLOWED_USERNAME',
         'COGNITO_CLIENT_ID',
         'COGNITO_USER_POOL_ID',
+        'DEPLOY_WORKFLOW_FILE',
         'GITHUB_APP_CLIENT_ID',
         'GITHUB_APP_SECRET_ID',
         'GITHUB_CODE_REPO',
@@ -367,20 +368,28 @@ describe('Lambda 関数', () => {
     expect(Object.keys(lambdaEnvironment())).not.toContain('GITHUB_REPO');
   });
 
-  it('**Phase 2 では両方のリポジトリが今日と同じ blog を指す**', () => {
-    // 設定可能にするだけのフェーズ。値を変えるのは切り替えの PR。
+  it('**記事は blog-content、ワークフローは blog を指す**', () => {
+    // **この 2 つが別であることが分離の実体。** Lambda は記事リポジトリにしか
+    // contents:write を持たず、code repo に対しては actions:write しか持たない。
     const env = lambdaEnvironment();
-    expect(env['GITHUB_CONTENT_REPO']).toBe('blog');
+    expect(env['GITHUB_CONTENT_REPO']).toBe('blog-content');
     expect(env['GITHUB_CODE_REPO']).toBe('blog');
+    expect(env['GITHUB_CONTENT_REPO'], '2 つが同じなら分離できていない').not.toBe(
+      env['GITHUB_CODE_REPO'],
+    );
   });
 
-  it('**記事パスの接頭辞が今日の値である**', () => {
-    expect(lambdaEnvironment()['POSTS_PATH_PREFIX']).toBe(SITE_POSTS_PATH_PREFIX);
+  it('**記事パスの接頭辞が content repo 内の posts/ である**', () => {
+    // blog-content の中に site/src/content/posts/ が生えないこと。
+    const prefix = lambdaEnvironment()['POSTS_PATH_PREFIX'];
+    expect(prefix).toBe(CONTENT_POSTS_PATH_PREFIX);
+    expect(prefix, '分離前の接頭辞が残っている').not.toBe(SITE_POSTS_PATH_PREFIX);
   });
 
-  it('**DEPLOY_WORKFLOW_FILE を設定していない**（dispatch は opt-in）', () => {
-    // 設定すると push 起点のデプロイと二重に走る。切り替えの PR で初めて設定する。
-    expect(Object.keys(lambdaEnvironment())).not.toContain('DEPLOY_WORKFLOW_FILE');
+  it('**DEPLOY_WORKFLOW_FILE が deploy.yml に設定されている**', () => {
+    // push 起点では走らなくなる（記事は別リポジトリにコミットされるので
+    // code repo に push が起きない）。dispatch がデプロイの唯一の起動経路になる。
+    expect(lambdaEnvironment()['DEPLOY_WORKFLOW_FILE']).toBe('deploy.yml');
   });
 
   it('**cognito-idp の IAM 権限を 1 つも足していない**', () => {
