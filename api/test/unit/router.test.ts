@@ -755,11 +755,31 @@ describe('overwrite フラグ', () => {
     },
   );
 
-  it.each<unknown>([1, 0, null, {}, []])('boolean でない %o は 400 になる', async (value) => {
+  // **ラベルを自前で持つ。** vitest の %o は空配列を 'undefined' と描くので、
+  // 素で書くと「undefined は 400」という**逆の主張**に読める題名が並ぶ
+  // （undefined は既定の false に落ちる正常な入力であって 400 ではない）。
+  it.each<[string, unknown]>([
+    ['数値 1', 1],
+    ['数値 0', 0],
+    ['null', null],
+    ['オブジェクト', {}],
+    ['空配列', []],
+  ])('boolean でない値（%s）は 400 になり、publisher を呼ばない', async (_label, value) => {
     const { deps, publisher } = spyDeps(allowAuthorizer);
     const response = await dispatch(post({ overwrite: value }), deps);
     expect(response.statusCode).toBe(400);
+    expect(bodyOf(response)).toEqual({ error: 'invalid_post', field: 'overwrite' });
     expect(publisher.publish).toHaveBeenCalledTimes(0);
+  });
+
+  it('**undefined は 400 ではない**（省略と同じ扱いで、既定の false に落ちる）', async () => {
+    // 上のラベル修正の理由そのもの。ここが 400 になったら既定が壊れている。
+    const { deps, publisher } = spyDeps(allowAuthorizer);
+    const response = await dispatch(post({ overwrite: undefined }), deps);
+    expect(response.statusCode).toBe(201);
+    expect(
+      (publisher.publish.mock.calls[0]?.[0] as unknown as Record<string, unknown>)['overwrite'],
+    ).toBe(false);
   });
 
   it('作成と上書きでコミットメッセージが変わる', async () => {
