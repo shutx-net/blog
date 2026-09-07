@@ -204,6 +204,26 @@ aws logs tail BlogSiteStack-PostingApiFunctionLogGroupCAC55A4B-GblcBe1AHAYb --si
 **本文とメッセージは意図的に記録していない。** 応答が要求をエコーする実装に変わったとき、
 installation token がログに落ちるため。載せてよいのは列挙値と HTTP ステータスだけ。
 
+### スラッグが既にある記事とぶつかったとき
+
+投稿 API は既存のスラッグを **409 `{ "error": "slug_conflict", "field": "slug" }`** で拒否する。
+管理画面は確認を出し、**承認したときだけ** `overwrite: true` を付けて再送する。
+
+**409 のときリポジトリは 1 バイトも変わらない。** blob もコミットも作られないので、
+デプロイも起動しない（何も反映するものが無いため）。
+
+存在確認は `GET /repos/{owner}/{repo}/contents/{path}?ref=<base commit sha>` で、
+**コミットの親と同じ sha に固定してある。** 確認とコミットの間に `main` が進んだ場合は、
+ref の更新（force なし）が 422 になって `ConcurrentUpdateError` で落ちる。
+**古い読みに基づいて上書きする窓は無い。**
+
+以前の内容が要るときは Git の履歴から取る（上書きしてもコミットは残る）。
+
+```sh
+git -C <blog-content の clone> log --oneline -- posts/<slug>.md
+git -C <blog-content の clone> show <sha>:posts/<slug>.md
+```
+
 ### 資格情報
 
 CI は**読み取り専用の deploy key**で `blog-content` を clone する
