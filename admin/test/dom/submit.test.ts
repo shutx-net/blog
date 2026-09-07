@@ -465,6 +465,25 @@ describe('スラッグの衝突（409）', () => {
     expect((root.querySelector('#status') as HTMLElement).dataset['kind']).toBe('ok');
   });
 
+  it('**confirm を注入せず、確認が答えを返さない環境でも再送しない**（fail closed）', async () => {
+    // jsdom の window.confirm は undefined を返すスタブ。ブラウザでダイアログが
+    // 抑止されている場合も同じ形になる。**答えが無いことを「はい」と読まない。**
+    const root = mount();
+    const { calls, impl } = queueFetch([conflict]);
+    createApp({
+      root,
+      auth,
+      fetchImpl: impl,
+      origin: '',
+      now: () => Date.parse('2026-08-31T02:30:00.000Z'),
+      renderPreview: async () => '<p>preview</p>',
+    });
+    fillValid(root);
+    submit(root);
+    await vi.waitFor(() => expect(statusText(root)).not.toBe('送信中…'));
+    expect(calls).toHaveLength(1);
+  });
+
   it('**承認しなかったとき下書きを消さない**', async () => {
     const root = mount();
     const { impl } = queueFetch([conflict]);
