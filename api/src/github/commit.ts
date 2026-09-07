@@ -1,4 +1,5 @@
 import type { InstallationTokenProvider, Logger, PostPublisher, PublishInput, PublishResult } from '../deps.ts';
+import { POST_SLUG_PATTERN } from '../posts/slug.ts';
 import { GITHUB_API_BASE, GITHUB_API_VERSION } from './token.ts';
 
 /**
@@ -54,7 +55,8 @@ export class SlugConflictError extends Error {
   readonly slug: string;
 
   constructor(slug: string) {
-    // slug は SLUG_PATTERN で [a-z0-9-] に限定されているので、資格情報は載りえない。
+    // slug は POST_SLUG_PATTERN で [a-z0-9-] か日付パスの数字とスラッシュに限定されて
+    // いるので、資格情報は載りえない（増えたのは数字と '/' だけで結論は変わらない）。
     // それでも HTTP 応答には出さない（入力をエコーしない規律は router が持つ）。
     super(`post '${slug}' already exists; pass overwrite to replace it`);
     this.name = 'SlugConflictError';
@@ -77,10 +79,15 @@ export interface PostPublisherDeps {
  * **posts ディレクトリの外に出られないことをここでも検査する**（3.6 の検証と二重化）。
  * 検証は「安全な形だけを通す」allowlist で行う。'../' を除去する blocklist 方式は、
  * 除去後に再び '../' が現れる入力（'....//'）で破れる。
+ *
+ * **日付パス（`2026/09/08/054001`）はスラッシュを含むが、封じ込めは弱まっていない。**
+ * `POST_SLUG_PATTERN` は平坦スラッグと日付パスの和で、**両辺とも strict allowlist**
+ * （文字クラスは `[a-z0-9]` と `[0-9]` だけ、桁数も固定）なので、`..` も `\` も
+ * 表現できない。スラッシュを許したことと traversal を許したことは別である。
  */
 const pathForSlug = (prefix: string, slug: string): string => {
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
-    throw new Error('slug must match /^[a-z0-9]+(?:-[a-z0-9]+)*$/');
+  if (!POST_SLUG_PATTERN.test(slug)) {
+    throw new Error(`slug must match ${POST_SLUG_PATTERN.source}`);
   }
   return `${prefix}${slug}.md`;
 };
