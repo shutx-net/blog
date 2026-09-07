@@ -19,11 +19,24 @@ const { title, description, noindex = false } = Astro.props;
     <BaseHead title={title} description={description} noindex={noindex} />
   </head>
   <body>
-    <header>
-      <a href="/">blog</a>
+    {
+      /* Keyboard and screen-reader users otherwise tab through the site header on
+         every page before reaching the content. Visually hidden until focused. */
+    }
+    <a class="skip-link" href="#main">本文へ移動</a>
+    <header class="site-header">
+      <a class="site-header__name" href="/">blog</a>
     </header>
-    <main>
+    <main id="main">
       <slot />
     </main>
+    {
+      /* Nothing derived from the current date here on purpose: a "© {this year}"
+         would make two builds of the same commit differ across a year boundary,
+         and dist/ is compared byte for byte when the deploy pipeline changes. */
+    }
+    <footer class="site-footer">
+      <a href="/rss.xml">RSS</a>
+    </footer>
   </body>
 </html>

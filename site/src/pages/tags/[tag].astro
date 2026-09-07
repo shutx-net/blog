@@ -23,7 +23,7 @@ const { posts } = Astro.props;
 
 <Layout title={`タグ: ${tag}`} description={`${tag} タグの付いた記事の一覧。`}>
   <h1>タグ: {tag}</h1>
-  <ul>
+  <ul class="post-list">
     {
       posts.map((post) => (
         <li>

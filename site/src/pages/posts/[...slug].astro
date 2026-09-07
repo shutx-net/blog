@@ -3,7 +3,7 @@ import type { GetStaticPaths } from "astro";
 import { getCollection, render } from "astro:content";
 
 import Layout from "../../layouts/Layout.astro";
-import { isPublished } from "../../lib/posts.ts";
+import { formatPubDate, isPublished } from "../../lib/posts.ts";
 
 export const getStaticPaths = (async () => {
   // Filtering here as well as in the listing is what actually keeps drafts
@@ -22,22 +22,47 @@ const { post } = Astro.props;
 const { Content } = await render(post);
 ---
 
+{
+  /* The date and the back link sit OUTSIDE <article>, and that is not a stylistic
+     choice. admin/test/parity/published-html.test.ts proves the admin preview and
+     the published page render Markdown identically, and it does so by byte
+     comparison: it takes the inner HTML of `<article>` (found as the literal
+     string, so no attributes are allowed on the tag), strips exactly
+     `<h1>{title}</h1>` off the front and exactly the tag `<ul>` off the back, then
+     requires what remains to equal renderPreview(body).
+
+     So the only things that may appear inside <article> are that h1, the rendered
+     body, and that trailing ul. Anything else -- a <time>, a header wrapper, a
+     class on the article -- breaks the proof rather than the layout, which is a
+     much worse thing to break. Presentation is handled in global.css instead, via
+     the wrapper below and a :has() selector for the tag list. */
+}
 <Layout title={post.data.title} description={post.data.description}>
-  <article>
-    <h1>{post.data.title}</h1>
-    <Content />
-    {
-      /* Without these links the tag pages would be generated but orphaned --
-         reachable only by typing the URL. */
-      post.data.tags.length > 0 && (
-        <ul>
-          {post.data.tags.map((tag) => (
-            <li>
-              <a href={`/tags/${tag}/`}>{tag}</a>
-            </li>
-          ))}
-        </ul>
-      )
-    }
-  </article>
+  <div class="post">
+    <p class="post__meta">
+      <time datetime={post.data.pubDate.toISOString()}>
+        {formatPubDate(post.data.pubDate)}
+      </time>
+    </p>
+    <article>
+      <h1>{post.data.title}</h1>
+      <Content />
+      {
+        /* Without these links the tag pages would be generated but orphaned --
+           reachable only by typing the URL. */
+        post.data.tags.length > 0 && (
+          <ul>
+            {post.data.tags.map((tag) => (
+              <li>
+                <a href={`/tags/${tag}/`}>{tag}</a>
+              </li>
+            ))}
+          </ul>
+        )
+      }
+    </article>
+    <nav class="post__back">
+      <a href="/">記事一覧へ戻る</a>
+    </nav>
+  </div>
 </Layout>

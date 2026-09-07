@@ -1,37 +1,441 @@
 /*
- * Deliberately minimal: enough structure to read the pages, no design.
- * Colours, typography and theming are out of scope for this phase.
+ * The whole design system. One file, no build step, no dependencies -- the CSP
+ * this site is served under is `style-src 'self' 'unsafe-inline'` and
+ * `font-src 'self'`, so there is nothing to fetch and nowhere to fetch it from.
+ * Web fonts are not an option; the stacks below are what the reader already has.
  *
- * Nothing here is covered by tests, on purpose. CSS is not the kind of thing
- * assertions on dist/ can protect -- any rule specific enough to test would
- * break on the first honest restyle.
+ * Still not covered by tests, on purpose. Any assertion specific enough to pin a
+ * colour or a margin breaks on the first honest restyle. The HTML structure the
+ * selectors depend on IS pinned -- see site/test/build and the admin parity
+ * suite -- which is the part that can silently rot.
  */
 
+/* ---------------------------------------------------------------- tokens -- */
+
+:root {
+  /*
+   * Warm off-white rather than #fff. Code blocks are Shiki's github-dark and
+   * carry their theme as inline styles, so they are a dark slab in both colour
+   * schemes no matter what happens here; a slightly warm paper makes that read
+   * as deliberate contrast instead of a bug. (Re-theming Shiki would mean
+   * touching markdown config, which the admin preview mirrors -- so the slab is
+   * a fixed constraint, and the palette is built around it.)
+   */
+  --bg: #fdfcfa;
+  --surface: #f4f2ee;
+  --text: #1f2328;
+  --muted: #5c6370;
+  --border: #e3e0d9;
+  --accent: #0b6b63;
+  --accent-soft: #d8ebe8;
+  /*
+   * The edge of a code block. Shiki paints github-dark's #24292e inline in both
+   * colour schemes, so on the light page the slab already separates itself
+   * (14.3:1) and needs no border -- but on the dark page it lands at 1.2:1
+   * against the background and would otherwise dissolve into it.
+   */
+  --code-edge: transparent;
+
+  /*
+   * system-ui first so Latin comes from the platform UI face, then the CJK
+   * families it does not cover. Font fallback is per glyph, so this yields a
+   * good Latin face and a good Japanese face at once instead of forcing one to
+   * carry both.
+   */
+  --font-body:
+    system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Hiragino Kaku Gothic ProN",
+    "Noto Sans JP", "Yu Gothic Medium", "Yu Gothic", Meiryo, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
+    monospace;
+
+  /*
+   * 1.9 rather than the ~1.5 a Latin-only page would take. Japanese sets solid
+   * blocks of full-width glyphs with no ascender/descender rhythm to separate
+   * the lines visually, so it needs the leading to stay readable.
+   */
+  --leading: 1.9;
+  --measure: 42rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171a;
+    --surface: #1c2024;
+    --text: #e6e3dd;
+    --muted: #9aa3ad;
+    --border: #2c3238;
+    --accent: #6fd3c6;
+    --accent-soft: #1e2f2d;
+    --code-edge: #39414a;
+  }
+}
+
+/* ------------------------------------------------------------------ base -- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  /* Anchors and the skip link land with the heading clear of the top edge. */
+  scroll-padding-top: 2rem;
+  /* Tells form controls and scrollbars which scheme they are painting into. */
+  color-scheme: light dark;
+}
+
 body {
-  margin: 0 auto;
-  max-width: 42rem;
-  padding: 1.5rem 1rem 4rem;
-  line-height: 1.7;
-  font-family: system-ui, sans-serif;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 1.0625rem;
+  line-height: var(--leading);
+  /* Japanese line breaking: keep kinsoku rules strict, and let long unbroken
+     Latin (URLs, hashes) wrap instead of widening the page. */
+  line-break: strict;
+  overflow-wrap: break-word;
+  -webkit-text-size-adjust: 100%;
 }
 
 a {
-  text-decoration: underline;
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
 }
 
-h1,
-h2,
-h3 {
-  line-height: 1.3;
+a:hover {
+  text-decoration-thickness: 2px;
 }
 
-/* Long lines in fenced code must not widen the page on narrow screens. */
-pre {
-  overflow-x: auto;
-  padding: 0.75rem;
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 img {
   max-width: 100%;
   height: auto;
+}
+
+/* ------------------------------------------------------------- structure -- */
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  padding: 0.6rem 1rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0 0 6px 0;
+  z-index: 1;
+}
+
+.skip-link:focus {
+  left: 0;
+}
+
+.site-header,
+.site-footer,
+main {
+  margin-inline: auto;
+  max-width: var(--measure);
+  padding-inline: 1.25rem;
+}
+
+.site-header {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  padding-block: 1.5rem;
+}
+
+.site-header__name {
+  font-weight: 700;
+  font-size: 0.9375rem;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.site-header__name:hover {
+  color: var(--accent);
+}
+
+.site-footer {
+  margin-block: 4rem 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------- post: furniture -- */
+
+/*
+ * The date sits above the title because it has to live outside <article> (the
+ * parity proof pins that element's contents), and above reads as a deliberate
+ * kicker where below would read as a stray line.
+ */
+.post__meta {
+  margin: 0;
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.post__back {
+  margin-block: 3rem 0;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.9375rem;
+}
+
+.post__back a {
+  text-decoration: none;
+}
+
+.post__back a::before {
+  content: "\2190";
+  margin-inline-end: 0.5em;
+}
+
+.post__back a:hover {
+  text-decoration: underline;
+}
+
+/* ------------------------------------------------------ post: typography -- */
+
+article {
+  /* Nothing else may be added inside <article>; see the note in the page
+     template. All of its presentation is done from out here. */
+  margin-block-start: 0.5rem;
+}
+
+article > h1 {
+  margin-block: 0.2em 1.5rem;
+  font-size: clamp(1.75rem, 1.35rem + 1.6vw, 2.25rem);
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+  font-weight: 700;
+}
+
+article h2,
+article h3,
+article h4 {
+  line-height: 1.5;
+  font-weight: 700;
+  /* Headings pull toward the text they introduce and away from the text above:
+     large space before, small space after. */
+  margin-block: 2.75rem 0.9rem;
+}
+
+article h2 {
+  font-size: 1.5rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+
+article h3 {
+  font-size: 1.25rem;
+}
+
+/* h4 matches the body size, so weight and colour carry the distinction. */
+article h4 {
+  font-size: 1rem;
+  color: var(--muted);
+  margin-block: 2rem 0.6rem;
+}
+
+article p {
+  margin-block: 1.4rem;
+}
+
+article ul,
+article ol {
+  margin-block: 1.4rem;
+  padding-inline-start: 1.6rem;
+}
+
+article li {
+  margin-block: 0.5rem;
+}
+
+/* Nested lists belong to their parent item, not to the flow around it. */
+article li > ul,
+article li > ol {
+  margin-block: 0.5rem;
+}
+
+article blockquote {
+  margin-block: 1.8rem;
+  margin-inline: 0;
+  padding: 0.2rem 0 0.2rem 1.25rem;
+  border-inline-start: 3px solid var(--accent-soft);
+  color: var(--muted);
+}
+
+article hr {
+  margin-block: 3rem;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+article img {
+  display: block;
+  margin-block: 1.8rem;
+  border-radius: 6px;
+}
+
+/* -------------------------------------------------------- post: code, table */
+
+/*
+ * Only inline code. `pre > code` carries Shiki's per-token spans and its own
+ * background; giving it this treatment as well would double the padding and
+ * paint a light box behind the dark slab.
+ */
+article :not(pre) > code {
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+}
+
+article pre {
+  margin-block: 1.8rem;
+  /* background-color, color and overflow-x arrive as inline styles from Shiki
+     and cannot be overridden from here -- these are the properties it leaves
+     alone. */
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--code-edge);
+  border-radius: 8px;
+  font-size: 0.875rem;
+  line-height: 1.7;
+  tab-size: 2;
+}
+
+article pre code {
+  font-family: var(--font-mono);
+}
+
+article table {
+  /* No wrapper element is available (the markdown pipeline emits a bare
+     <table>), so the table wraps its cells rather than scrolling. With Japanese
+     text that wraps cleanly; it is also why the page itself never gains a
+     horizontal scrollbar. */
+  width: 100%;
+  margin-block: 1.8rem;
+  border-collapse: collapse;
+  font-size: 0.9375rem;
+}
+
+article th,
+article td {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+article th {
+  background: var(--surface);
+  font-weight: 700;
+}
+
+/* ------------------------------------------------------------ post: tags -- */
+
+/*
+ * The tag list is a bare <ul> that must stay the last child of <article> and
+ * carry no class, so it is selected structurally instead. :has() is what keeps
+ * this honest: a post that simply ends with a bulleted list also matches
+ * `ul:last-child`, and only the links into /tags/ tell the two apart. Where
+ * :has() is unsupported the list degrades to an ordinary bulleted list.
+ */
+article > ul:last-child:has(> li > a[href^="/tags/"]) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-block: 2.5rem 0;
+  padding: 1.5rem 0 0;
+  border-top: 1px solid var(--border);
+  list-style: none;
+}
+
+article > ul:last-child:has(> li > a[href^="/tags/"]) > li {
+  margin: 0;
+}
+
+article > ul:last-child:has(> li > a[href^="/tags/"]) > li > a {
+  display: inline-block;
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.8125rem;
+  text-decoration: none;
+}
+
+article > ul:last-child:has(> li > a[href^="/tags/"]) > li > a::before {
+  content: "#";
+  margin-inline-end: 0.15em;
+  opacity: 0.6;
+}
+
+article > ul:last-child:has(> li > a[href^="/tags/"]) > li > a:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* ------------------------------------------------------- listing & 404 -- */
+
+/*
+ * Deliberately light: making the listing a real design is a separate job. This
+ * is only enough that it does not look broken beside the post page.
+ */
+main > h1 {
+  margin-block: 0.5rem 2rem;
+  font-size: 1.75rem;
+  line-height: 1.35;
+}
+
+.post-list {
+  margin-block: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.post-list > li {
+  padding-block: 1.1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.post-list > li:first-child {
+  border-top: 1px solid var(--border);
+}
+
+.post-list a {
+  font-size: 1.125rem;
+  text-decoration: none;
+}
+
+.post-list a:hover {
+  text-decoration: underline;
+}
+
+main > nav {
+  display: flex;
+  gap: 1.5rem;
+  margin-block-start: 2rem;
+}
+
+main > p {
+  margin-block: 1.4rem;
 }
