@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AuthFailureReason, Authorizer } from '../../src/auth.ts';
 import { AUTH_FAILURE_REASONS, AUTH_FAILURE_RESPONSES, denyAllAuthorizer } from '../../src/auth.ts';
 import type { ApiRequest, ApiResponse } from '../../src/http.ts';
-import type { Deps } from '../../src/deps.ts';
+import type { Deps, PublishInput } from '../../src/deps.ts';
 import { DeployDispatchError } from '../../src/github/dispatch.ts';
+import { SlugConflictError } from '../../src/github/commit.ts';
 import { ROUTES, dispatch } from '../../src/router.ts';
 import { KeyNotProvisionedError } from '../../src/secret.ts';
 
@@ -14,7 +15,11 @@ import { KeyNotProvisionedError } from '../../src/secret.ts';
  * 呼ばれた後で 503 を返す実装は前者のテストを通してしまう。
  */
 const spyDeps = (authorizer: Authorizer = denyAllAuthorizer) => {
-  const publisher = { publish: vi.fn(async () => ({ commitSha: 'x', path: 'p' })) };
+  // **引数を型で受ける。** vi.fn(async () => ...) だと mock.calls の要素が空タプルになり、
+  // publisher に何を渡したかを主張できない（overwrite の既定を見るのに要る）。
+  const publisher = {
+    publish: vi.fn(async (_input: PublishInput) => ({ commitSha: 'x', path: 'p', replaced: false })),
+  };
   const presigner = {
     presign: vi.fn(async () => ({
       url: 'https://example.invalid/',
@@ -664,5 +669,140 @@ describe('公開後のデプロイ起動', () => {
     };
     await dispatch(postRequest(), { ...deps, deployDispatcher });
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain(secret);
+  });
+});
+
+describe('スラッグの衝突', () => {
+  const post = (extra: Record<string, unknown> = {}): ApiRequest =>
+    jsonPost('/api/posts', {
+      slug: 'hello-world',
+      title: 'タイトル',
+      description: '説明',
+      body: '本文',
+      ...extra,
+    });
+
+  const conflicting = () => ({
+    publish: vi.fn(async () => {
+      throw new SlugConflictError('hello-world');
+    }),
+  });
+
+  it('**SlugConflictError は 409 になる**', async () => {
+    const { deps } = spyDeps(allowAuthorizer);
+    const response = await dispatch(post(), { ...deps, publisher: conflicting() });
+    expect(response.statusCode).toBe(409);
+  });
+
+  it('本文が { error, field } だけで、入力値をエコーしない', async () => {
+    const { deps } = spyDeps(allowAuthorizer);
+    const response = await dispatch(post(), { ...deps, publisher: conflicting() });
+    const body = bodyOf(response);
+    expect(body).toEqual({ error: 'slug_conflict', field: 'slug' });
+    expect(JSON.stringify(body)).not.toContain('hello-world');
+  });
+
+  it('**409 のときは dispatch しない**（何も変わっていない）', async () => {
+    const deployDispatcher = { dispatch: vi.fn(async () => undefined) };
+    const { deps } = spyDeps(allowAuthorizer);
+    await dispatch(post(), { ...deps, publisher: conflicting(), deployDispatcher });
+    expect(deployDispatcher.dispatch).toHaveBeenCalledTimes(0);
+  });
+
+  it('403 や 404 にしない（CloudFront が HTML に化けさせる）', async () => {
+    const { deps } = spyDeps(allowAuthorizer);
+    const response = await dispatch(post(), { ...deps, publisher: conflicting() });
+    expect([403, 404]).not.toContain(response.statusCode);
+  });
+});
+
+describe('overwrite フラグ', () => {
+  const post = (extra: Record<string, unknown> = {}): ApiRequest =>
+    jsonPost('/api/posts', {
+      slug: 'hello-world',
+      title: 'タイトル',
+      description: '説明',
+      body: '本文',
+      ...extra,
+    });
+
+  const publishArg = async (extra: Record<string, unknown> = {}) => {
+    const { deps, publisher } = spyDeps(allowAuthorizer);
+    await dispatch(post(extra), deps);
+    return publisher.publish.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+  };
+
+  it('**省略時は overwrite: false で publisher を呼ぶ**', async () => {
+    expect((await publishArg())['overwrite']).toBe(false);
+  });
+
+  it('true を渡すとそのまま publisher に届く', async () => {
+    expect((await publishArg({ overwrite: true }))['overwrite']).toBe(true);
+  });
+
+  it('false を渡しても false のまま', async () => {
+    expect((await publishArg({ overwrite: false }))['overwrite']).toBe(false);
+  });
+
+  it.each([['', '空文字'], ['true', '文字列の true'], ['false', '文字列の false']])(
+    '文字列 %o (%s) は 400 になり、publisher を呼ばない',
+    async (value) => {
+      const { deps, publisher } = spyDeps(allowAuthorizer);
+      const response = await dispatch(post({ overwrite: value }), deps);
+      expect(response.statusCode).toBe(400);
+      expect(bodyOf(response)).toEqual({ error: 'invalid_post', field: 'overwrite' });
+      expect(publisher.publish).toHaveBeenCalledTimes(0);
+    },
+  );
+
+  // **ラベルを自前で持つ。** vitest の %o は空配列を 'undefined' と描くので、
+  // 素で書くと「undefined は 400」という**逆の主張**に読める題名が並ぶ
+  // （undefined は既定の false に落ちる正常な入力であって 400 ではない）。
+  it.each<[string, unknown]>([
+    ['数値 1', 1],
+    ['数値 0', 0],
+    ['null', null],
+    ['オブジェクト', {}],
+    ['空配列', []],
+  ])('boolean でない値（%s）は 400 になり、publisher を呼ばない', async (_label, value) => {
+    const { deps, publisher } = spyDeps(allowAuthorizer);
+    const response = await dispatch(post({ overwrite: value }), deps);
+    expect(response.statusCode).toBe(400);
+    expect(bodyOf(response)).toEqual({ error: 'invalid_post', field: 'overwrite' });
+    expect(publisher.publish).toHaveBeenCalledTimes(0);
+  });
+
+  it('**undefined は 400 ではない**（省略と同じ扱いで、既定の false に落ちる）', async () => {
+    // 上のラベル修正の理由そのもの。ここが 400 になったら既定が壊れている。
+    const { deps, publisher } = spyDeps(allowAuthorizer);
+    const response = await dispatch(post({ overwrite: undefined }), deps);
+    expect(response.statusCode).toBe(201);
+    expect(
+      (publisher.publish.mock.calls[0]?.[0] as unknown as Record<string, unknown>)['overwrite'],
+    ).toBe(false);
+  });
+
+  it('作成と上書きでコミットメッセージが変わる', async () => {
+    const create = await publishArg();
+    expect(String(create['createMessage'])).toContain('追加');
+    expect(String(create['replaceMessage'])).toContain('更新');
+    expect(String(create['replaceMessage'])).not.toContain('追加');
+  });
+
+  it('どちらのメッセージも Conventional Commits に従う', async () => {
+    const arg = await publishArg();
+    for (const key of ['createMessage', 'replaceMessage']) {
+      expect(String(arg[key])).toMatch(/^(feat|fix|refactor|test|docs|build|ci|chore)(\([a-z]+\))?: /);
+    }
+  });
+
+  it('publisher が返した replaced が 201 の本文に載る', async () => {
+    const { deps } = spyDeps(allowAuthorizer);
+    const publisher = {
+      publish: vi.fn(async () => ({ commitSha: 'abc', path: 'posts/hello-world.md', replaced: true })),
+    };
+    const response = await dispatch(post({ overwrite: true }), { ...deps, publisher });
+    expect(response.statusCode).toBe(201);
+    expect(bodyOf(response)['replaced']).toBe(true);
   });
 });

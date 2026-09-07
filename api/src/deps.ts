@@ -5,13 +5,31 @@ import type { AuthMode } from './config.ts';
 export interface PublishInput {
   slug: string;
   markdown: string;
-  /** AGENTS.md の Conventional Commits に従う 1 行目。 */
-  message: string;
+  /** 新規作成のときのコミットメッセージ。AGENTS.md の Conventional Commits に従う 1 行目。 */
+  createMessage: string;
+  /**
+   * 既存を置き換えたときのコミットメッセージ。
+   *
+   * **2 本受け取るのは、どちらになるかを publisher しか知らないから。** 存在確認は
+   * publisher の中（コミットと同じ base）で行うので、ルータは事前に判定できない。
+   * 1 本にして overwrite から推測すると、承認の合間に記事が消えた場合に
+   * 「更新」と書かれた作成コミットが残る。
+   */
+  replaceMessage: string;
+  /**
+   * 既存のスラッグを置き換えてよいか。**必須。**
+   *
+   * 省略可能にしない。既定値をここに持たせると、新しい呼び出し側が「上書きするか」を
+   * 考えないまま書けてしまう。既定の決定は validateOverwrite が 1 箇所で持つ。
+   */
+  overwrite: boolean;
 }
 
 export interface PublishResult {
   commitSha: string;
   path: string;
+  /** 既存の記事を置き換えたか。**overwrite の要求ではなく、実際に起きたこと。** */
+  replaced: boolean;
 }
 
 /**

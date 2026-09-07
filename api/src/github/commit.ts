@@ -43,6 +43,25 @@ export class ConcurrentUpdateError extends Error {
   }
 }
 
+/**
+ * 既にある記事のスラッグに、上書きの意思なしで投稿しようとしたときに投げる。
+ *
+ * **これはルータで 409 になる。** 黙って上書きすると、公開済みの記事が警告なしに
+ * 消える（2026-09-07 に実際に起きた: 下書きから復元された slug が前回のまま残り、
+ * 別の記事として書いたつもりの投稿が既存の posts/test.md を置き換えた）。
+ */
+export class SlugConflictError extends Error {
+  readonly slug: string;
+
+  constructor(slug: string) {
+    // slug は SLUG_PATTERN で [a-z0-9-] に限定されているので、資格情報は載りえない。
+    // それでも HTTP 応答には出さない（入力をエコーしない規律は router が持つ）。
+    super(`post '${slug}' already exists; pass overwrite to replace it`);
+    this.name = 'SlugConflictError';
+    this.slug = slug;
+  }
+}
+
 export interface PostPublisherDeps {
   tokenProvider: InstallationTokenProvider;
   owner: string;
@@ -103,7 +122,48 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
     const path = pathForSlug(deps.postsPathPrefix, input.slug);
     const token = await deps.tokenProvider.getToken();
 
-    // 1. blob。base64 で送る — YAML front matter と本文に何が来ても安全に運べる。
+    // 1. 参照の取得は **単数形** git/ref/heads/main（docs の operation path）。
+    //    **最初に base を決めるのが、この関数の並び順の理由。** 以降の存在確認・
+    //    コミットの親・ref 更新の前提を、すべてこの 1 つの sha に揃える。
+    const refResponse = await request('GET', `${repoPath}/git/ref/heads/${TARGET_BRANCH}`, token);
+    assertOk(refResponse, 'ref lookup');
+    const baseCommitSha = ((await refResponse.json()) as { object?: { sha?: string } }).object?.sha;
+    if (typeof baseCommitSha !== 'string') throw new Error('GitHub ref response has no object.sha');
+
+    // 2. **既存記事の確認。書き込みを 1 本も出す前に行う。**
+    //
+    //    Contents API を使うのは、既に持っている base tree では判定できないから。
+    //    docs (Get a tree): 既定では最上位のエントリしか返さないので、posts/ は
+    //    「tree 型のエントリ 1 件」としてしか見えない。?recursive=1 なら全件返るが、
+    //    **100,000 エントリ / 7 MB を超えると truncated: true で黙って切り詰められる** —
+    //    それを「無い」と読む実装は、育ったリポジトリでいつか公開記事を踏み潰す。
+    //    Contents API は 200 / 404 で答えるので、その罠が無い。追加の呼び出しは 1 本。
+    //
+    //    **?ref に base commit の sha を渡すのが TOCTOU 対策の要。** ブランチ名で
+    //    問い合わせると「確認した木」と「コミットの親にする木」がずれうる。
+    //    同じ sha に固定したうえで、6 の PATCH を force なしにしてあるので、
+    //    確認とコミットの間に main が進めば ref 更新が 422 で落ちる。
+    //    **古い読みに基づいて上書きする窓が無い。**
+    const lookupResponse = await request(
+      'GET',
+      `${repoPath}/contents/${path}?ref=${baseCommitSha}`,
+      token,
+    );
+    if (lookupResponse.status !== 200 && lookupResponse.status !== 404) {
+      // **404 以外の失敗を「無い」と読まない（fail closed）。** 403 や 500 を不在と
+      // 解釈すると、権限が落ちた日に既存記事を黙って置き換える方向に倒れる。
+      throw new Error(`GitHub content lookup failed with status ${lookupResponse.status}`);
+    }
+    const replaced = lookupResponse.status === 200;
+    if (replaced && !input.overwrite) throw new SlugConflictError(input.slug);
+
+    // 3. 親コミットから **tree の sha** を取る。commit の sha ではない。
+    const commitResponse = await request('GET', `${repoPath}/git/commits/${baseCommitSha}`, token);
+    assertOk(commitResponse, 'commit lookup');
+    const baseTreeSha = ((await commitResponse.json()) as { tree?: { sha?: string } }).tree?.sha;
+    if (typeof baseTreeSha !== 'string') throw new Error('GitHub commit response has no tree.sha');
+
+    // 4. blob。base64 で送る — YAML front matter と本文に何が来ても安全に運べる。
     const blobResponse = await request('POST', `${repoPath}/git/blobs`, token, {
       content: Buffer.from(input.markdown, 'utf8').toString('base64'),
       encoding: 'base64',
@@ -112,19 +172,7 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
     const blobSha = ((await blobResponse.json()) as { sha?: string }).sha;
     if (typeof blobSha !== 'string') throw new Error('GitHub blob response has no sha');
 
-    // 2. 参照の取得は **単数形** git/ref/heads/main（docs の operation path）。
-    const refResponse = await request('GET', `${repoPath}/git/ref/heads/${TARGET_BRANCH}`, token);
-    assertOk(refResponse, 'ref lookup');
-    const baseCommitSha = ((await refResponse.json()) as { object?: { sha?: string } }).object?.sha;
-    if (typeof baseCommitSha !== 'string') throw new Error('GitHub ref response has no object.sha');
-
-    // 3. 親コミットから **tree の sha** を取る。commit の sha ではない。
-    const commitResponse = await request('GET', `${repoPath}/git/commits/${baseCommitSha}`, token);
-    assertOk(commitResponse, 'commit lookup');
-    const baseTreeSha = ((await commitResponse.json()) as { tree?: { sha?: string } }).tree?.sha;
-    if (typeof baseTreeSha !== 'string') throw new Error('GitHub commit response has no tree.sha');
-
-    // 4. tree。**base_tree を必ず渡す。**
+    // 5. tree。**base_tree を必ず渡す。**
     //    docs: "If not provided, GitHub will create a new Git tree object from only the
     //    entries defined in the tree parameter. ... all files which were a part of the
     //    parent commit's tree and were not defined in the tree parameter will be listed
@@ -139,9 +187,13 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
     const treeSha = ((await treeResponse.json()) as { sha?: string }).sha;
     if (typeof treeSha !== 'string') throw new Error('GitHub tree response has no sha');
 
-    // 5. commit。parents を省くと root commit になり履歴が切れる。
+    // 6. commit。parents を省くと root commit になり履歴が切れる。
+    //
+    //    **メッセージは「実際に何をしたか」で選ぶ。** overwrite が true でも記事が
+    //    実在しなければ作成なので、createMessage を使う（409 を承認する間に誰かが
+    //    記事を消した場合。「更新」と書かれたコミットが作成に付くと履歴が嘘をつく）。
     const newCommitResponse = await request('POST', `${repoPath}/git/commits`, token, {
-      message: input.message,
+      message: replaced ? input.replaceMessage : input.createMessage,
       tree: treeSha,
       parents: [baseCommitSha],
     });
@@ -149,9 +201,10 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
     const commitSha = ((await newCommitResponse.json()) as { sha?: string }).sha;
     if (typeof commitSha !== 'string') throw new Error('GitHub commit creation response has no sha');
 
-    // 6. 参照の更新は **複数形** git/refs/heads/main。force は渡さない
+    // 7. 参照の更新は **複数形** git/refs/heads/main。force は渡さない
     //    （docs: "Leaving this out or setting it to false will make sure you're not
     //    overwriting work"）。**ここが GitHub Actions のビルドを起動する唯一のトリガ。**
+    //    2 の存在確認を同じ base に固定しているので、force を足すとその保証ごと壊れる。
     const updateResponse = await request(
       'PATCH',
       `${repoPath}/git/refs/heads/${TARGET_BRANCH}`,
@@ -164,8 +217,8 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
     }
     assertOk(updateResponse, 'ref update');
 
-    deps.logger.info('committed post', { path, commitSha });
-    return { commitSha, path };
+    deps.logger.info('committed post', { path, commitSha, replaced });
+    return { commitSha, path, replaced };
   };
 
   return { publish };

@@ -34,6 +34,13 @@ export interface AppDeps {
   origin?: string;
   fetchImpl?: typeof fetch;
   /**
+   * 上書きの確認。**注入するのは `window.confirm` が jsdom で動かないから。**
+   *
+   * 省略時は `window.confirm`。**それも無ければ false**（上書きしない）に倒す。
+   * 確認できない環境で「はい」と見なすと、公開済みの記事を黙って踏み潰す。
+   */
+  confirm?(message: string): boolean | Promise<boolean>;
+  /**
    * 「ログイン」を押されたとき。**このモジュールは認可サーバを知らない。**
    * 本物（`beginSignIn`）を繋ぐのは `main.ts` だけ。
    */
@@ -73,6 +80,29 @@ export const AUTH_FAILURE_MESSAGES: Readonly<Record<string, string>> = {
 };
 
 /**
+ * 上書きを断られたことを、通常の送信失敗と区別するための番兵。
+ *
+ * **例外にして流すのは、成功経路に紛れ込ませないため。** 「409 を受けた」あとに
+ * 何もせず resolve すると、下書きの破棄と成功表示にそのまま落ちてしまう。
+ */
+class OverwriteDeclinedError extends Error {
+  constructor() {
+    super('overwrite declined');
+    this.name = 'OverwriteDeclinedError';
+  }
+}
+
+/** 409 のときの確認文。**失われるものを先に言う。** */
+export const slugConflictPrompt = (slug: string): string =>
+  `すでに「${slug}」という記事がある。上書きすると今の内容は置き換わる（Git の履歴には残る）。上書きするか？`;
+
+/** api が返す衝突コード。`api/src/router.ts` の綴りと一致していること。 */
+const SLUG_CONFLICT = 'slug_conflict';
+
+const isSlugConflict = (error: unknown): boolean =>
+  error instanceof ApiError && error.status === 409 && error.code === SLUG_CONFLICT;
+
+/**
  * 送信の失敗をユーザに読める文にする。
  *
  * **404 の扱いがこの関数の存在理由。** CloudFront は署名に失敗した 403 を
@@ -81,8 +111,15 @@ export const AUTH_FAILURE_MESSAGES: Readonly<Record<string, string>> = {
  * （Phase 3 で実際に踏んだ）。**その知識を UI に埋め込んでおく。**
  */
 const describeFailure = (error: unknown): string => {
+  if (error instanceof OverwriteDeclinedError) {
+    return '上書きしなかったので、何も変更していない。スラッグを変えるか、もう一度送信して上書きすること';
+  }
   if (!(error instanceof ApiError)) {
     return `送信に失敗した: ${(error as Error).message}`;
+  }
+  if (isSlugConflict(error)) {
+    // 確認を出せなかった場合にここへ来る（confirm が無い環境など）。
+    return 'そのスラッグの記事は既にある。上書きするなら確認に「はい」と答えること';
   }
   if (error.status === 404) {
     return '404 が返った。経路が無いのではなく、x-amz-content-sha256 が届いていない可能性が高い（署名に失敗した 403 が CloudFront で 404 の HTML に化ける）';
@@ -142,6 +179,10 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
   });
 
   const store = deps.store;
+
+  /** **既定は window.confirm、それも無ければ false**（上書きしない側に倒す）。 */
+  const confirmOverwrite = (message: string): boolean | Promise<boolean> =>
+    deps.confirm === undefined ? (globalThis.confirm?.(message) ?? false) : deps.confirm(message);
 
   // **復元は bindEditor より前。** 先に value を入れておけば、bindEditor の初回
   // update() が復元後の値でプレビューと検証をまとめて行う。
@@ -223,8 +264,22 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
     editor.setBusy(true);
     editor.setStatus('送信中…');
 
-    void client
-      .call(CREATE_POST, post)
+    /** **上書きの意思は 2 回目の送信でしか付かない。** 1 回目は必ず付けない。 */
+    const send = (overwrite: boolean): Promise<unknown> =>
+      client.call(CREATE_POST, overwrite ? { ...post, overwrite: true } : post);
+
+    const sendable = post;
+
+    void send(false)
+      .catch(async (error: unknown) => {
+        // **409 だけを拾う。** 他の失敗はそのまま下の catch へ落とす。
+        if (!isSlugConflict(error)) throw error;
+        // **無言で再送しない。** ここで承認を取らずに overwrite を付けると、
+        // 409 を出した意味が無くなる（2026-09-07 の事故がそのまま再現する）。
+        const approved = await confirmOverwrite(slugConflictPrompt(sendable.slug));
+        if (!approved) throw new OverwriteDeclinedError();
+        return send(true);
+      })
       .then((result) => {
         const record = (result ?? {}) as Record<string, unknown>;
         // **成功したときだけ下書きを捨てる。** 残すと次に開いたときに復活する。
@@ -238,7 +293,10 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
           editor.setStatus(`保存しました（デプロイ未起動。手動で再実行が必要）: ${where}`);
           return;
         }
-        editor.setStatus(`公開しました: ${where}`, 'ok');
+        editor.setStatus(
+          record['replaced'] === true ? `上書きしました: ${where}` : `公開しました: ${where}`,
+          'ok',
+        );
       })
       .catch((error: unknown) => {
         editor.setStatus(describeFailure(error), 'error');

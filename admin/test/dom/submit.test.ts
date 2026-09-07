@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import INDEX_HTML from '../../index.html?raw';
 import { createApp } from '../../src/editor/app.ts';
 import type { AuthTransport } from '../../src/auth/session.ts';
+import { createSessionStore } from '../../src/storage/session-store.ts';
+import type { WebStorageLike } from '../../src/storage/session-store.ts';
 
 const auth: AuthTransport = {
   authHeaders: async () => ({}),
@@ -366,5 +368,135 @@ describe('画像アップロード', () => {
       expect(statusText(root).length).toBeGreaterThan(0);
     });
     expect(fetchSpy.calls.length).toBe(0);
+  });
+});
+
+describe('スラッグの衝突（409）', () => {
+  const conflict = json(409, { error: 'slug_conflict', field: 'slug' });
+  const created = json(201, { commitSha: 'abc123', path: 'posts/a-post.md', replaced: true });
+
+  /** confirm を注入できる起動。**window.confirm を直接叩くと DOM テストが止まる。** */
+  const startWith = (
+    root: HTMLElement,
+    fetchImpl: typeof fetch,
+    confirmImpl: (message: string) => boolean,
+    store?: Parameters<typeof createApp>[0]['store'],
+  ): ReturnType<typeof createApp> =>
+    createApp({
+      root,
+      auth,
+      fetchImpl,
+      origin: '',
+      now: () => Date.parse('2026-08-31T02:30:00.000Z'),
+      renderPreview: async () => '<p>preview</p>',
+      confirm: confirmImpl,
+      ...(store === undefined ? {} : { store }),
+    });
+
+  /**
+   * **client は Uint8Array を送る**（x-amz-content-sha256 と同じバイト列を使うため）。
+   * String() で読むと "123,34,..." になり JSON.parse が落ちる。
+   */
+  const bodyOf = (captured: Captured): Record<string, unknown> =>
+    JSON.parse(new TextDecoder().decode(captured.init.body as Uint8Array)) as Record<string, unknown>;
+
+  it('**409 を受けたら確認を出す**', async () => {
+    const root = mount();
+    const { impl } = queueFetch([conflict]);
+    const confirmImpl = vi.fn((_message: string) => false);
+    startWith(root, impl, confirmImpl);
+    fillValid(root);
+    submit(root);
+    await vi.waitFor(() => expect(confirmImpl).toHaveBeenCalledTimes(1));
+    expect(String(confirmImpl.mock.calls[0]?.[0])).toContain('a-post');
+  });
+
+  it('**承認しなければ再送しない**', async () => {
+    const root = mount();
+    const { calls, impl } = queueFetch([conflict]);
+    startWith(root, impl, () => false);
+    fillValid(root);
+    submit(root);
+    await vi.waitFor(() => expect(statusText(root)).not.toBe('送信中…'));
+    expect(calls).toHaveLength(1);
+  });
+
+  it('承認しなかったことが画面に出る', async () => {
+    const root = mount();
+    const { impl } = queueFetch([conflict]);
+    startWith(root, impl, () => false);
+    fillValid(root);
+    submit(root);
+    await vi.waitFor(() => expect(statusText(root)).toContain('上書き'));
+  });
+
+  it('**承認したときだけ overwrite: true で再送する**', async () => {
+    const root = mount();
+    const { calls, impl } = queueFetch([conflict, created]);
+    startWith(root, impl, () => true);
+    fillValid(root);
+    submit(root);
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(bodyOf(calls[0] as Captured)['overwrite']).toBeUndefined();
+    expect(bodyOf(calls[1] as Captured)['overwrite']).toBe(true);
+  });
+
+  it('再送のボディが記事の中身を保っている', async () => {
+    const root = mount();
+    const { calls, impl } = queueFetch([conflict, created]);
+    startWith(root, impl, () => true);
+    fillValid(root);
+    submit(root);
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    const first = bodyOf(calls[0] as Captured);
+    const second = bodyOf(calls[1] as Captured);
+    for (const key of ['slug', 'title', 'description', 'body', 'draft', 'pubDate']) {
+      expect(second[key]).toEqual(first[key]);
+    }
+  });
+
+  it('上書きの成功は「上書き」と分かる表示になる', async () => {
+    const root = mount();
+    const { impl } = queueFetch([conflict, created]);
+    startWith(root, impl, () => true);
+    fillValid(root);
+    submit(root);
+    await vi.waitFor(() => expect(statusText(root)).toContain('上書き'));
+    expect((root.querySelector('#status') as HTMLElement).dataset['kind']).toBe('ok');
+  });
+
+  it('**confirm を注入せず、確認が答えを返さない環境でも再送しない**（fail closed）', async () => {
+    // jsdom の window.confirm は undefined を返すスタブ。ブラウザでダイアログが
+    // 抑止されている場合も同じ形になる。**答えが無いことを「はい」と読まない。**
+    const root = mount();
+    const { calls, impl } = queueFetch([conflict]);
+    createApp({
+      root,
+      auth,
+      fetchImpl: impl,
+      origin: '',
+      now: () => Date.parse('2026-08-31T02:30:00.000Z'),
+      renderPreview: async () => '<p>preview</p>',
+    });
+    fillValid(root);
+    submit(root);
+    await vi.waitFor(() => expect(statusText(root)).not.toBe('送信中…'));
+    expect(calls).toHaveLength(1);
+  });
+
+  it('**承認しなかったとき下書きを消さない**', async () => {
+    const root = mount();
+    const { impl } = queueFetch([conflict]);
+    const memory = new Map<string, string>();
+    const backing: WebStorageLike = {
+      getItem: (k) => memory.get(k) ?? null,
+      setItem: (k, v) => void memory.set(k, v),
+      removeItem: (k) => void memory.delete(k),
+    };
+    startWith(root, impl, () => false, createSessionStore(backing));
+    fillValid(root);
+    submit(root);
+    await vi.waitFor(() => expect(statusText(root)).toContain('上書き'));
+    expect([...memory.keys()].some((k) => k.includes('draft'))).toBe(true);
   });
 });

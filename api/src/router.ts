@@ -2,9 +2,10 @@ import { AUTH_FAILURE_RESPONSES } from './auth.ts';
 import type { Deps, PublishResponse } from './deps.ts';
 import type { ApiRequest, ApiResponse } from './http.ts';
 import { InvalidJsonBodyError, errorResponse, isJsonContentType, jsonResponse, parseJsonObject } from './http.ts';
+import { SlugConflictError } from './github/commit.ts';
 import { DeployDispatchError } from './github/dispatch.ts';
 import { renderMarkdown } from './posts/frontmatter.ts';
-import { PostValidationError, validatePost } from './posts/validate.ts';
+import { PostValidationError, validateOverwrite, validatePost } from './posts/validate.ts';
 import { MediaValidationError } from './media/presign.ts';
 import { KeyNotProvisionedError } from './secret.ts';
 
@@ -74,8 +75,10 @@ const describeDispatchFailure = (error: unknown): Record<string, unknown> => {
 
 const createPost = async ({ body, deps }: RouteContext): Promise<ApiResponse> => {
   let post;
+  let overwrite;
   try {
     post = validatePost(body, deps.now());
+    overwrite = validateOverwrite(body);
   } catch (error) {
     if (error instanceof PostValidationError) {
       // どのフィールドが悪いかだけを返す。**入力値そのものは返さない。**
@@ -84,13 +87,33 @@ const createPost = async ({ body, deps }: RouteContext): Promise<ApiResponse> =>
     throw error;
   }
 
-  const result = await deps.publisher.publish({
-    slug: post.slug,
-    markdown: renderMarkdown(post),
-    // AGENTS.md の Conventional Commits はリポジトリ規約なので、API 経由の
-    // コミットにも同じように適用する。
-    message: `feat(site): 記事 ${post.slug} を追加`,
-  });
+  let result;
+  try {
+    result = await deps.publisher.publish({
+      slug: post.slug,
+      markdown: renderMarkdown(post),
+      // AGENTS.md の Conventional Commits はリポジトリ規約なので、API 経由の
+      // コミットにも同じように適用する。
+      // **どちらが使われるかは publisher が決める**（存在確認を持っているのが向こう）。
+      createMessage: `feat(site): 記事 ${post.slug} を追加`,
+      replaceMessage: `feat(site): 記事 ${post.slug} を更新`,
+      overwrite,
+    });
+  } catch (error) {
+    if (error instanceof SlugConflictError) {
+      // **409。403 でも 404 でもない** — CloudFront の CustomErrorResponses が
+      // origin の 403/404 を HTML に差し替えるので、admin から区別が付かなくなる
+      // （auth.ts が同じ理由で 403 を禁じている）。
+      //
+      // **dispatch はしない。** リポジトリは 1 バイトも変わっていないので、
+      // ここでデプロイを起動しても何も反映されないうえ、失敗と区別が付かなくなる。
+      deps.logger.warn('post slug already exists', { slug: error.slug });
+      // **slug を本文に載せない**（入力をエコーしない規律）。呼び出し側は自分が
+      // 送った slug を知っている。
+      return jsonResponse(409, { error: 'slug_conflict', field: 'slug' });
+    }
+    throw error;
+  }
 
   // **ここから先は記事が既にコミットされている。** 何が起きても 201 を返し、
   // publish をやり直さない。やり直すと同じ記事が 2 コミットされる。

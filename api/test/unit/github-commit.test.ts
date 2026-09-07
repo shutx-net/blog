@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ConcurrentUpdateError,
   SITE_POSTS_PATH_PREFIX,
+  SlugConflictError,
   TARGET_BRANCH,
   createPostPublisher,
 } from '../../src/github/commit.ts';
@@ -15,6 +16,8 @@ const NEW_COMMIT_SHA = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 interface FetchCall {
   method: string;
   path: string;
+  /** クエリ文字列。存在確認が base commit に固定されていることを見るために要る。 */
+  search: string;
   headers: Record<string, string>;
   body: Record<string, unknown> | undefined;
 }
@@ -22,8 +25,14 @@ interface FetchCall {
 const json = (payload: unknown, status = 200): Response =>
   new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } });
 
+/** 既定では記事はまだ無い（404）。衝突を見るテストだけがこれを 200 に差し替える。 */
+const CONTENTS_PREFIX = '/repos/shutx-net/blog/contents/';
+
 /** docs の Response schema に沿った最小のフェイク。 */
 const defaultResponder = (call: FetchCall): Response => {
+  if (call.method === 'GET' && call.path.startsWith(CONTENTS_PREFIX)) {
+    return json({ message: 'Not Found' }, 404);
+  }
   if (call.method === 'POST' && call.path === '/repos/shutx-net/blog/git/blobs') {
     return json({ sha: BLOB_SHA }, 201);
   }
@@ -53,6 +62,7 @@ const installFetch = (responder: (call: FetchCall) => Response = defaultResponde
       const call: FetchCall = {
         method: (init?.method ?? 'GET').toUpperCase(),
         path: new URL(String(input)).pathname,
+        search: new URL(String(input)).search,
         headers: Object.fromEntries(
           Object.entries((init?.headers ?? {}) as Record<string, string>).map(([k, v]) => [
             k.toLowerCase(),
@@ -79,10 +89,20 @@ const publisher = (log = logger(), postsPathPrefix = SITE_POSTS_PATH_PREFIX) =>
     logger: log,
   });
 
-const input = (overrides: Partial<{ slug: string; markdown: string; message: string }> = {}) => ({
+const input = (
+  overrides: Partial<{
+    slug: string;
+    markdown: string;
+    createMessage: string;
+    replaceMessage: string;
+    overwrite: boolean;
+  }> = {},
+) => ({
   slug: 'hello-world',
   markdown: '---\ntitle: "テスト"\n---\n\n本文\n',
-  message: 'feat(site): 記事 hello-world を追加',
+  createMessage: 'feat(site): 記事 hello-world を追加',
+  replaceMessage: 'feat(site): 記事 hello-world を更新',
+  overwrite: false,
   ...overrides,
 });
 
@@ -92,14 +112,36 @@ afterEach(() => {
 
 const callOf = (calls: FetchCall[], index: number): FetchCall => calls[index] as FetchCall;
 
+/**
+ * method + path で 1 本を引く。
+ *
+ * **添字で引かない。** 呼び出しの本数や順序が変わるたびに、無関係な主張が
+ * まとめて赤くなる（存在確認を挟んだときに実際そうなった）。
+ */
+const findCall = (calls: FetchCall[], method: string, path: string): FetchCall => {
+  const found = calls.find((c) => c.method === method && c.path === path);
+  if (found === undefined) {
+    throw new Error(`${method} ${path} が無い: ${JSON.stringify(calls.map((c) => [c.method, c.path]))}`);
+  }
+  return found;
+};
+
+const BLOB_PATH = '/repos/shutx-net/blog/git/blobs';
+const TREE_PATH = '/repos/shutx-net/blog/git/trees';
+const COMMIT_PATH = '/repos/shutx-net/blog/git/commits';
+const REF_UPDATE_PATH = '/repos/shutx-net/blog/git/refs/heads/main';
+
 describe('呼び出し列', () => {
-  it('正確に 6 本で、順序も固定されている', async () => {
+  it('正確に 7 本で、順序も固定されている', async () => {
     const { calls } = installFetch();
     await publisher().publish(input());
     expect(calls.map((c) => [c.method, c.path])).toEqual([
-      ['POST', '/repos/shutx-net/blog/git/blobs'],
+      // **base を先に決め、その base に対して存在を確かめてから書き始める。**
+      // blob より前に確認するので、409 のときリポジトリに何も残らない。
       ['GET', '/repos/shutx-net/blog/git/ref/heads/main'],
+      ['GET', '/repos/shutx-net/blog/contents/site/src/content/posts/hello-world.md'],
       ['GET', `/repos/shutx-net/blog/git/commits/${BASE_COMMIT_SHA}`],
+      ['POST', '/repos/shutx-net/blog/git/blobs'],
       ['POST', '/repos/shutx-net/blog/git/trees'],
       ['POST', '/repos/shutx-net/blog/git/commits'],
       ['PATCH', '/repos/shutx-net/blog/git/refs/heads/main'],
@@ -109,7 +151,7 @@ describe('呼び出し列', () => {
   it('すべての呼び出しが installation token を Bearer で送る', async () => {
     const { calls } = installFetch();
     await publisher().publish(input());
-    expect(calls).toHaveLength(6);
+    expect(calls).toHaveLength(7);
     for (const call of calls) {
       expect(call.headers['authorization']).toBe('Bearer ghs_test_token');
       expect(call.headers['accept']).toBe('application/vnd.github+json');
@@ -123,6 +165,7 @@ describe('呼び出し列', () => {
     expect(result).toEqual({
       commitSha: NEW_COMMIT_SHA,
       path: 'site/src/content/posts/hello-world.md',
+      replaced: false,
     });
   });
 });
@@ -162,7 +205,7 @@ describe('blob の作成', () => {
   it('ボディが { content: <base64>, encoding: "base64" } である', async () => {
     const { calls } = installFetch();
     await publisher().publish(input());
-    const body = callOf(calls, 0).body ?? {};
+    const body = findCall(calls, 'POST', BLOB_PATH).body ?? {};
     expect(Object.keys(body).sort()).toEqual(['content', 'encoding']);
     expect(body['encoding']).toBe('base64');
     expect(typeof body['content']).toBe('string');
@@ -172,7 +215,7 @@ describe('blob の作成', () => {
     const markdown = '---\ntitle: "日本語のタイトル"\n---\n\n絵文字 🎌 と ASCII と ～〜①\n';
     const { calls } = installFetch();
     await publisher().publish(input({ markdown }));
-    const content = String(callOf(calls, 0).body?.['content']);
+    const content = String(findCall(calls, 'POST', BLOB_PATH).body?.['content']);
     expect(Buffer.from(content, 'base64').toString('utf8')).toBe(markdown);
   });
 
@@ -181,7 +224,7 @@ describe('blob の作成', () => {
     // YAML front matter と本文に何が来ても安全に運べるから。
     const { calls } = installFetch();
     await publisher().publish(input());
-    expect(callOf(calls, 0).body?.['encoding']).not.toBe('utf-8');
+    expect(findCall(calls, 'POST', BLOB_PATH).body?.['encoding']).not.toBe('utf-8');
   });
 });
 
@@ -189,7 +232,7 @@ describe('tree の作成', () => {
   const treeBody = async (): Promise<Record<string, unknown>> => {
     const { calls } = installFetch();
     await publisher().publish(input());
-    return callOf(calls, 3).body ?? {};
+    return findCall(calls, 'POST', TREE_PATH).body ?? {};
   };
 
   it('**base_tree が入っている**（無いとリポジトリ全体が 1 コミットで消える）', async () => {
@@ -233,10 +276,10 @@ describe('tree の作成', () => {
 });
 
 describe('commit の作成', () => {
-  const commitBody = async (message?: string): Promise<Record<string, unknown>> => {
+  const commitBody = async (createMessage?: string): Promise<Record<string, unknown>> => {
     const { calls } = installFetch();
-    await publisher().publish(message === undefined ? input() : input({ message }));
-    return callOf(calls, 4).body ?? {};
+    await publisher().publish(createMessage === undefined ? input() : input({ createMessage }));
+    return findCall(calls, 'POST', COMMIT_PATH).body ?? {};
   };
 
   it('{ message, tree, parents } で、parents が親コミット 1 件である', async () => {
@@ -268,7 +311,7 @@ describe('ref の更新', () => {
     // overwriting work"。他人のコミットを踏み潰さない。
     const { calls } = installFetch();
     await publisher().publish(input());
-    const body = callOf(calls, 5).body ?? {};
+    const body = findCall(calls, 'PATCH', REF_UPDATE_PATH).body ?? {};
     expect(body['sha']).toBe(NEW_COMMIT_SHA);
     expect(body['force']).not.toBe(true);
     expect(Object.keys(body).filter((k) => k !== 'sha' && k !== 'force')).toEqual([]);
@@ -317,7 +360,7 @@ describe('パスの封じ込め', () => {
     // 切り替えたときに blog-content の中に site/src/content/posts/ が生える。
     const { calls } = installFetch();
     await publisher(logger(), 'posts/').publish(input());
-    const tree = (callOf(calls, 3).body?.['tree'] as Array<Record<string, unknown>>) ?? [];
+    const tree = (findCall(calls, 'POST', TREE_PATH).body?.['tree'] as Array<Record<string, unknown>>) ?? [];
     expect(tree[0]?.['path']).toBe('posts/hello-world.md');
   });
 
@@ -340,11 +383,127 @@ describe('パスの封じ込め', () => {
   it('正常な slug から作られるパスが posts ディレクトリの直下に収まる', async () => {
     const { calls } = installFetch();
     await publisher().publish(input({ slug: 'node-24-notes' }));
-    const tree = (callOf(calls, 3).body?.['tree'] as Array<Record<string, unknown>>) ?? [];
+    const tree = (findCall(calls, 'POST', TREE_PATH).body?.['tree'] as Array<Record<string, unknown>>) ?? [];
     const path = String(tree[0]?.['path']);
     expect(path).toBe('site/src/content/posts/node-24-notes.md');
     expect(path.startsWith(SITE_POSTS_PATH_PREFIX)).toBe(true);
     expect(path.slice(SITE_POSTS_PATH_PREFIX.length)).not.toContain('/');
+  });
+});
+
+describe('既存スラッグの上書き', () => {
+  /** 記事が既にある世界。存在確認だけを 200 にする。 */
+  const existingResponder = (call: FetchCall): Response =>
+    call.method === 'GET' && call.path.startsWith(CONTENTS_PREFIX)
+      ? json({ type: 'file', path: call.path.slice(CONTENTS_PREFIX.length), sha: BLOB_SHA })
+      : defaultResponder(call);
+
+  const WRITE_METHODS = new Set(['POST', 'PATCH']);
+
+  it('**既存スラッグは SlugConflictError で拒否される**', async () => {
+    installFetch(existingResponder);
+    await expect(publisher().publish(input())).rejects.toBeInstanceOf(SlugConflictError);
+  });
+
+  it('**拒否されたとき blob も tree も commit も ref 更新も起きない**', async () => {
+    // ここが本丸。書き込みが 1 本でも飛べば「途中まで書けた」状態が生まれる。
+    const { calls } = installFetch(existingResponder);
+    await publisher().publish(input()).catch(() => undefined);
+    expect(calls.filter((c) => WRITE_METHODS.has(c.method))).toEqual([]);
+  });
+
+  it('存在確認が base commit に固定されている（TOCTOU を作らない）', async () => {
+    // コミットの親も ref 更新の前提も同じ base。間に他人が main を進めれば
+    // PATCH が 422 になるので、古い読みに基づいて踏み潰す窓が無い。
+    const { calls } = installFetch();
+    await publisher().publish(input());
+    const lookup = findCall(calls, 'GET', '/repos/shutx-net/blog/contents/site/src/content/posts/hello-world.md');
+    expect(lookup.search).toBe(`?ref=${BASE_COMMIT_SHA}`);
+  });
+
+  it('存在確認は ref の取得より後、blob の作成より前に来る', async () => {
+    const { calls } = installFetch();
+    await publisher().publish(input());
+    const at = (method: string, path: string): number =>
+      calls.findIndex((c) => c.method === method && c.path === path);
+    const ref = at('GET', '/repos/shutx-net/blog/git/ref/heads/main');
+    const lookup = at('GET', '/repos/shutx-net/blog/contents/site/src/content/posts/hello-world.md');
+    const blob = at('POST', BLOB_PATH);
+    expect(ref).toBeGreaterThanOrEqual(0);
+    expect(lookup).toBeGreaterThan(ref);
+    expect(blob).toBeGreaterThan(lookup);
+  });
+
+  it('overwrite が true なら成功し、replaced: true を返す', async () => {
+    installFetch(existingResponder);
+    const result = await publisher().publish(input({ overwrite: true }));
+    expect(result).toEqual({
+      commitSha: NEW_COMMIT_SHA,
+      path: 'site/src/content/posts/hello-world.md',
+      replaced: true,
+    });
+  });
+
+  it('**上書きのときは replaceMessage がコミットメッセージになる**', async () => {
+    const { calls } = installFetch(existingResponder);
+    await publisher().publish(input({ overwrite: true }));
+    expect(findCall(calls, 'POST', COMMIT_PATH).body?.['message']).toBe(
+      'feat(site): 記事 hello-world を更新',
+    );
+  });
+
+  it('**overwrite が true でも実在しなければ createMessage を使い replaced: false を返す**', async () => {
+    // 409 を受けてから承認するまでに誰かが記事を消した場合。
+    // 「更新」と書かれたコミットが作成に付くと、履歴が嘘をつく。
+    const { calls } = installFetch();
+    const result = await publisher().publish(input({ overwrite: true }));
+    expect(findCall(calls, 'POST', COMMIT_PATH).body?.['message']).toBe(
+      'feat(site): 記事 hello-world を追加',
+    );
+    expect(result.replaced).toBe(false);
+  });
+
+  it('存在確認が 200 でも 404 でもないときは書き込まずに落ちる（fail closed）', async () => {
+    // 500 を「無い」と読むと、既存記事を黙って踏み潰す方向に倒れる。
+    const { calls } = installFetch((call) =>
+      call.method === 'GET' && call.path.startsWith(CONTENTS_PREFIX)
+        ? json({ message: 'boom' }, 500)
+        : defaultResponder(call),
+    );
+    await expect(publisher().publish(input())).rejects.toThrow(/content lookup failed with status 500/);
+    expect(calls.filter((c) => WRITE_METHODS.has(c.method))).toEqual([]);
+  });
+
+  it('403（権限不足）も「無い」と解釈しない', async () => {
+    const { calls } = installFetch((call) =>
+      call.method === 'GET' && call.path.startsWith(CONTENTS_PREFIX)
+        ? json({ message: 'Forbidden' }, 403)
+        : defaultResponder(call),
+    );
+    await expect(publisher().publish(input())).rejects.toThrow(/content lookup failed/);
+    expect(calls.filter((c) => WRITE_METHODS.has(c.method))).toEqual([]);
+  });
+
+  it('接頭辞を変えても存在確認のパスが追随する', async () => {
+    const { calls } = installFetch();
+    await publisher(logger(), 'posts/').publish(input());
+    expect(calls.some((c) => c.path === '/repos/shutx-net/blog/contents/posts/hello-world.md')).toBe(true);
+  });
+
+  it('SlugConflictError の message にトークンもレスポンス本文も出ない', async () => {
+    installFetch((call) =>
+      call.method === 'GET' && call.path.startsWith(CONTENTS_PREFIX)
+        ? json({ message: 'leaked ghs_test_token here' }, 200)
+        : defaultResponder(call),
+    );
+    let text = '';
+    try {
+      await publisher().publish(input());
+    } catch (error) {
+      text = `${(error as Error).message}\n${(error as Error).stack ?? ''}`;
+    }
+    expect(text).not.toContain('ghs_test_token');
+    expect(text).not.toContain('leaked');
   });
 });
 
