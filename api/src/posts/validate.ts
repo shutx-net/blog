@@ -61,6 +61,23 @@ const requireTrimmedString = (raw: Record<string, unknown>, field: string): stri
 };
 
 /**
+ * 上書きの意思を読む。**記事の中身ではないので ValidatedPost には入れない。**
+ *
+ * **既定は必ず false。** 省略・null・文字列・数値のいずれも「上書きしない」に倒れる。
+ * `draft` と同じく **'"false"' を true と解釈しない** — 曖昧な強制で公開済みの記事を
+ * 踏み潰すのは、下書きを誤って公開するのと同じ種類の事故である。
+ *
+ * boolean 以外を黙って false に畳まず 400 にするのは、呼び出し側の綴り間違い
+ * （`overwrite: 'true'`）が「拒否され続ける理由の分からない 409」に化けるのを防ぐため。
+ */
+export const validateOverwrite = (raw: Record<string, unknown>): boolean => {
+  const value = raw['overwrite'];
+  if (value === undefined) return false;
+  if (typeof value !== 'boolean') throw new PostValidationError('overwrite', 'must be a boolean');
+  return value;
+};
+
+/**
  * 投稿リクエストのボディを検証して正規化する。
  *
  * @param nowMs 注入するクロック（ミリ秒）。pubDate 省略時の既定値に使う。
