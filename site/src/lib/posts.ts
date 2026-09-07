@@ -43,6 +43,30 @@ export const collectTags = (posts: readonly PostEntry[]): string[] =>
   [...new Set(posts.flatMap((post) => post.data.tags))].sort();
 
 /**
+ * Japan has been on a fixed +09:00 with no DST since 1951, so the offset can be
+ * a constant rather than a timezone database lookup.
+ */
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+/**
+ * The published date as a Japanese reader expects to see it, in JST.
+ *
+ * Deliberately NOT Intl.DateTimeFormat: a Node built with small-icu falls back
+ * to en-US and would silently print "September 8, 2026" instead, so the same
+ * commit could render differently on a developer's machine and in CI. Shifting
+ * the instant and reading the UTC parts has no such dependency.
+ *
+ * The timezone is pinned for the same reason -- reading local parts would make
+ * the rendered date depend on the machine's TZ, and a post published late in the
+ * evening JST would date itself a day earlier when built in CI (which runs UTC).
+ */
+export const formatPubDate = (date: Date): string => {
+  const jst = new Date(date.valueOf() + JST_OFFSET_MS);
+
+  return `${jst.getUTCFullYear()}年${jst.getUTCMonth() + 1}月${jst.getUTCDate()}日`;
+};
+
+/**
  * build.format is "directory", so canonical URLs and sitemap entries all end in a
  * slash -- but paginate() hands back "/2" and "/". Idempotent, which is the whole
  * point at the root: appending unconditionally would produce "//".

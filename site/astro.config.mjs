@@ -21,6 +21,24 @@ export default defineConfig({
   // decide. The defaults emit sitemap-index.xml plus sitemap-0.xml and drop the
   // status pages (404, 500).
   integrations: [sitemap()],
+  // The default is "auto", which inlines a stylesheet only while it stays under
+  // vite's 4KB assetsInlineLimit. global.css crossed that line when the site was
+  // actually designed, and silently became an external <link> -- which took the
+  // last inline <style> out of dist/ and tripped the assertion in
+  // admin/test/build/output.test.ts that exists to notice exactly that.
+  //
+  // Pinned rather than left to drift back and forth across a byte threshold. It
+  // also stands on its own for a site this size: ~1.5KB gzipped per page, no
+  // render-blocking request, and the HTML is re-fetched on every deploy anyway
+  // so there is little cross-page caching to lose.
+  //
+  // NOTE: with no inline <style> the CSP could drop 'unsafe-inline' from
+  // style-src. That is a real tightening worth doing, but it has to change
+  // infra/lib/response-headers.ts and the assertion above in the same commit --
+  // not be a side effect of a restyle.
+  build: {
+    inlineStylesheets: "always",
+  },
   markdown: {
     processor: unified(),
   },

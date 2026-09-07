@@ -26,7 +26,7 @@ const { page } = Astro.props;
 
 <Layout title="blog" description="shutx-net の個人ブログ。">
   <h1>blog</h1>
-  <ul>
+  <ul class="post-list">
     {
       page.data.map((post) => (
         <li>

@@ -42,6 +42,45 @@ describe("post pages", () => {
   });
 });
 
+describe("post page furniture", () => {
+  // The date, the back link and the site chrome all live OUTSIDE <article>,
+  // because admin/test/parity/published-html.test.ts byte-compares the inner HTML
+  // of that element against the admin preview. These assertions pin the parts a
+  // restyle is allowed to move; the parity suite pins the part it is not.
+  it("prints the published date as a machine-readable <time>", () => {
+    const html = readDist("posts/hello-world/index.html");
+
+    // hello-world.md carries `pubDate: 2026-08-01`, which parses as UTC midnight.
+    expect(html).toContain('<time datetime="2026-08-01T00:00:00.000Z">');
+    expect(html).toContain("2026年8月1日");
+  });
+
+  it("keeps the date outside <article>", () => {
+    const html = readDist("posts/hello-world/index.html");
+    const time = html.indexOf("<time");
+    const article = html.indexOf("<article>");
+
+    expect(time).toBeGreaterThan(-1);
+    expect(article).toBeGreaterThan(-1);
+    expect(time).toBeLessThan(article);
+  });
+
+  it("offers a way back to the listing", () => {
+    expect(readDist("posts/hello-world/index.html")).toContain(
+      '<nav class="post__back"><a href="/">',
+    );
+  });
+
+  // The tag list has to stay the last child of <article> and carry no class:
+  // global.css selects it structurally, and the parity suite strips it off the
+  // end by exact string. Wrapping or classing it breaks both at once.
+  it("ends the article with a bare tag list", () => {
+    expect(readDist("posts/hello-world/index.html")).toContain(
+      '<ul><li><a href="/tags/astro/">astro</a></li></ul></article>',
+    );
+  });
+});
+
 describe("drafts", () => {
   // The filter has to sit in getStaticPaths, not just in the listing: a page that
   // is merely unlinked still gets published to S3 and is reachable by URL.
