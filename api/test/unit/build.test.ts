@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { API_BUNDLE_FILE, API_ENTRY, buildApiBundle } from '../../build.ts';
+import { API_BUNDLE_DIR, API_BUNDLE_FILE, API_ENTRY, buildApiBundle, stagingPathFor } from '../../build.ts';
 
 /**
  * **ビルドの定義がここに 1 つだけあることを固定する。**
@@ -106,5 +106,51 @@ describe('buildApiBundle', () => {
     expect(written).toBe(API_BUNDLE_FILE);
     // 実ソースの中身が反映されていること。dispatch の成功判定は 2xx である。
     expect(readFileSync(written, 'utf8')).toContain('t>=200&&t<300');
+  });
+});
+
+describe('書きかけの置き場', () => {
+  /**
+   * **これが競合の本体だった。**
+   *
+   * infra は `Code.fromAsset(API_BUNDLE_DIR)` で dist を丸ごと固める。CDK は
+   * `readdirSync` でディレクトリを先に列挙し、そのあと各エントリを `statSync` する。
+   * 書きかけを dist の中に置くと、列挙に写ってから stat の前に rename で消え、
+   * `ENOENT` で synth が落ちる。実測で並列 2 プロセス 4 秒あたり 200〜800 件出ていた。
+   */
+  it('**書きかけを outfile のディレクトリの中に置かない**', () => {
+    const staging = stagingPathFor(API_BUNDLE_FILE);
+
+    expect(staging.startsWith(`${API_BUNDLE_DIR}/`)).toBe(false);
+    expect(dirname(staging)).not.toBe(API_BUNDLE_DIR);
+  });
+
+  it('任意の outfile でも、その親ディレクトリの外に置く', () => {
+    const dir = tempWorkspace();
+    const outfile = join(dir, 'out', 'index.mjs');
+
+    const staging = stagingPathFor(outfile);
+
+    expect(staging.startsWith(`${join(dir, 'out')}/`)).toBe(false);
+  });
+
+  it('同時に走るプロセス同士でぶつからない名前にする', () => {
+    expect(stagingPathFor(API_BUNDLE_FILE)).toContain(String(process.pid));
+  });
+
+  /**
+   * **この主張はこのバグを捕まえない。** rename のあとに見ているので、書きかけを
+   * dist の中に置く実装でも通る。捕まえるのは「staging を消し忘れて残骸が積む」
+   * 別の壊れ方のほう。競合そのものを見ているのは
+   * infra/test/bundle-staging-race.test.ts と、この上の 2 件である。
+   */
+  it('ビルドのあと、成果物のディレクトリには出力ファイルしか無い', () => {
+    const dir = tempWorkspace();
+    const entry = writeEntry(dir, 'export const value = 1;\n');
+    const outfile = join(dir, 'out', 'index.mjs');
+
+    buildApiBundle({ entry, outfile });
+
+    expect(readdirSync(join(dir, 'out'))).toEqual(['index.mjs']);
   });
 });

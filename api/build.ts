@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSync } from 'esbuild';
 import type { BuildOptions } from 'esbuild';
@@ -35,6 +35,26 @@ export const API_BUNDLE_DIR = fileURLToPath(new URL('./dist', import.meta.url));
  * 読み、起動時に SyntaxError で落ちる。
  */
 export const API_BUNDLE_FILE = `${API_BUNDLE_DIR}/index.mjs`;
+
+/**
+ * 書きかけのバンドルを置く場所。**`outfile` のディレクトリの外**でなければならない。
+ *
+ * infra は `lambda.Code.fromAsset(API_BUNDLE_DIR)` で dist を丸ごと固める。CDK の
+ * 指紋計算は `readdirSync` で**ディレクトリ全体を先に列挙**し、そのあとループの中で
+ * 各エントリを `statSync` する（aws-cdk-lib/core/lib/fs/fingerprint.js の
+ * `_processDirectory` と `_contentFingerprint`）。列挙に写ってから stat される前に
+ * rename で消えるファイルがあると ENOENT で落ちる。
+ *
+ * 事故の記録: staging を dist の中に `index.mjs.<pid>.tmp` として置いていたため、
+ * vitest の並列ワーカーが同時に synth すると infra のテストが断続的に落ちていた。
+ * **失敗するとファイルごと実行されずに終わるので、件数を見ないと緑に見える**
+ * （480 件が 439 件になる）。
+ *
+ * `dist` の 1 つ上に置くのは、rename が不可分であるためには同じファイルシステムに
+ * なければならないから。`os.tmpdir()` は別のファイルシステムでありうる。
+ */
+export const stagingPathFor = (outfile: string): string =>
+  join(dirname(dirname(outfile)), '.build-staging', `${basename(outfile)}.${process.pid}.tmp`);
 
 /**
  * ESM 出力に足す `require` の定義。
@@ -129,11 +149,16 @@ export const buildApiBundle = (options: BuildApiBundleOptions = {}): string => {
 
   mkdirSync(dirname(outfile), { recursive: true });
 
-  // **同じディレクトリに書いてから rename する。** vitest はテストファイルを並列の
+  // **別のディレクトリに書いてから rename する。** vitest はテストファイルを並列の
   // ワーカーで走らせるので、複数のプロセスが同じ outfile に書きうる。直接書くと
   // 途中まで書かれたバンドルを別のプロセスが読む。rename は同一ファイルシステム上で
   // 不可分なので、読み手が見るのは常に「前の完全な内容」か「新しい完全な内容」になる。
-  const staging = `${outfile}.${process.pid}.tmp`;
+  //
+  // **書きかけを outfile のディレクトリに置いてはいけない。** そこは CDK が
+  // Code.fromAsset で丸ごと指紋を取る対象で、列挙に写ったファイルが stat の前に
+  // rename で消えると ENOENT になる。理由は stagingPathFor を参照。
+  const staging = stagingPathFor(outfile);
+  mkdirSync(dirname(staging), { recursive: true });
   try {
     writeFileSync(staging, expected);
     renameSync(staging, outfile);
