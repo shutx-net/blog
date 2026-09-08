@@ -1,7 +1,13 @@
 import { App } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
-import { HSTS_MAX_AGE_SECONDS, REFERRER_POLICY, buildCsp } from '../lib/response-headers.ts';
+import {
+  HSTS_MAX_AGE_SECONDS,
+  MEDIA_CACHE_CONTROL,
+  REFERRER_POLICY,
+  SITE_CACHE_CONTROL,
+  buildCsp,
+} from '../lib/response-headers.ts';
 import { API_PATH_PATTERN, MEDIA_PATH_PATTERN, SiteStack } from '../lib/site-stack.ts';
 
 interface CacheBehavior {
@@ -14,6 +20,12 @@ interface DistributionConfig {
   CacheBehaviors?: CacheBehavior[];
 }
 
+interface CustomHeader {
+  Header?: string;
+  Value?: string;
+  Override?: boolean;
+}
+
 const template = Template.fromStack(new SiteStack(new App(), 'TestStack'));
 
 const distributionConfig = (): DistributionConfig => {
@@ -23,23 +35,70 @@ const distributionConfig = (): DistributionConfig => {
   return dist?.Properties?.DistributionConfig ?? {};
 };
 
-const policyLogicalId = (): string => {
-  const ids = Object.keys(template.findResources('AWS::CloudFront::ResponseHeadersPolicy'));
-  expect(ids, 'ResponseHeadersPolicy が 1 つも無い').toHaveLength(1);
-  return ids[0] as string;
+/**
+ * ポリシーは **Name で引く。件数と順序では引かない。**
+ *
+ * `Object.values(...)[0]` は「ポリシーが 1 本しかない」ことに暗黙に依存していた。
+ * 2 本になった時点で、どちらが返るかはテンプレートのキー順という**主張していない性質**で
+ * 決まる。`distribution-media-behavior.test.ts:33` が同じ理由で名指しに直っている
+ * （Phase 3 で /api/* が増えて「ちょうど 1 件」の形が 6 件まとめて赤くなった）。
+ *
+ * 接尾辞で照合するのはスタック名を前提にしないため。`${stackName}-security-headers` の
+ * 前半は呼び出し側が決める。
+ */
+const SITE_POLICY_SUFFIX = '-security-headers';
+const MEDIA_POLICY_SUFFIX = '-media-headers';
+
+interface FoundPolicy {
+  logicalId: string;
+  config: Record<string, unknown>;
+}
+
+const policyByNameSuffix = (suffix: string): FoundPolicy => {
+  const found = Object.entries(template.findResources('AWS::CloudFront::ResponseHeadersPolicy'))
+    .map(([logicalId, resource]) => ({
+      logicalId,
+      config: (resource as { Properties?: { ResponseHeadersPolicyConfig?: Record<string, unknown> } })
+        .Properties?.ResponseHeadersPolicyConfig,
+    }))
+    .filter(
+      (entry): entry is FoundPolicy =>
+        entry.config !== undefined &&
+        typeof entry.config['Name'] === 'string' &&
+        (entry.config['Name'] as string).endsWith(suffix),
+    );
+  expect(found, `Name が ${suffix} で終わる ResponseHeadersPolicy がちょうど 1 件`).toHaveLength(1);
+  return found[0] as FoundPolicy;
 };
 
-const policyProperties = (): Record<string, unknown> => {
-  const found = Object.values(
-    template.findResources('AWS::CloudFront::ResponseHeadersPolicy'),
-  )[0] as { Properties?: { ResponseHeadersPolicyConfig?: Record<string, unknown> } } | undefined;
-  const config = found?.Properties?.ResponseHeadersPolicyConfig;
-  expect(config, 'ResponseHeadersPolicyConfig が無い').toBeDefined();
-  return config as Record<string, unknown>;
-};
+const sitePolicy = (): FoundPolicy => policyByNameSuffix(SITE_POLICY_SUFFIX);
+const mediaPolicy = (): FoundPolicy => policyByNameSuffix(MEDIA_POLICY_SUFFIX);
+
+const policyLogicalId = (): string => sitePolicy().logicalId;
+
+const policyProperties = (): Record<string, unknown> => sitePolicy().config;
+
+const securityHeadersOf = (
+  policy: FoundPolicy,
+): Record<string, Record<string, unknown>> =>
+  policy.config['SecurityHeadersConfig'] as Record<string, Record<string, unknown>>;
 
 const securityHeaders = (): Record<string, Record<string, unknown>> =>
-  policyProperties()['SecurityHeadersConfig'] as Record<string, Record<string, unknown>>;
+  securityHeadersOf(sitePolicy());
+
+/**
+ * `Cache-Control` は `CustomHeadersConfig` に入る。
+ *
+ * **`SecurityHeadersConfig` には Cache-Control の枠が無い**（CDK / CloudFront とも
+ * セキュリティ系ヘッダしか持たない）ので、カスタムヘッダとして足す以外にない。
+ */
+const customHeaders = (policy: FoundPolicy): CustomHeader[] => {
+  const custom = policy.config['CustomHeadersConfig'] as { Items?: CustomHeader[] } | undefined;
+  return custom?.Items ?? [];
+};
+
+const cacheControlHeader = (policy: FoundPolicy): CustomHeader | undefined =>
+  customHeaders(policy).find((header) => header.Header === 'Cache-Control');
 
 /**
  * CDK トークンを含む値を**読める文字列**に潰す。
@@ -64,12 +123,14 @@ const flatten = (value: unknown): string => {
   return String(value);
 };
 
-const cspText = (): string =>
+const cspTextOf = (policy: FoundPolicy): string =>
   flatten(
-    (securityHeaders()['ContentSecurityPolicy'] as Record<string, unknown>)[
+    (securityHeadersOf(policy)['ContentSecurityPolicy'] as Record<string, unknown>)[
       'ContentSecurityPolicy'
     ],
   );
+
+const cspText = (): string => cspTextOf(sitePolicy());
 
 /**
  * **ディレクティブ名で厳密に引く。**
@@ -95,15 +156,92 @@ const directive = (name: string): string[] => {
   return values as string[];
 };
 
-describe('**ResponseHeadersPolicy がちょうど 1 個**', () => {
-  it('リソースが 1 個である', () => {
-    // **Phase 5 まで 0 個だった新しいリソース種別。** 既存のどの resourceCountIs も
-    // 数えていないので、まず件数ガードを置く（増やしても既存が赤くならないため）。
-    template.resourceCountIs('AWS::CloudFront::ResponseHeadersPolicy', 1);
+describe('**ResponseHeadersPolicy がちょうど 2 個**', () => {
+  it('リソースが 2 個である', () => {
+    // **1 個から 2 個に増やしたのは意図的。** サイトとメディアで Cache-Control の値が
+    // 正反対（毎回検証させる / 1 年持たせる）で、1 本のポリシーでは表現できない。
+    // ここは「増えたこと自体が見える」ための件数ガードなので残す。
+    // **個々のポリシーの特定には使わない**（下の policyByNameSuffix を見ること）。
+    template.resourceCountIs('AWS::CloudFront::ResponseHeadersPolicy', 2);
   });
 
   it('ポリシーに名前が付いている（コンソールで識別できる）', () => {
     expect(typeof policyProperties()['Name']).toBe('string');
+    expect(typeof mediaPolicy().config['Name']).toBe('string');
+  });
+
+  it('**2 本の論理 ID が別物である**（同じリソースを 2 回数えていない）', () => {
+    expect(sitePolicy().logicalId).not.toBe(mediaPolicy().logicalId);
+  });
+});
+
+describe('**Cache-Control**（ブラウザのヒューリスティックキャッシュを止める）', () => {
+  // 実測: 修正前は配信 HTML に Cache-Control が 1 つも無かった。
+  // Cache-Control も Expires も無いとブラウザは *ヒューリスティックキャッシュ* を適用し、
+  // 一般に Last-Modified からの経過時間の 10% 程度を勝手にキャッシュ期間にする。
+  // デプロイ時の invalidation は CloudFront にしか効かないので、
+  // **一度サイトを見た人は不定の時間だけ古い HTML を見続ける。** 実際に踏んだ。
+
+  it('サイト側に Cache-Control が入っている', () => {
+    expect(cacheControlHeader(sitePolicy())?.Value).toBe(SITE_CACHE_CONTROL);
+  });
+
+  it('メディア側に Cache-Control が入っている', () => {
+    expect(cacheControlHeader(mediaPolicy())?.Value).toBe(MEDIA_CACHE_CONTROL);
+  });
+
+  it('**2 つの値が異なる**（同じポリシーを 2 本並べただけになっていない）', () => {
+    const site = cacheControlHeader(sitePolicy())?.Value;
+    const media = cacheControlHeader(mediaPolicy())?.Value;
+    expect(site).toBeDefined();
+    expect(media).toBeDefined();
+    expect(site).not.toBe(media);
+  });
+
+  it('**サイト側は再利用の前に必ず検証させる**（no-cache 相当である）', () => {
+    // 値そのものを固定するのではなく、性質を主張する。定数を書き換えたときに
+    // 「意味が変わっていないか」が見える。
+    const value = cacheControlHeader(sitePolicy())?.Value ?? '';
+    expect(value).toMatch(/no-cache|max-age=0/);
+    expect(value).not.toMatch(/max-age=[1-9]/);
+  });
+
+  it('**メディア側は長く持たせる**（キーがランダムで上書きされない）', () => {
+    // api/src/media/presign.ts のキーは media/YYYY/MM/<randomBytes(12) の 24 桁 hex>.<ext>。
+    // 同じキーが二度使われないので immutable が成立する。
+    const value = cacheControlHeader(mediaPolicy())?.Value ?? '';
+    expect(value).toContain('immutable');
+    expect(value).toMatch(/max-age=\d{6,}/);
+  });
+
+  it('両方とも Override が true である', () => {
+    expect(cacheControlHeader(sitePolicy())?.Override).toBe(true);
+    expect(cacheControlHeader(mediaPolicy())?.Override).toBe(true);
+  });
+
+  it('**カスタムヘッダは Cache-Control だけ**（他のヘッダが紛れ込んでいない）', () => {
+    expect(customHeaders(sitePolicy()).map((header) => header.Header)).toEqual(['Cache-Control']);
+    expect(customHeaders(mediaPolicy()).map((header) => header.Header)).toEqual(['Cache-Control']);
+  });
+});
+
+describe('**CSP が 2 本のポリシーで一致している**', () => {
+  it('メディア側にも CSP がある（分割で落ちていない）', () => {
+    expect(cspTextOf(mediaPolicy()).length).toBeGreaterThan(0);
+  });
+
+  it('**2 本の CSP が同一である**（片方だけ古くなる乖離が起きていない）', () => {
+    // securityHeadersBehavior を 1 つのローカル変数から共有しているので、
+    // ここが食い違ったら「片方に直接書いた」ということ。
+    expect(cspTextOf(mediaPolicy())).toBe(cspTextOf(sitePolicy()));
+  });
+
+  it('**他のセキュリティヘッダも 2 本で一致している**', () => {
+    for (const key of ['ContentTypeOptions', 'ReferrerPolicy', 'FrameOptions', 'StrictTransportSecurity']) {
+      expect(securityHeadersOf(mediaPolicy())[key], `${key} がメディア側で欠けている`).toEqual(
+        securityHeadersOf(sitePolicy())[key],
+      );
+    }
   });
 });
 
@@ -116,12 +254,17 @@ describe('**ビヘイビアへの結線**', () => {
     });
   });
 
-  it('/media/* にも同じポリシーが付いている', () => {
+  it('**/media/* には別のポリシーが付いている**（同じものを使い回していない）', () => {
+    // **意図的に反転させた主張。** 以前は「/media/* にも同じポリシー」を固定していたが、
+    // Cache-Control の値がサイトと正反対（毎回検証させる / 1 年持たせる）なので
+    // 1 本では表現できない。CSP など他のヘッダが落ちていないことは
+    // 「CSP が 2 本のポリシーで一致している」の describe が別に固定している。
     const media = (distributionConfig().CacheBehaviors ?? []).find(
       (behavior) => behavior.PathPattern === MEDIA_PATH_PATTERN,
     );
     expect(media, `${MEDIA_PATH_PATTERN} のビヘイビアが無い`).toBeDefined();
-    expect(media?.ResponseHeadersPolicyId).toEqual({ Ref: policyLogicalId() });
+    expect(media?.ResponseHeadersPolicyId).toEqual({ Ref: mediaPolicy().logicalId });
+    expect(media?.ResponseHeadersPolicyId).not.toEqual({ Ref: policyLogicalId() });
   });
 
   it('**/api/* には付けない**（JSON 応答に CSP は効かず、OAC の署名条件が繊細）', () => {

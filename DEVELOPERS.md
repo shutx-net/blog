@@ -372,6 +372,42 @@ gh variable list -R shutx-net/blog     # 3 つ入っているか確認
 3. CDK bootstrap のロール群（`cdk-hnb659fds-*`）を信頼させる設計は、
    `CicdStack` の最小権限という主題と正面から衝突する
 
+### Cache-Control をデプロイ後に確認する
+
+`Cache-Control` は S3 のオブジェクトではなく **CloudFront の ResponseHeadersPolicy** で付けている
+（理由は `AGENTS.md` の「Cache-Control」節）。`cdk deploy` のあとに実物を確かめること。
+
+```sh
+# サイトは毎回検証させる
+curl -sI https://d8gsxbwzr6ft8.cloudfront.net/ | grep -i cache-control
+# → cache-control: no-cache
+
+# 記事ページも同じ（HTML 全般に効いていること）
+curl -sI https://d8gsxbwzr6ft8.cloudfront.net/posts/hello-world/ | grep -i cache-control
+
+# メディアは 1 年 + immutable
+MEDIA_BUCKET=$(aws cloudformation describe-stacks --stack-name BlogSiteStack \
+  --query "Stacks[0].Outputs[?OutputKey=='MediaBucketName'].OutputValue" --output text)
+KEY=$(aws s3 ls "s3://$MEDIA_BUCKET/media/" --recursive | head -1 | awk '{print $4}')
+curl -sI "https://d8gsxbwzr6ft8.cloudfront.net/$KEY" | grep -i cache-control
+# → cache-control: public, max-age=31536000, immutable
+
+# S3 側に二重定義していないこと（null のままであること）
+SITE_BUCKET=$(aws cloudformation describe-stacks --stack-name BlogSiteStack \
+  --query "Stacks[0].Outputs[?OutputKey=='SiteBucketName'].OutputValue" --output text)
+aws s3api head-object --bucket "$SITE_BUCKET" --key index.html --query CacheControl
+# → null
+```
+
+**invalidation は要らない。** ResponseHeadersPolicy は CloudFront が
+*キャッシュから返す応答*にも適用されるので、既存のキャッシュにも即座に効く。
+同じ理由で、S3 の既存オブジェクトを貼り直す必要も無い。
+
+**ただし、この変更より前にサイトを見たブラウザは古い HTML を持ち続ける。**
+`Cache-Control` が無かった時期のヒューリスティックキャッシュが切れるまでは、
+新しいヘッダを受け取る機会そのものが来ない。**一度スーパーリロード（Ctrl+Shift+R）が要る場合がある。**
+これは直せない類の後遺症で、以後の更新では起きない。
+
 ### ツールチェーンが Nix と一致しない箇所（意図的な例外）
 
 - **`aws` CLI はランナー同梱のものを使う**（nix の 2.34.24 ではない）。使うのは `s3 sync` と
