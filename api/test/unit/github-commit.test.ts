@@ -389,6 +389,37 @@ describe('パスの封じ込め', () => {
     expect(path.startsWith(SITE_POSTS_PATH_PREFIX)).toBe(true);
     expect(path.slice(SITE_POSTS_PATH_PREFIX.length)).not.toContain('/');
   });
+
+  it('**日付パスの slug が posts の下の階層に収まる**', async () => {
+    // 投稿日時から導出した slug。Phase 3 でこれが既定になる。
+    const { calls } = installFetch();
+    await publisher(logger(), 'posts/').publish(input({ slug: '2026/09/08/054001' }));
+    const tree = (findCall(calls, 'POST', TREE_PATH).body?.['tree'] as Array<Record<string, unknown>>) ?? [];
+    expect(tree[0]?.['path']).toBe('posts/2026/09/08/054001.md');
+  });
+
+  it('日付パスでも存在確認のパスが追随する', async () => {
+    // TOCTOU 対策の存在確認は path を使って組み立てる。階層が増えても同じ path を見ること。
+    const { calls } = installFetch();
+    await publisher(logger(), 'posts/').publish(input({ slug: '2026/09/08/054001' }));
+    const lookup = calls.find((c) => c.method === 'GET' && c.path.startsWith(CONTENTS_PREFIX));
+    expect(lookup?.path).toBe(`${CONTENTS_PREFIX}posts/2026/09/08/054001.md`);
+  });
+
+  it.each([
+    'posts/2026/09/08/054001', // **日付パス時代に元の事故が起きた形**
+    '2026/09/054001', // 階層が足りない
+    '2026/09/08/09/054001', // 階層が多い
+    '2026/9/8/54001', // ゼロ埋めなし
+    '2026/09/08/054001/', // 末尾スラッシュ
+    '2026/09/../08/054001', // 日付パスの皮をかぶった traversal
+  ])('日付パスに似ているだけの slug %o は例外になり、fetch を 1 度も呼ばない', async (slug) => {
+    const { calls } = installFetch();
+    await expect(publisher(logger(), 'posts/').publish(input({ slug }))).rejects.toThrow(
+      /slug must match/,
+    );
+    expect(calls, '検証前に GitHub を呼ばない').toHaveLength(0);
+  });
 });
 
 describe('既存スラッグの上書き', () => {
