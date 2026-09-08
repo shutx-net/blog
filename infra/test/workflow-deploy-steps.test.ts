@@ -15,6 +15,7 @@ import { App } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { POST_SLUG_PATTERN } from '../../api/src/posts/slug.ts';
 import { CicdStack } from '../lib/cicd-stack.ts';
 import { SiteStack } from '../lib/site-stack.ts';
 
@@ -1099,6 +1100,238 @@ describe('publish されるスラッグ集合の照合を実際に走らせる',
       const result = runGuardScript(slugGuardScript(), dir);
       expect(result.status, '両方空なのに通っている').not.toBe(0);
     });
+  });
+});
+
+/**
+ * ガードが宣言しているスラッグの形（POSIX ERE）を読む。
+ *
+ * **テストに正規表現を二重に書かない。** ガード自身が持っている値を読み、
+ * `api/src/posts/slug.ts` の `POST_SLUG_PATTERN` と突き合わせる。
+ */
+const declaredSlugShape = (): string => {
+  const match = /\bslug_shape='([^']+)'/.exec(slugGuardScript());
+  expect(match, "ガードが slug_shape='...' で形を宣言していること").not.toBeNull();
+  return (match as RegExpExecArray)[1];
+};
+
+/**
+ * `grep -E` が受理する入力を、**実際に grep を走らせて**求める。
+ *
+ * 1 入力 1 プロセスでは遅いので、ガードと同じく**行単位**でまとめて判定する。
+ * ガード自身が行単位で使っているので、これは意味論の近似ではなく同じ経路である。
+ */
+const acceptedByGrep = (shape: string, inputs: readonly string[]): Set<string> => {
+  const result = spawnSync('grep', ['-E', shape], {
+    input: `${inputs.join('\n')}\n`,
+    encoding: 'utf8',
+  });
+  // 1 件も一致しなければ grep は 1 を返す。それはエラーではない。
+  expect(result.status === 0 || result.status === 1, `grep が異常終了した: ${result.stderr}`).toBe(
+    true,
+  );
+  return new Set((result.stdout ?? '').split('\n').filter((line) => line !== ''));
+};
+
+describe('日付パスのスラッグ', () => {
+  const DATE_SLUGS = ['2026/09/08/054001', '2027/01/01/000000', '2026/12/31/235959'] as const;
+
+  /** dist と corpus の両方に、与えたスラッグの記事を置く。 */
+  const seedBoth = (dir: string, slugs: readonly string[]): void => {
+    for (const slug of slugs) {
+      const file = join(dir, POSTS_DIR, `${slug}.md`);
+      mkdirSync(join(file, '..'), { recursive: true });
+      writePost(file);
+      writeDistPost(dir, slug);
+    }
+  };
+
+  it('日付パスだけなら通る', () => {
+    withTempDir((dir) => {
+      seedBoth(dir, DATE_SLUGS);
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(result.status, `日付パスが弾かれた: ${result.output}`).toBe(0);
+    });
+  });
+
+  it('平坦スラッグと日付パスが混在していても通る', () => {
+    // **移行後の実際の姿。** 既存の記事は平坦のまま（URL を変えると RSS の guid が
+    // 変わり、購読者に全記事が再配信される。取り消せない）、新しい記事だけ日付パスになる。
+    withTempDir((dir) => {
+      seedBoth(dir, ['hello-world', 'second-post', 'third-post', ...DATE_SLUGS]);
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(result.status, `混在が弾かれた: ${result.output}`).toBe(0);
+    });
+  });
+
+  it('**日付パス時代に content repo のルートを置いた形で落ちる**', () => {
+    // 平坦性の主張を「形」に置き換えたことで生まれる穴。`posts/2026/09/08/054001` は
+    // `/` を含むという点では日付パスと区別がつかないので、**桁と階層を固定する形**で
+    // なければ素通りする。事故の検知力を落とさないことの核心。
+    withTempDir((dir) => {
+      seedBoth(
+        dir,
+        DATE_SLUGS.map((slug) => `posts/${slug}`),
+      );
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(result.status, '入れ子の日付パスが素通りした').not.toBe(0);
+      expect(result.output).toContain('::error::');
+    });
+  });
+
+  it.each([
+    ['2026/9/8/54001', 'ゼロ埋めなし'],
+    ['26/09/08/054001', '年が 2 桁'],
+    ['2026/09/08/09/054001', '階層が 1 つ多い'],
+    ['2026/09/054001', '階層が 1 つ少ない'],
+  ])('形の違う %s は落ちる（%s）', (slug) => {
+    // ゼロ埋めを許すと同じ時刻から 2 通りのスラッグが作れて `/posts/<slug>/` が
+    // 一意でなくなる。階層違いは事故の兆候。
+    withTempDir((dir) => {
+      seedBoth(dir, [...DATE_SLUGS, slug]);
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(result.status, `${slug} が素通りした`).not.toBe(0);
+      expect(result.output).toContain('::error::');
+    });
+  });
+
+  it('記事が 1 本も無いときは、形ではなく下限のエラーになる', () => {
+    // 落ちること自体ではなく**どちらのエラーで落ちるか**を固定する。
+    // 「記事が足りない」を「レイアウトが壊れている」と読ませると、操作する人を
+    // content repo の checkout を疑う方向へ誤誘導する。
+    withTempDir((dir) => {
+      mkdirSync(join(dir, POSTS_DIR), { recursive: true });
+      mkdirSync(join(dir, DIST_POSTS), { recursive: true });
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(result.status, '両方空なのに通っている').not.toBe(0);
+      expect(result.output, '下限のエラーで落ちること').toContain('expected at least');
+      expect(result.output, '形のエラーで誤診していないこと').not.toContain('slug_shape');
+      expect(result.output).not.toContain('neither');
+    });
+  });
+
+  it('形のエラーの列挙に空行が混ざらない', () => {
+    // **`grep -v '^$'` が実際に変えるのはここだけ。** 終了コードは変わらない
+    // （`$( )` が末尾の改行を落とすので、空行しか無ければ invalid は空文字になる）。
+    // 実測でそう確かめたので、終了コードで固定するふりをせず、
+    // **観測できる差そのもの**を主張する。
+    //
+    // 記事が 0 本で dist に不正な形がある、という食い違いのときに、
+    // 原因でない空行が列挙の先頭に並ぶと、読む人が数え間違える。
+    withTempDir((dir) => {
+      mkdirSync(join(dir, POSTS_DIR), { recursive: true });
+      writeDistPost(dir, 'posts/hello-world');
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(result.status, '不正な形なのに通っている').not.toBe(0);
+
+      const lines = result.output.split('\n');
+      const header = lines.findIndex((line) => line.includes('but these are neither'));
+      expect(header, '形のエラーで落ちていること').toBeGreaterThan(-1);
+      const advisory = lines.findIndex((line) => line.includes('was probably checked out'));
+      expect(advisory, '助言の行があること').toBeGreaterThan(header);
+
+      const listed = lines.slice(header + 1, advisory);
+      expect(listed, '列挙されるのは不正なスラッグだけ').toEqual(['posts/hello-world']);
+    });
+  });
+});
+
+describe('ガードの ERE と POST_SLUG_PATTERN が同じ集合を受理する', () => {
+  // **新しい乖離源。** `deploy.yml` のシェルは POSIX ERE なので `(?:` が使えず、
+  // `api/src/posts/slug.ts` の正規表現をそのまま貼れない。同じ意味の別表現を
+  // 2 箇所に持つことになる。
+  //
+  // この工事では「定義が 2 箇所にあって片方だけ直る」事故が既に起きている
+  // （api/dist とソースの乖離で、変異したバンドルが本番に載った）。
+  // **文字列として比べるのではなく、同じ入力集合に対して両方を実際に走らせて
+  // 判定が一致することを見る。**
+
+  /** 短い文字列を総当たりする。平坦スラッグ側の食い違いと、拒否の一致を見る。 */
+  const exhaustiveShortInputs = (): string[] => {
+    const alphabet = ['a', 'z', '0', '9', '-', '/', '.', 'A'];
+    let words = [''];
+    const out: string[] = [];
+    for (let length = 1; length <= 4; length += 1) {
+      words = words.flatMap((word) => alphabet.map((char) => word + char));
+      out.push(...words);
+    }
+    return out;
+  };
+
+  /** 日付パスの各セグメントを崩した入力。桁・階層の境界を狙う。 */
+  const datePathVariants = (): string[] => {
+    const segments = ['', '2', '26', '202', '2026', '20266', '09', '9', '054001', '05400', 'aaaa'];
+    const out: string[] = [];
+    for (const year of segments) {
+      for (const rest of segments) {
+        out.push(`${year}/09/08/054001`, `2026/${rest}/08/054001`, `2026/09/08/${rest}`);
+      }
+    }
+    out.push('2026/09/08/054001/', '/2026/09/08/054001', '2026//08/054001');
+    return out;
+  };
+
+  const namedCases = (): string[] => [
+    'hello-world',
+    'second-post',
+    '2026/09/08/054001',
+    'posts/hello-world',
+    'posts/2026/09/08/054001',
+    '..',
+    '../../etc/passwd',
+    '2026/9/8/54001',
+    '26/09/08/054001',
+    '2026/09/08/09/054001',
+    '2026/09/054001',
+    'a--b',
+    '-leading',
+    'trailing-',
+    'UPPER',
+    'with space',
+    'ドット.入り',
+  ];
+
+  it('同じ入力集合に対して判定が 1 件も食い違わない', () => {
+    const shape = declaredSlugShape();
+    const inputs = [
+      ...new Set([...namedCases(), ...exhaustiveShortInputs(), ...datePathVariants()]),
+    ].filter((input) => input !== '');
+
+    const byGrep = acceptedByGrep(shape, inputs);
+    const disagreements = inputs.filter(
+      (input) => POST_SLUG_PATTERN.test(input) !== byGrep.has(input),
+    );
+
+    expect(
+      disagreements,
+      `ERE と POST_SLUG_PATTERN の判定が食い違う入力: ${JSON.stringify(disagreements.slice(0, 20))}`,
+    ).toEqual([]);
+    // 母集団が空でも「食い違いゼロ」は成立してしまう。実際に判定していることを固定する。
+    expect(inputs.length, '入力集合が十分に大きいこと').toBeGreaterThan(1000);
+    expect(byGrep.size, '通す入力が 1 件以上あること').toBeGreaterThan(0);
+    expect(byGrep.size, '全部を通してはいないこと').toBeLessThan(inputs.length);
+  });
+
+  it('必ず通す形と必ず拒む形を、ERE 側でも名指しで固定する', () => {
+    // 上の総当たりは「両者が一致する」ことしか言わない。**両方が同時に間違っていれば
+    // 一致したまま素通りする。** 絶対に譲れない判定はここで名指しする。
+    const shape = declaredSlugShape();
+    const accepted = acceptedByGrep(shape, namedCases());
+
+    for (const slug of ['hello-world', 'second-post', '2026/09/08/054001']) {
+      expect(accepted.has(slug), `${slug} は通さなければならない`).toBe(true);
+    }
+    for (const slug of [
+      'posts/hello-world',
+      'posts/2026/09/08/054001',
+      '..',
+      '../../etc/passwd',
+      '2026/9/8/54001',
+      '26/09/08/054001',
+      '2026/09/08/09/054001',
+    ]) {
+      expect(accepted.has(slug), `${slug} は拒まなければならない`).toBe(false);
+    }
   });
 });
 
