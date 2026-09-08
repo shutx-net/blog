@@ -274,21 +274,36 @@ jobs:
             fi
           )"
 
-          # **集合の比較より先に、スラッグが平坦であることを見る。**
+          # **集合の比較より先に、スラッグの形を見る。**
           #
           # expected は記事ディレクトリからの相対パスで作るので、corpus が入れ子なら
           # 期待値も `posts/hello-world` になり、dist 側も同じで**一致してしまう。**
           # 集合の比較は corpus と dist の内部整合しか見ていない。実際の事故
           # （content repo のルートを丸ごと置く）では両方が同じだけ入れ子になるので、
-          # ここで平坦性を直接主張しないと素通りする。
+          # ここで形を直接主張しないと素通りする。
           #
-          # 記事は `/posts/<slug>/` の 1 階層で publish される設計
-          # （admin も api の CONTENT_POSTS_PATH_PREFIX も入れ子を作らない）。
-          # 意図して入れ子にするときは、この主張も同じ PR で変えること。
-          nested="$(printf '%s\n%s\n' "$expected" "$actual" | grep '/' | sort -u || true)"
-          if [ -n "$nested" ]; then
-            echo '::error::post slugs must be flat, but these carry a path separator:'
-            printf '%s\n' "$nested"
+          # 正当な形は 2 つだけ。分離前から公開している**平坦スラッグ**（URL を変えると
+          # RSS の <guid> が変わり、購読者に全記事が再配信される。取り消せない）と、
+          # 投稿日時から導出する **`YYYY/MM/DD/HHmmss`**。
+          #
+          # **「/ を含めば失敗」ではなく形で見るのが要。** 日付パスを許した以上、
+          # 区切りの有無では `posts/2026/09/08/054001` を弾けない。桁と階層を固定して
+          # はじめて、日付パス時代に同じ事故が起きても止まる。
+          #
+          # **`api/src/posts/slug.ts` の POST_SLUG_PATTERN と同じ集合を受理する。**
+          # シェルは POSIX ERE で `(?:` が使えないため、同じ表現を貼れず 2 箇所に
+          # 別表現を持つことになる。両者が一致することは
+          # infra/test/workflow-deploy-steps.test.ts が**両方を実際に走らせて**
+          # 固定している。片方だけ変えれば落ちる。
+          #
+          # **空行を先に落とす。** printf は expected が空でも空行を作る。それを形に
+          # 通すと「記事が足りない」を「レイアウトが壊れている」と誤診し、操作する人を
+          # content repo の checkout を疑う方向へ誤誘導する。
+          slug_shape='^([a-z0-9]+(-[a-z0-9]+)*|[0-9]{4}/[0-9]{2}/[0-9]{2}/[0-9]{6})$'
+          invalid="$(printf '%s\n%s\n' "$expected" "$actual" | grep -v '^$' | grep -vE "$slug_shape" | sort -u || true)"
+          if [ -n "$invalid" ]; then
+            echo '::error::post slugs must be flat or YYYY/MM/DD/HHmmss, but these are neither:'
+            printf '%s\n' "$invalid"
             echo 'the content repository root was probably checked out onto the posts directory.'
             exit 1
           fi
