@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
@@ -9,7 +10,9 @@ import {
   AUTH_MODE_DENY_ALL,
 } from '../../api/src/config.ts';
 import { CONTENT_POSTS_PATH_PREFIX, SITE_POSTS_PATH_PREFIX } from '../../api/src/github/commit.ts';
+import { API_BUNDLE_DIR, API_BUNDLE_FILE } from '../../api/build.ts';
 import { ADMIN_USERNAME, SiteStack } from '../lib/site-stack.ts';
+import { DEFAULT_API_BUNDLE_DIR } from '../lib/posting-api.ts';
 
 /** cognito モードのときだけ現れる環境変数。 */
 const COGNITO_ENV_NAMES = [
@@ -506,5 +509,30 @@ describe('GitHub App の client ID', () => {
     for (const bad of ['todo', 'changeme', 'xxx', 'placeholder']) {
       expect(value.toLowerCase()).not.toContain(bad);
     }
+  });
+});
+
+describe('バンドルのディレクトリ', () => {
+  /**
+   * **テスト用の seam を足した代償を、ここで打ち消す。**
+   *
+   * `PostingApiProps.bundleDir` は lambda-bundle-freshness.test.ts が
+   * 本物の api/dist を壊さずに済むためのもの。既定が黙って別の場所に変われば、
+   * 本番の Lambda が別のディレクトリから固められる。
+   *
+   * **限界**: これは既定の「値」を固定するだけで、コンストラクトが実際に
+   * その値を使っていることまでは見ていない。使っていることは、既定で合成した
+   * あとに本物の成果物が新鮮であることで見る（下のテスト）。
+   */
+  it('**既定は本物の api/dist である**', () => {
+    expect(DEFAULT_API_BUNDLE_DIR).toBe(API_BUNDLE_DIR);
+  });
+
+  it('既定で合成すると本物の成果物がいまのソースから作られている', () => {
+    new SiteStack(new App(), 'DefaultBundleDirStack');
+
+    const built = readFileSync(API_BUNDLE_FILE, 'utf8');
+    expect(built).toContain('createRequire');
+    expect(built.length).toBeGreaterThan(100_000);
   });
 });

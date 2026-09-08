@@ -34,7 +34,10 @@ export const API_BUNDLE_DIR = fileURLToPath(new URL('./dist', import.meta.url));
  * `"type"` を見に行き、Lambda のアセットには package.json が無いので CommonJS として
  * 読み、起動時に SyntaxError で落ちる。
  */
-export const API_BUNDLE_FILE = `${API_BUNDLE_DIR}/index.mjs`;
+export const API_BUNDLE_FILENAME = 'index.mjs';
+
+/** 既定の出力先。**infra はテスト用に別のディレクトリを指せる**（seam は PostingApiProps）。 */
+export const API_BUNDLE_FILE = `${API_BUNDLE_DIR}/${API_BUNDLE_FILENAME}`;
 
 /**
  * 書きかけのバンドルを置く場所。**`outfile` のディレクトリの外**でなければならない。

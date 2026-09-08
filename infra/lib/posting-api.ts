@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { CfnOutput, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import type * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -7,7 +8,16 @@ import type * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { CfnSecret } from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
-import { API_BUNDLE_DIR, buildApiBundle } from '../../api/build.ts';
+import { API_BUNDLE_DIR, API_BUNDLE_FILENAME, buildApiBundle } from '../../api/build.ts';
+
+/**
+ * `bundleDir` を省いたときに使うディレクトリ。**本番はこれ。**
+ *
+ * 定数として出しているのは、テスト用の seam（`PostingApiProps.bundleDir`）を
+ * 足した結果、既定が黙って別の場所に変わる余地ができたから。既定が本物であることを
+ * posting-api.test.ts が名指しで固定する。
+ */
+export const DEFAULT_API_BUNDLE_DIR = API_BUNDLE_DIR;
 
 // cdk synth がどこから実行されるか分からないので cwd 基準の相対パスにしない。
 // "type": "module" なので __dirname は存在しない（site-stack.ts と同じ理由）。
@@ -84,6 +94,19 @@ export interface PostingApiProps {
    * 同じコミットに対してデプロイが 2 本走る。切り替えの PR で初めて設定する。
    */
   deployWorkflowFile?: string;
+  /**
+   * バンドルを作る／固めるディレクトリ。**既定は `api/dist`。テスト専用の seam。**
+   *
+   * これがあるのは、`lambda-bundle-freshness.test.ts` が「古い成果物を置いてから
+   * 合成すると作り直されている」ことを見るために**成果物をわざと壊す**から。
+   * 本物の `api/dist` を壊すと、同時に走る他のテスト
+   * （`site-stack.test.ts` の synth や `api` の `bundle.test.ts`）が
+   * 消えたファイルを読んで落ちる。実際にそれが断続的な失敗の原因だった。
+   *
+   * **本番の既定は変えない。** 既定が API_BUNDLE_DIR であることは
+   * posting-api.test.ts が固定している。
+   */
+  bundleDir?: string;
   /**
    * GitHub App の client ID。**秘密ではない**（秘密鍵が無ければ何もできない）。
    *
@@ -235,14 +258,15 @@ export class PostingApi extends Construct {
     // 取りこぼしが残る**から（何を入力と見なすか。node_modules の入れ替えは？
     // mtime を保つコピーは？）。作り直す方式にはその余地が無い。
     // esbuild は 100ms 前後で、1 プロセス 1 回に抑えてある。
-    buildApiBundle();
+    const bundleDir = props.bundleDir ?? DEFAULT_API_BUNDLE_DIR;
+    buildApiBundle({ outfile: join(bundleDir, API_BUNDLE_FILENAME) });
 
     const handler = new lambda.Function(this, 'Function', {
       runtime: lambda.Runtime.NODEJS_24_X,
       // esbuild の出力は dist/index.mjs。**.js にすると node が CommonJS として読み、
       // 起動時に SyntaxError で落ちる**（api/package.json の build を参照）。
       handler: 'index.handler',
-      code: lambda.Code.fromAsset(API_BUNDLE_PATH),
+      code: lambda.Code.fromAsset(bundleDir),
       role,
       logGroup,
       timeout: Duration.seconds(15),
