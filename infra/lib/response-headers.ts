@@ -93,6 +93,60 @@ export const REFERRER_POLICY = 'same-origin';
 export const HSTS_MAX_AGE_SECONDS = 31_536_000;
 
 /**
+ * サイト（HTML / RSS / sitemap / admin）が返す `Cache-Control`。
+ *
+ * # なぜ必要か
+ *
+ * **実測で、配信 HTML には `Cache-Control` が 1 つも付いていなかった。**
+ * `Cache-Control` も `Expires` も無いと、ブラウザは*ヒューリスティックキャッシュ*を
+ * 適用する（一般に `Last-Modified` からの経過時間の 10% 程度）。
+ * デプロイ時の invalidation は **CloudFront にしか効かない**ので、
+ * 一度サイトを見た人は不定の時間だけ古い HTML を見続ける。
+ * **記事を更新したのに反映されない、として実際に踏んだ。**
+ *
+ * # なぜ `no-cache` か
+ *
+ * `no-cache` は「キャッシュしてよいが、再利用の前に必ずオリジンで検証せよ」。
+ * S3 が ETag を返すので、変わっていなければ 304 が返り本文は流れない。
+ * **転送量はほとんど増えない。**
+ *
+ * `no-store` は 304 による再利用まで禁じるので過剰。
+ * `max-age=0, must-revalidate` は実質同義だが、意図が読み取りにくい。
+ *
+ * # なぜ ResponseHeadersPolicy で付けるのか（S3 のメタデータではなく）
+ *
+ * AWS は「response headers policy で付けた `Cache-Control` は **viewer response にのみ**
+ * 付き、CloudFront がオブジェクトをどうキャッシュするかには影響しない」と明記している。
+ * つまり **CDN は DefaultTTL 86400 のまま**で、更新はこれまでどおり invalidation が担う。
+ * オリジンへの負荷は増えない。
+ *
+ * **S3 のオブジェクトメタデータに `no-cache` を書いてはいけない。**
+ * 現行のキャッシュポリシー（Managed-CachingOptimized）は MinTTL が 1 で 0 より大きく、
+ * AWS の表は「MinTTL > 0 のとき `no-cache` / `no-store` / `private` を無視して
+ * MinTTL 分キャッシュする」と明記している。実質 CDN が無効化され、
+ * **毎リクエストが S3 に行く。**
+ *
+ * `aws s3 sync --cache-control` を使わない理由はもう 1 つある。sync の比較は
+ * サイズと更新時刻だけで**メタデータを見ない**ので、内容が変わっていないオブジェクトは
+ * 取り残される。定義が S3 と CDK の 2 箇所に分かれる問題も伴う。
+ */
+export const SITE_CACHE_CONTROL = 'no-cache';
+
+/**
+ * `/media/*` が返す `Cache-Control`。**1 年 + `immutable`。**
+ *
+ * 投稿画像のキーは `api/src/media/presign.ts` が
+ * `media/<年>/<月>/<randomBytes(12) の 24 桁 hex>.<拡張子>` として作る。
+ * **利用者のファイル名を一切使わず、本体がランダムなので同じキーが二度使われない。**
+ * 上書きが起きない以上、`immutable`（有効期間中は条件付きリクエストすら送らない）が
+ * そのまま成立する。
+ *
+ * **キーの作り方を変えるなら、ここも一緒に変えること。** 決め打ちのキーや
+ * ファイル名由来のキーにした瞬間に、この宣言は嘘になる。
+ */
+export const MEDIA_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+
+/**
  * CSP を組み立てる。
  *
  * # `'wasm-unsafe-eval'` を消さないこと

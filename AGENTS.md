@@ -73,6 +73,22 @@ npx -w infra cdk deploy <Stack>
 - CDK CLI は nix ではなく npm の devDependency。`aws-cdk` と `aws-cdk-lib` のバージョンをずらさないため、
   必ず `npx -w infra cdk` で呼ぶ
 
+### Cache-Control
+
+- **`Cache-Control` は ResponseHeadersPolicy でだけ付ける。S3 のオブジェクトメタデータには書かない。**
+  定義が 2 箇所にあると乖離する。加えて現行のキャッシュポリシーは **MinTTL が 1（> 0）**で、
+  AWS は「MinTTL > 0 のとき origin の `no-cache` / `no-store` / `private` を無視する」と明記している。
+  S3 側に `no-cache` を書くと **CDN キャッシュが 1 秒に潰れ、毎リクエストが S3 に行く**
+- `aws s3 sync --cache-control` も使わない。sync の比較は**サイズと更新時刻だけでメタデータを見ない**ので、
+  内容が変わっていないオブジェクトは取り残される
+- **サイトは `no-cache`。** ブラウザに毎回検証させる（ETag があるので 304 が返り本文は流れない）。
+  ResponseHeadersPolicy の `Cache-Control` は **viewer response にしか付かず CloudFront のキャッシュ挙動には
+  影響しない**ので、CDN は DefaultTTL 86400 のままデプロイ時の invalidation で更新される
+- **`/media/*` は `immutable`。** キーが `media/<年>/<月>/<24 桁の乱数>.<拡張子>` で上書きされないため。
+  **キーの作り方を変えるならこの宣言も変えること**
+- Cache-Control が無いとブラウザは*ヒューリスティックキャッシュ*（`Last-Modified` からの経過の 10% 程度）を
+  適用する。invalidation はブラウザには届かないので、**更新したのに反映されない**という事故になる（実際に踏んだ）
+
 ### Lambda のバンドル
 
 - **ビルドの定義は `api/build.ts` ただ 1 つ。** `npm run -w api build` も infra の synth も

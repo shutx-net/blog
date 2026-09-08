@@ -12,7 +12,13 @@ import { CONTENT_POSTS_PATH_PREFIX } from '../../api/src/github/commit.ts';
 import { AdminAuth } from './admin-auth.ts';
 import { MediaBucket } from './media-bucket.ts';
 import { PostingApi } from './posting-api.ts';
-import { HSTS_MAX_AGE_SECONDS, REFERRER_POLICY, buildCsp } from './response-headers.ts';
+import {
+  HSTS_MAX_AGE_SECONDS,
+  MEDIA_CACHE_CONTROL,
+  REFERRER_POLICY,
+  SITE_CACHE_CONTROL,
+  buildCsp,
+} from './response-headers.ts';
 
 // cdk synth がどこから実行されるか分からないので、cwd 基準の相対パスにしない。
 // "type": "module" なので __dirname は存在しない。
@@ -198,33 +204,72 @@ export class SiteStack extends Stack {
     //
     // **ホストは construct から導出する。** 物理名を書くと、片方だけ変わったときに
     // 「ログインだけ動かない」「画像だけ上がらない」という最も分かりにくい壊れ方をする。
+    // **セキュリティヘッダは 1 つの値を 2 本のポリシーで共有する。**
+    //
+    // ポリシーが 2 本あるのは Cache-Control の値がサイトとメディアで正反対だから
+    // （毎回検証させる / 1 年持たせる）。**セキュリティヘッダのほうは同一でなければならない。**
+    // 2 箇所に書くと、CSP に connect-src を足した日に片方だけ古くなり、
+    // 「画像だけアップロードできない」という最も分かりにくい壊れ方をする。
+    // ローカル変数に括り出して、値の出所を 1 つにしておく。
+    const securityHeadersBehavior: cloudfront.ResponseSecurityHeadersBehavior = {
+      contentSecurityPolicy: {
+        contentSecurityPolicy: buildCsp({
+          cognitoOrigin: adminAuth.domain.baseUrl(),
+          mediaOrigin: `https://${this.mediaBucket.bucketRegionalDomainName}`,
+        }),
+        override: true,
+      },
+      contentTypeOptions: { override: true },
+      referrerPolicy: {
+        referrerPolicy: REFERRER_POLICY as cloudfront.HeadersReferrerPolicy,
+        override: true,
+      },
+      // frame-ancestors の二重化。古いブラウザ向け。
+      frameOptions: { frameOption: cloudfront.HeadersFrameOption.DENY, override: true },
+      // **includeSubdomains も preload も付けない。**
+      // *.cloudfront.net は他人と共有するドメインなので、サブドメイン全体に
+      // HSTS を宣言するのは自分のものでないホストに対する宣言になる。
+      strictTransportSecurity: {
+        accessControlMaxAge: Duration.seconds(HSTS_MAX_AGE_SECONDS),
+        includeSubdomains: false,
+        preload: false,
+        override: true,
+      },
+    };
+
+    // サイト（HTML / RSS / sitemap / admin）用。**論理 ID は 'SecurityHeaders' のまま。**
+    // 変えると CloudFormation は「削除して作り直す」と解釈し、ビヘイビアの差し替えと
+    // 削除の順序で失敗しうる。名前も `${stackName}-security-headers` のままにする。
+    //
+    // override: true の理由。今日はオリジン（S3）が Cache-Control を返さないので
+    // false でも結果は同じだが、**将来 s3 sync に --cache-control が入った日に
+    // 挙動が二股に分かれる。** どちらが勝つかを今ここで決めておく。
     const responseHeaders = new cloudfront.ResponseHeadersPolicy(this, 'SecurityHeaders', {
       responseHeadersPolicyName: `${Stack.of(this).stackName}-security-headers`,
-      comment: 'CSP ほか。admin のプレビューに実在する XSS 経路の緩和（Phase 5）',
-      securityHeadersBehavior: {
-        contentSecurityPolicy: {
-          contentSecurityPolicy: buildCsp({
-            cognitoOrigin: adminAuth.domain.baseUrl(),
-            mediaOrigin: `https://${this.mediaBucket.bucketRegionalDomainName}`,
-          }),
-          override: true,
-        },
-        contentTypeOptions: { override: true },
-        referrerPolicy: {
-          referrerPolicy: REFERRER_POLICY as cloudfront.HeadersReferrerPolicy,
-          override: true,
-        },
-        // frame-ancestors の二重化。古いブラウザ向け。
-        frameOptions: { frameOption: cloudfront.HeadersFrameOption.DENY, override: true },
-        // **includeSubdomains も preload も付けない。**
-        // *.cloudfront.net は他人と共有するドメインなので、サブドメイン全体に
-        // HSTS を宣言するのは自分のものでないホストに対する宣言になる。
-        strictTransportSecurity: {
-          accessControlMaxAge: Duration.seconds(HSTS_MAX_AGE_SECONDS),
-          includeSubdomains: false,
-          preload: false,
-          override: true,
-        },
+      comment: 'CSP ほか + Cache-Control: no-cache（ブラウザに毎回検証させる）',
+      securityHeadersBehavior,
+      customHeadersBehavior: {
+        customHeaders: [
+          { header: 'Cache-Control', value: SITE_CACHE_CONTROL, override: true },
+        ],
+      },
+    });
+
+    // メディア用。**セキュリティヘッダは上と同一で、Cache-Control だけが違う。**
+    //
+    // admin/dist/assets の Vite ハッシュ付きファイル（実測 391 個、shiki の文法定義）も
+    // デフォルトビヘイビア経由なので no-cache になる。**それでよしとする** —
+    // 利用者は 1 人、遅延ロードで実際に読むのは数本、CloudFront にキャッシュがあるので
+    // 304 が返り S3 には行かない。必要になったら admin/assets 専用のビヘイビアを足すより、
+    // ハッシュ付き資産だけ s3 sync --cache-control で長い値を付けるほうが安い。
+    const mediaResponseHeaders = new cloudfront.ResponseHeadersPolicy(this, 'MediaHeaders', {
+      responseHeadersPolicyName: `${Stack.of(this).stackName}-media-headers`,
+      comment: 'CSP ほか + Cache-Control: immutable（キーがランダムで上書きされない）',
+      securityHeadersBehavior,
+      customHeadersBehavior: {
+        customHeaders: [
+          { header: 'Cache-Control', value: MEDIA_CACHE_CONTROL, override: true },
+        ],
       },
     });
 
@@ -273,7 +318,10 @@ export class SiteStack extends Stack {
           // **メディアにも付ける。** SVG は許可していない（api の
           // ALLOWED_CONTENT_TYPES に image/svg+xml は無い）が、入口の制限と
           // 二重化しておく。
-          responseHeadersPolicy: responseHeaders,
+          //
+          // **サイトとは別のポリシー。** セキュリティヘッダは同一だが、
+          // Cache-Control だけが違う（1 年 + immutable）。
+          responseHeadersPolicy: mediaResponseHeaders,
         },
         // 投稿 API。**/media/* より後に書く**（上の API_PATH_PATTERN のコメント）。
         [API_PATH_PATTERN]: {
