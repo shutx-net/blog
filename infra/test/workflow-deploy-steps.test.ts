@@ -1196,10 +1196,9 @@ describe('日付パスのスラッグ', () => {
   });
 
   it('記事が 1 本も無いときは、形ではなく下限のエラーになる', () => {
-    // `printf '%s\n%s\n'` は expected が空でも空行を作る。空行を落とさずに形へ通すと、
-    // **「記事が足りない」を「レイアウトが壊れている」と誤診する。**
-    // 操作する人を content repo の checkout を疑う方向へ誤誘導するので、
     // 落ちること自体ではなく**どちらのエラーで落ちるか**を固定する。
+    // 「記事が足りない」を「レイアウトが壊れている」と読ませると、操作する人を
+    // content repo の checkout を疑う方向へ誤誘導する。
     withTempDir((dir) => {
       mkdirSync(join(dir, POSTS_DIR), { recursive: true });
       mkdirSync(join(dir, DIST_POSTS), { recursive: true });
@@ -1208,6 +1207,31 @@ describe('日付パスのスラッグ', () => {
       expect(result.output, '下限のエラーで落ちること').toContain('expected at least');
       expect(result.output, '形のエラーで誤診していないこと').not.toContain('slug_shape');
       expect(result.output).not.toContain('neither');
+    });
+  });
+
+  it('形のエラーの列挙に空行が混ざらない', () => {
+    // **`grep -v '^$'` が実際に変えるのはここだけ。** 終了コードは変わらない
+    // （`$( )` が末尾の改行を落とすので、空行しか無ければ invalid は空文字になる）。
+    // 実測でそう確かめたので、終了コードで固定するふりをせず、
+    // **観測できる差そのもの**を主張する。
+    //
+    // 記事が 0 本で dist に不正な形がある、という食い違いのときに、
+    // 原因でない空行が列挙の先頭に並ぶと、読む人が数え間違える。
+    withTempDir((dir) => {
+      mkdirSync(join(dir, POSTS_DIR), { recursive: true });
+      writeDistPost(dir, 'posts/hello-world');
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(result.status, '不正な形なのに通っている').not.toBe(0);
+
+      const lines = result.output.split('\n');
+      const header = lines.findIndex((line) => line.includes('but these are neither'));
+      expect(header, '形のエラーで落ちていること').toBeGreaterThan(-1);
+      const advisory = lines.findIndex((line) => line.includes('was probably checked out'));
+      expect(advisory, '助言の行があること').toBeGreaterThan(header);
+
+      const listed = lines.slice(header + 1, advisory);
+      expect(listed, '列挙されるのは不正なスラッグだけ').toEqual(['posts/hello-world']);
     });
   });
 });
