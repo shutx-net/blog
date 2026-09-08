@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FileSystem } from 'aws-cdk-lib/core';
 import { describe, expect, it } from 'vitest';
+
+import { scratchDir } from '../../api/test/support/scratch.ts';
 
 /**
  * **infra のテストが断続的に落ちていた競合を、実際に起こして塞がっていることを見る。**
@@ -64,7 +65,7 @@ const startBuilder = (dir: string): Promise<{ code: number | null; writes: numbe
 
 describe('成果物のディレクトリを固めるあいだの書き込み', () => {
   it('**書き込みと同時に指紋を取っても ENOENT にならない**', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'blog-race-'));
+    const dir = scratchDir('blog-race-');
     // 中身の違う 2 つのエントリを交互に使い、毎回 rename が起きるようにする。
     // 同じ内容だと alreadyWritten が真になって書き込みが止まり、窓が開かない。
     writeFileSync(join(dir, 'a.ts'), 'export const a = 1;\n', 'utf8');

@@ -1,8 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { App } from 'aws-cdk-lib';
 import { describe, expect, it } from 'vitest';
+
+import { scratchDir } from '../../api/test/support/scratch.ts';
 
 import { API_BUNDLE_FILENAME } from '../../api/build.ts';
 import { SiteStack } from '../lib/site-stack.ts';
@@ -36,7 +37,7 @@ import { SiteStack } from '../lib/site-stack.ts';
 const CORRUPTION = '/* stale bundle planted by lambda-bundle-freshness.test.ts */';
 
 /** このテスト専用の成果物ディレクトリを 1 つ作る。 */
-const isolatedBundleDir = (): string => join(mkdtempSync(join(tmpdir(), 'blog-freshness-')), 'dist');
+const isolatedBundleDir = (): string => join(scratchDir('blog-freshness-'), 'dist');
 
 /**
  * 隔離したディレクトリを指して合成する。

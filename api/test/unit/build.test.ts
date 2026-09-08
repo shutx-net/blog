@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+
+import { scratchDir } from '../support/scratch.ts';
 
 import { API_BUNDLE_DIR, API_BUNDLE_FILE, API_ENTRY, buildApiBundle, stagingPathFor } from '../../build.ts';
 
@@ -17,7 +18,7 @@ import { API_BUNDLE_DIR, API_BUNDLE_FILE, API_ENTRY, buildApiBundle, stagingPath
  * このファイルはその生成器そのものを、実際に走らせて検証する。
  */
 
-const tempWorkspace = (): string => mkdtempSync(join(tmpdir(), 'blog-api-build-'));
+const tempWorkspace = (): string => scratchDir('blog-api-build-');
 
 /** テスト用の自己完結したエントリを書き、そのパスを返す。 */
 const writeEntry = (dir: string, source: string, name = 'entry.ts'): string => {
