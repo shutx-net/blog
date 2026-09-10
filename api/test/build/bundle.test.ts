@@ -180,7 +180,11 @@ describe('esbuild のバンドル', () => {
       expect(result.status, `${missing} が無いのに起動した`).not.toBe(0);
       expect(result.stdout).toContain(missing);
     }
-  });
+    // **既定の 5 秒では足りない。** このテストだけで node を 12 回起動する。
+    // 単独なら数秒で終わるが、別のワークスペースのテストと同時に走ると超える
+    // （実測: 同時実行 20 回のうち 1 回、このファイルが 10.3 秒かかって落ちた）。
+    // 主張は変えず、起動回数に見合った余裕だけを与える。
+  }, 30_000);
 
   it.each(['COGNITO_USER_POOL_ID', 'COGNITO_CLIENT_ID', 'COGNITO_ALLOWED_USERNAME'])(
     '**AUTH_MODE=cognito で %s だけ欠けると import が非ゼロ終了し、変数名が出る**',
