@@ -115,6 +115,19 @@ export const GITHUB_APP_CLIENT_ID = 'Iv23liVPDAakRE2AKX45';
  * env は意図的に指定しない（env-agnostic）。本フェーズは AWS 認証情報を
  * 一切必要とせず cdk synth が通ることを要件にしているため。
  */
+/**
+ * `StackProps` に**テスト専用の seam を 1 つだけ**足したもの。
+ *
+ * `apiBundleDir` は `lambda-bundle-freshness.test.ts` が使う。あのテストは
+ * 「古い成果物を置いてから合成すると作り直されている」ことを見るために成果物を
+ * わざと壊すので、本物の `api/dist` を壊すと同時に走る他のテストが巻き添えになる。
+ * **既定は `api/dist` のままで、本番の挙動は変わらない。**
+ */
+export interface SiteStackProps extends StackProps {
+  /** 既定は `API_BUNDLE_DIR`。テスト以外で渡さないこと。 */
+  apiBundleDir?: string;
+}
+
 export class SiteStack extends Stack {
   /** `aws s3 sync` の宛先。CicdStack がデプロイロールの権限をここに絞る。 */
   readonly siteBucket: s3.Bucket;
@@ -128,7 +141,7 @@ export class SiteStack extends Stack {
   /** 管理画面のログイン（単一著者の Cognito ユーザプール）。 */
   readonly adminAuth: AdminAuth;
 
-  constructor(scope: Construct, id: string, props?: StackProps) {
+  constructor(scope: Construct, id: string, props?: SiteStackProps) {
     super(scope, id, props);
 
     // 配信対象は CloudFront の OAC 経由でのみ読ませる。バケット自体は完全に非公開。
@@ -163,6 +176,7 @@ export class SiteStack extends Stack {
     // posting-api.ts のコメント）。Distribution が functionUrl を参照するので
     // ここで先に作る。
     const postingApi = new PostingApi(this, 'PostingApi', {
+      bundleDir: props?.apiBundleDir,
       mediaBucket: this.mediaBucket,
       // **Phase 4 でここが deny-all から cognito に変わった。**
       // 型が判別可能ユニオンなので、userPool / userPoolClient / allowedUsername を

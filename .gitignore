@@ -38,3 +38,11 @@ infra/.cdk.staging/
 CLAUDE.local.md
 .envrc.local
 .DS_Store
+
+# バンドルの書きかけ置き場（api/build.ts の stagingPathFor）。
+# dist の中に置くと CDK の指紋計算と競合するため、1 つ上に逃がしている。
+api/.build-staging/
+
+# テストの一時置き場（api/test/support/scratch.ts）。
+# os.tmpdir() に置くと github-token.test.ts の tmpdir スナップショットが落ちる。
+.test-scratch/

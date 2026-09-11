@@ -8,12 +8,13 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { App } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
+
+import { scratchDir } from '../../api/test/support/scratch.ts';
 import { parse } from 'yaml';
 import { POST_SLUG_PATTERN } from '../../api/src/posts/slug.ts';
 import { CicdStack } from '../lib/cicd-stack.ts';
@@ -705,7 +706,7 @@ const runGuardScript = (script: string, cwd: string): { status: number; output: 
 
 /** 一時ディレクトリを作り、f に渡して、後始末する。 */
 const withTempDir = (f: (dir: string) => void): void => {
-  const dir = mkdtempSync(join(tmpdir(), 'deploy-guard-'));
+  const dir = scratchDir('deploy-guard-');
   try {
     f(dir);
   } finally {
