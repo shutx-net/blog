@@ -2,13 +2,14 @@ import { AUTH_FAILURE_RESPONSES } from './auth.ts';
 import type { Deps, PublishResponse } from './deps.ts';
 import type { ApiRequest, ApiResponse } from './http.ts';
 import { InvalidJsonBodyError, errorResponse, isJsonContentType, jsonResponse, parseJsonObject } from './http.ts';
-import { SlugConflictError } from './github/commit.ts';
+import { ConcurrentUpdateError, SlugConflictError, StalePostError } from './github/commit.ts';
 import { DeployDispatchError } from './github/dispatch.ts';
 import { PostNotFoundError } from './github/reader.ts';
 import { DATE_SLUG_PATTERN } from './posts/slug.ts';
 import { commitMessages } from './posts/commit-message.ts';
 import { renderMarkdown } from './posts/frontmatter.ts';
-import { PostValidationError, validateOverwrite, validatePost } from './posts/validate.ts';
+import { wouldStarveSite } from './posts/publishable-floor.ts';
+import { PostValidationError, validateOverwrite, validatePost, validateUpdate } from './posts/validate.ts';
 import { MediaValidationError } from './media/presign.ts';
 import { KeyNotProvisionedError } from './secret.ts';
 
@@ -136,6 +137,100 @@ const createPost = async ({ body, deps }: RouteContext): Promise<ApiResponse> =>
 };
 
 /**
+ * 既存記事の差し替え。
+ *
+ * **順序がこの関数の中身である。**
+ *
+ *   1. `targetSlug` の形（400）      — reader を呼ぶ前に弾く
+ *   2. 既存の読み取り（404）          — 検証に既存の pubDate が要る
+ *   3. ボディの検証（400）            — pubDate の不変と sha の必須
+ *   4. 公開可能数の床（409）          — **書き込みの前**
+ *   5. 差し替え（409）                — sha 不一致 / ref の競合
+ *   6. dispatch
+ *
+ * **4 を 5 の前に置くのが要点。** 逆順だと「コミットしてからデプロイが落ちる」
+ * ことになり、利用者から見て最も分かりにくい壊れ方になる。
+ */
+const updatePost = async ({ body, deps }: RouteContext): Promise<ApiResponse> => {
+  // **reader を呼ぶ前に形を確かめる。** 呼んでから弾くと、不正な入力でも
+  // installation token の交換と GitHub への往復が起きる（getPost と同じ立場）。
+  const targetSlug = body['targetSlug'];
+  if (typeof targetSlug !== 'string' || !DATE_SLUG_PATTERN.test(targetSlug)) {
+    return jsonResponse(400, { error: 'invalid_post', field: 'targetSlug' });
+  }
+
+  let existing;
+  try {
+    existing = await deps.reader.read(targetSlug);
+  } catch (error) {
+    if (error instanceof PostNotFoundError) {
+      deps.logger.warn('post to update not found', { slug: error.slug });
+      return jsonResponse(404, { error: 'post_not_found' });
+    }
+    throw error;
+  }
+
+  let update;
+  try {
+    update = validateUpdate(body, existing, deps.now());
+  } catch (error) {
+    if (error instanceof PostValidationError) {
+      return jsonResponse(400, { error: 'invalid_post', field: error.field });
+    }
+    throw error;
+  }
+
+  // **公開記事が 0 本になる更新を拒む。** 下書きに戻す操作でも起きる。
+  //
+  // `deploy.yml` のスラッグ照合ガードが数えているのは**公開分**なので、
+  // 「総数」で判定すると許可したのにデプロイが落ちる。
+  // `UnknownSlugError` は**握り潰さない** — read が成功した直後に list に居ない
+  // のはリポジトリの不整合であり、推測で許可に倒すと「拒否されないのに
+  // デプロイが落ちる」状態になる。そのまま 500 として上げる。
+  if (wouldStarveSite(await deps.reader.list(), { kind: 'update', slug: targetSlug, draft: update.post.draft })) {
+    deps.logger.warn('update would leave the site with no published posts', { slug: targetSlug });
+    return jsonResponse(409, { error: 'would_starve_site', field: 'draft' });
+  }
+
+  let result;
+  try {
+    result = await deps.publisher.update({
+      // **読んだときのパスをそのまま使う。** 導出し直した slug を使うと、
+      // front matter がファイル名と食い違う記事で別のパスに書いてしまう。
+      slug: targetSlug,
+      markdown: renderMarkdown(update.post),
+      // 更新は常に差し替えなので replaceMessage だけを渡す。
+      message: commitMessages(update.post.title).replaceMessage,
+      sha: update.sha,
+    });
+  } catch (error) {
+    // **どちらも「読み直せ」が唯一の対応。** それでもコードを分けているのは、
+    // ログから「中身が変わった」と「main が進んだ」を区別できるようにするため。
+    if (error instanceof StalePostError) {
+      deps.logger.warn('post changed since it was read', { slug: targetSlug });
+      return jsonResponse(409, { error: 'stale_post', field: 'sha' });
+    }
+    if (error instanceof ConcurrentUpdateError) {
+      deps.logger.warn('ref moved while updating', { slug: targetSlug });
+      return jsonResponse(409, { error: 'concurrent_update', field: 'sha' });
+    }
+    throw error;
+  }
+
+  // **ここから先は記事が既にコミットされている。** createPost と同じ規律で、
+  // 何が起きても成功を返し、update をやり直さない。
+  if (deps.deployDispatcher === undefined) return jsonResponse(200, result);
+
+  try {
+    await deps.deployDispatcher.dispatch();
+  } catch (error) {
+    deps.logger.error('deploy dispatch failed after update', describeDispatchFailure(error));
+    return jsonResponse(200, { ...result, deployTriggered: false } satisfies PublishResponse);
+  }
+  return jsonResponse(200, { ...result, deployTriggered: true } satisfies PublishResponse);
+};
+
+/**
  * 記事の一覧。**下書きも返す。**
  *
  * 管理画面は下書きを編集したいので、公開側の `isPublished` フィルタとは立場が違う。
@@ -225,6 +320,7 @@ export const ROUTES: readonly Route[] = [
     handle: getPost,
   },
   { method: 'POST', path: '/api/posts', requiresAuth: true, bodyKind: 'json', handle: createPost },
+  { method: 'PUT', path: '/api/posts', requiresAuth: true, bodyKind: 'json', handle: updatePost },
   {
     method: 'POST',
     path: '/api/media/presign',

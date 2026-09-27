@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AuthFailureReason, Authorizer } from '../../src/auth.ts';
 import { AUTH_FAILURE_REASONS, AUTH_FAILURE_RESPONSES, denyAllAuthorizer } from '../../src/auth.ts';
 import type { ApiRequest, ApiResponse } from '../../src/http.ts';
-import type { Deps, PublishInput } from '../../src/deps.ts';
+import type { Deps, PublishInput, UpdateInput } from '../../src/deps.ts';
 import { DeployDispatchError } from '../../src/github/dispatch.ts';
 import { SlugConflictError } from '../../src/github/commit.ts';
 import { PostNotFoundError } from '../../src/github/reader.ts';
@@ -20,6 +20,7 @@ const spyDeps = (authorizer: Authorizer = denyAllAuthorizer) => {
   // publisher に何を渡したかを主張できない（overwrite の既定を見るのに要る）。
   const publisher = {
     publish: vi.fn(async (_input: PublishInput) => ({ commitSha: 'x', path: 'p', replaced: false })),
+    update: vi.fn(async (_input: UpdateInput) => ({ commitSha: 'u', path: 'p', replaced: true })),
   };
   const presigner = {
     presign: vi.fn(async () => ({
@@ -58,6 +59,7 @@ const spyDeps = (authorizer: Authorizer = denyAllAuthorizer) => {
   };
   const spies = [
     publisher.publish,
+    publisher.update,
     reader.list,
     reader.read,
     presigner.presign,
@@ -101,12 +103,30 @@ const jsonPost = (path: string, body: unknown): ApiRequest =>
     rawBody: JSON.stringify(body),
   });
 
+/** 更新の最小ボディ。**targetSlug と sha が要る**（どちらも省略できない）。 */
+const jsonPut = (body: Record<string, unknown> = {}): ApiRequest =>
+  request({
+    method: 'PUT',
+    path: '/api/posts',
+    headers: { 'content-type': 'application/json' },
+    rawBody: JSON.stringify({
+      targetSlug: '2026/09/27/142621',
+      sha: 'blob1',
+      title: 't',
+      description: 'd',
+      body: 'b',
+      draft: false,
+      pubDate: '2026-09-27T05:26:21.486Z',
+      ...body,
+    }),
+  });
+
 const bodyOf = (response: ApiResponse): Record<string, unknown> =>
   JSON.parse(response.body) as Record<string, unknown>;
 
 describe('ルート表', () => {
-  it('ちょうど 6 経路である', () => {
-    expect(ROUTES).toHaveLength(6);
+  it('ちょうど 7 経路である', () => {
+    expect(ROUTES).toHaveLength(7);
   });
 
   it('経路の集合が固定されている', () => {
@@ -117,6 +137,7 @@ describe('ルート表', () => {
       'GET /api/posts/detail',
       'POST /api/media/presign',
       'POST /api/posts',
+      'PUT /api/posts',
     ]);
   });
 
@@ -160,6 +181,16 @@ describe('AUTH_MODE=deny-all のとき書き込み経路に到達できない', 
       jsonPost('/api/media/presign', { contentType: 'image/png', size: 100 }),
       deps,
     );
+    expect(response.statusCode).toBe(503);
+    expect(bodyOf(response)['error']).toBe('auth_not_configured');
+    expectNoCollaboratorCalls();
+  });
+
+  it('PUT /api/posts が 503 を返し、コラボレータを 1 つも呼ばない', async () => {
+    // **reader も呼ばれない。** 更新は読み取りを先に行う経路なので、認可が
+    // ディスパッチ前にあることを reader の呼び出し回数でも確かめられる。
+    const { deps, expectNoCollaboratorCalls } = spyDeps();
+    const response = await dispatch(jsonPut(), deps);
     expect(response.statusCode).toBe(503);
     expect(bodyOf(response)['error']).toBe('auth_not_configured');
     expectNoCollaboratorCalls();
@@ -219,6 +250,14 @@ describe('拒否テストが空虚でないことの対照（同じ入力を許�
     const { deps, presigner } = spyDeps(allowAuthorizer);
     await dispatch(jsonPost('/api/media/presign', { contentType: 'image/png', size: 100 }), deps);
     expect(presigner.presign).toHaveBeenCalledTimes(1);
+  });
+
+  it('許可すると PUT /api/posts が publisher.update を呼ぶ', async () => {
+    const { deps, publisher } = spyDeps(allowAuthorizer);
+    await dispatch(jsonPut(), deps);
+    expect(publisher.update).toHaveBeenCalledTimes(1);
+    // **publish ではない。** 更新が作成経路に落ちていないことを名指しで固定する。
+    expect(publisher.publish).toHaveBeenCalledTimes(0);
   });
 
   it('許可すると GET /api/health/github-app が tokenProvider を呼ぶ', async () => {
@@ -299,7 +338,6 @@ describe('経路の不一致', () => {
     // DELETE はまだ経路が無い（Phase 5 で足す）。**ここが緑のままであることが、
     // 削除をまだ実装していないことの証拠になる。**
     ['DELETE', '/api/posts'],
-    ['PUT', '/api/posts'],
     ['POST', '/posts'],
     ['POST', '/api/posts/'],
     ['GET', '/'],
@@ -614,6 +652,9 @@ describe('公開後のデプロイ起動', () => {
       publish: vi.fn(async () => {
         throw new Error('publish failed');
       }),
+      update: vi.fn(async () => {
+        throw new Error('update must not be called on this path');
+      }),
     };
     const deployDispatcher = { dispatch: vi.fn(async () => undefined) };
     await dispatch(postRequest(), { ...deps, publisher, deployDispatcher }).catch(() => undefined);
@@ -754,6 +795,9 @@ describe('スラッグの衝突', () => {
     publish: vi.fn(async () => {
       throw new SlugConflictError('2026/09/27/142621');
     }),
+    update: vi.fn(async () => {
+      throw new Error('update must not be called on the create path');
+    }),
   });
 
   it('**SlugConflictError は 409 になる**', async () => {
@@ -867,6 +911,9 @@ describe('overwrite フラグ', () => {
     const { deps } = spyDeps(allowAuthorizer);
     const publisher = {
       publish: vi.fn(async () => ({ commitSha: 'abc', path: 'posts/2026/09/27/142621.md', replaced: true })),
+      update: vi.fn(async () => {
+        throw new Error('update must not be called on the create path');
+      }),
     };
     const response = await dispatch(post({ overwrite: true }), { ...deps, publisher });
     expect(response.statusCode).toBe(201);

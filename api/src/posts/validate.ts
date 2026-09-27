@@ -132,3 +132,70 @@ export const validatePost = (raw: Record<string, unknown>, nowMs: number): Valid
 
   return { slug, title, description, pubDate, draft, tags: tags as string[], body };
 };
+
+/** 更新の対象を識別するのに要る、既存記事の一部。 */
+export interface ExistingPost {
+  /** 読んだときのパスから復元したスラッグ。**書き戻す先はこれ。** */
+  slug: string;
+  /** front matter に書かれている値そのまま。**表記まで含めて比較する。** */
+  pubDate: string;
+}
+
+export interface ValidatedUpdate {
+  post: ValidatedPost;
+  /** 呼び出し側が読んだときの blob sha。 */
+  sha: string;
+}
+
+/**
+ * 更新リクエストのボディを検証する。**規則は `validatePost` を再利用する。**
+ *
+ * 追加で見るのは 3 つ。
+ *
+ * # `pubDate` は変えられない
+ *
+ * 利用者の決定により、スラッグは作成時に固定される — **URL と RSS の `<guid>` を
+ * 不変に保つため**（guid が変わると購読者に全記事が再配信され、取り消せない）。
+ * スラッグは pubDate から導出されるので、pubDate の不変が URL の不変そのものになる。
+ *
+ * **表記まで含めて一致を要求する。** 「同じ瞬間なら通す」にすると、ms を落とした
+ * 表記で往復するたびに front matter が書き換わる。黙って既存値で上書きするのも
+ * 採らない — 呼び出し側の思い違いを無言で通さないという `slug` と同じ立場。
+ *
+ * **副作用**: front matter の `pubDate` が `2026-08-03` のような日付のみの記事は、
+ * そのまま送ると `validatePost` のオフセット必須検査で 400 になる。管理画面からは
+ * 編集できず、`blog-content` 側で完全な ISO に直す必要がある。
+ * 黙って正規化すると「pubDate は変えない」という約束を破ることになるので、落とす側に倒す。
+ *
+ * # `sha` は省略できない
+ *
+ * 省略を許すと**楽観的並行制御を外して呼べる経路**ができる。
+ *
+ * # `overwrite` は送れない
+ *
+ * 更新は常に差し替えなので意味を持たない。黙って捨てると呼び出し側の思い違いが
+ * 無言で通る（`slug` を 400 にしているのと同じ立場）。
+ *
+ * @param nowMs `validatePost` に渡すクロック。**更新では使われない**
+ *   （pubDate の省略は下で 400 になるため）が、規則を共有するために通す。
+ */
+export const validateUpdate = (
+  raw: Record<string, unknown>,
+  existing: ExistingPost,
+  nowMs: number,
+): ValidatedUpdate => {
+  if (raw['overwrite'] !== undefined) {
+    throw new PostValidationError('overwrite', 'is meaningless on update and must not be supplied');
+  }
+
+  // **pubDate の検査を validatePost より前に置く。** 後に置くと、日付のみの pubDate を
+  // 持つ記事で「オフセットが無い」という遠い理由の 400 が先に出る。
+  if (raw['pubDate'] !== existing.pubDate) {
+    throw new PostValidationError('pubDate', 'must not change; the slug and the RSS guid depend on it');
+  }
+
+  const sha = requireTrimmedString(raw, 'sha');
+  const post = validatePost(raw, nowMs);
+
+  return { post, sha };
+};

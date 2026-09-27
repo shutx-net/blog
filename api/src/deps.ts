@@ -50,8 +50,37 @@ export interface PublishResponse extends PublishResult {
   deployTriggered?: boolean;
 }
 
+/**
+ * 既存記事の差し替え。**新規作成には使わない。**
+ *
+ * `PublishInput` と分けているのは、**`sha` を省略できない形にするため。**
+ * 1 つの型に `sha?: string` として混ぜると、作成経路が省略するのに倣って
+ * 更新経路でも省略できてしまい、楽観的並行制御を外して呼べる経路ができる。
+ */
+export interface UpdateInput {
+  /**
+   * 差し替える記事のスラッグ。**pubDate から導出し直した値ではない。**
+   *
+   * front matter の pubDate がファイル名と食い違う記事（`blog-content` を手で
+   * 編集すれば作れる）を編集したとき、導出値を使うと**別のパスに書いて
+   * 新しい記事を作ってしまう**。読んだときのパスをそのまま使う。
+   */
+  slug: string;
+  markdown: string;
+  /** コミットメッセージ。更新は常に差し替えなので 1 本だけ受ける。 */
+  message: string;
+  /**
+   * 呼び出し側が読んだときの blob sha。**省略不可。**
+   *
+   * 一致しなければ `StalePostError` になる。読んでから書くまでの間に
+   * 別の経路が同じ記事を変えていたら、その変更を踏み潰さずに落とす。
+   */
+  sha: string;
+}
+
 export interface PostPublisher {
   publish(input: PublishInput): Promise<PublishResult>;
+  update(input: UpdateInput): Promise<PublishResult>;
 }
 
 /**
