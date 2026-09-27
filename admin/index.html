@@ -88,6 +88,12 @@
         <p id="status" class="status" role="status"></p>
 
         <button id="submit" type="submit">公開する</button>
+        <!--
+          編集モードから抜けるボタン。**hidden で始める** — 新規投稿のときに
+          出ていると「何から戻るのか」が分からない。押すと保存済みの下書きが
+          戻る（編集中はストアを触らないので書きかけが生きている）。
+        -->
+        <button id="new-post" type="button" hidden>新規に戻る</button>
       </form>
 
       <section class="preview-pane">

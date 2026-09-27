@@ -13,12 +13,19 @@ import type { AuthTransport } from '../auth/session.ts';
 import type { SessionStore } from '../storage/session-store.ts';
 import { bindEditor } from './bind.ts';
 import { applyDraftToForm, clearDraft, loadDraft, saveDraft } from './draft-persistence.ts';
-import { postRequestBody, validateDraft } from './model.ts';
+import { emptyDraft, postRequestBody, slugToWallClock, updateRequestBody, validateDraft } from './model.ts';
+import type { DraftFields, EditTarget } from './model.ts';
 import { renderPostList } from './post-list.ts';
 import type { PostListEntry } from './post-list.ts';
 
 const CREATE_POST: ApiOperation = { method: 'POST', path: '/api/posts' };
+const UPDATE_POST: ApiOperation = { method: 'PUT', path: '/api/posts' };
 const LIST_POSTS: ApiOperation = { method: 'GET', path: '/api/posts' };
+const GET_POST: ApiOperation = { method: 'GET', path: '/api/posts/detail' };
+
+/** 送信ボタンの文字。**モードが見えることが要件。** */
+const SUBMIT_CREATE = '公開する';
+const SUBMIT_UPDATE = '更新する';
 
 /** 一覧を読む前に出す文。**「0 件」と区別する。** */
 const POST_LIST_IDLE = '「更新」を押すと既存の記事を読み込む';
@@ -114,6 +121,24 @@ export const slugConflictPrompt = (slug: string): string =>
 /** api が返す衝突コード。`api/src/router.ts` の綴りと一致していること。 */
 const SLUG_CONFLICT = 'slug_conflict';
 
+/**
+ * 編集で返る 409 の文言。**`slug_conflict` と混ぜない。**
+ *
+ * `slug_conflict` は「上書きするか？」を聞く価値がある（同じ秒への再投稿）。
+ * こちらはどちらも**聞いても意味が無い** — 読み直すか、他の記事を公開するしか
+ * 直しようが無いので、確認を出さずに理由だけを伝える。
+ *
+ * `stale_post` と `concurrent_update` は原因が違う（blob が変わった / main が進んだ）が、
+ * **利用者の対応は同じ**なので同じ文にする。区別はログが持っている。
+ */
+const UPDATE_CONFLICT_MESSAGES: Readonly<Record<string, string>> = {
+  stale_post: 'この記事は別の場所で更新された。「更新」で一覧を読み直してから編集し直すこと',
+  concurrent_update:
+    'コミットの最中に blog-content が進んだ。「更新」で一覧を読み直してから編集し直すこと',
+  would_starve_site:
+    '公開記事が 0 本になるので保存できない。ほかの記事を公開してから下書きに戻すこと',
+};
+
 const isSlugConflict = (error: unknown): boolean =>
   error instanceof ApiError && error.status === 409 && error.code === SLUG_CONFLICT;
 
@@ -136,6 +161,8 @@ const describeFailure = (error: unknown): string => {
     // 確認を出せなかった場合にここへ来る（confirm が無い環境など）。
     return 'その公開先には既に記事がある。上書きするなら確認に「はい」と答えること';
   }
+  const conflict = UPDATE_CONFLICT_MESSAGES[error.code];
+  if (conflict !== undefined) return conflict;
   if (error.status === 404) {
     return '404 が返った。経路が無いのではなく、x-amz-content-sha256 が届いていない可能性が高い（署名に失敗した 403 が CloudFront で 404 の HTML に化ける）';
   }
@@ -210,12 +237,27 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
    */
   let ready = false;
 
+  /**
+   * 編集中の対象。**`undefined` が新規投稿モード。**
+   *
+   * ここが送信先（POST / PUT）と下書きの保存可否の両方を決める。**1 つの変数に
+   * まとめているのが要点** — 別々のフラグにすると「PUT に送るのに下書きも保存する」
+   * のような中間状態が作れてしまい、新規の書きかけが編集の打鍵で壊れる。
+   *
+   * **宣言が `bindEditor` より前にあるのは TDZ を避けるため。** `bindEditor` は
+   * 構築時に `update()` を呼び、その中で `onChange` がこの変数を読む。
+   * 後に置くと、`!ready` の短絡評価だけが ReferenceError を防いでいる状態になる。
+   */
+  let editing: EditTarget | undefined;
+
   const editor = bindEditor(deps.root, {
     renderPreview: deps.renderPreview,
     // **既存の差し込み口をそのまま使う。** 毎 input / change で呼ばれるので、
     // 新しいイベント配線は要らない。
     onChange: (fields) => {
-      if (!ready || store === undefined) return;
+      // **編集中は保存しない。** 下書きストアは新規記事のためのもので、
+      // 編集の打鍵を書き込むと、次に新規で開いたときに他人の記事が復活する。
+      if (!ready || store === undefined || editing !== undefined) return;
       saveDraft(store, fields);
     },
   });
@@ -229,6 +271,9 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
   const listReload = deps.root.querySelector<HTMLButtonElement>('#post-list-reload');
   const listStatus = deps.root.querySelector<HTMLElement>('#post-list-status');
   const listItems = deps.root.querySelector<HTMLElement>('#post-list-items');
+  const pubDateInput = deps.root.querySelector<HTMLInputElement>('#pubDate');
+  const submitButton = deps.root.querySelector<HTMLButtonElement>('#submit');
+  const newPostButton = deps.root.querySelector<HTMLButtonElement>('#new-post');
   if (form === null) throw new Error('admin app: #post-form が見つからない');
   if (imageInput === null) throw new Error('admin app: #image が見つからない');
   if (signinButton === null) throw new Error('admin app: #signin が見つからない');
@@ -236,9 +281,89 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
   if (listReload === null) throw new Error('admin app: #post-list-reload が見つからない');
   if (listStatus === null) throw new Error('admin app: #post-list-status が見つからない');
   if (listItems === null) throw new Error('admin app: #post-list-items が見つからない');
+  if (pubDateInput === null) throw new Error('admin app: #pubDate が見つからない');
+  if (submitButton === null) throw new Error('admin app: #submit が見つからない');
+  if (newPostButton === null) throw new Error('admin app: #new-post が見つからない');
 
   /** **二重送信の防止はここ 1 箇所。** ボタンの disabled は表示にすぎない。 */
   let inFlight = false;
+
+
+  /**
+   * フォームに値を流し込む。
+   *
+   * **`setBody` を最後に呼ぶのは再描画のため。** `applyDraftToForm` は value を
+   * 書くだけでイベントを出さないので、`bindEditor` の `update()` が走らず
+   * プレビューと指摘が古いままになる。`setBody` は「差し替えて再描画する」
+   * ために既にある口で、画像挿入が同じ経路を使っている。
+   */
+  const fillForm = (fields: DraftFields): void => {
+    applyDraftToForm(deps.root, fields);
+    editor.setBody(fields.body);
+  };
+
+  /** 編集モードの見た目。**pubDate を読み取り専用にするのがこの関数の主目的。** */
+  const renderEditState = (): void => {
+    const active = editing !== undefined;
+    // **URL を動かせないことの UI 側の表明。** api も 400 で拒むので二重化になる。
+    pubDateInput.readOnly = active;
+    submitButton.textContent = active ? SUBMIT_UPDATE : SUBMIT_CREATE;
+    newPostButton.hidden = !active;
+  };
+
+  /** 編集をやめて新規投稿モードに戻る。**保存済みの下書きを取り戻す。** */
+  const exitEditMode = (): void => {
+    editing = undefined;
+    renderEditState();
+    // **編集中はストアを触っていないので、書きかけがそのまま残っている。**
+    // 空フォームに戻すだけだと、編集に寄り道した人の新規記事が消える。
+    const saved = store === undefined ? undefined : loadDraft(store);
+    fillForm(saved ?? emptyDraft());
+  };
+
+  const enterEditMode = (slug: string): void => {
+    if (inFlight) return;
+    editor.setStatus('記事を読み込み中…');
+
+    void client
+      .call(GET_POST, undefined, { slug })
+      .then((result) => {
+        const record = (result ?? {}) as Record<string, unknown>;
+        const tags = Array.isArray(record['tags']) ? (record['tags'] as string[]) : [];
+        // **editing を先に立てる。** fillForm が onChange を走らせるので、
+        // 後に立てると 1 打鍵ぶんの下書きが保存されてしまう。
+        editing = {
+          slug: String(record['slug'] ?? slug),
+          // **front matter の実値をそのまま持つ。** 表示用に整形した値を送ると
+          // ms が落ちて api の「表記まで一致」検査に落ちる。
+          pubDate: String(record['pubDate'] ?? ''),
+          sha: String(record['sha'] ?? ''),
+        };
+        renderEditState();
+        fillForm({
+          title: String(record['title'] ?? ''),
+          description: String(record['description'] ?? ''),
+          // **slug から戻す。** pubDate を書式化すると jstWallClockToInstant の
+          // 逆関数を持つことになり、いつか片方だけずれる。
+          pubDate: slugToWallClock(editing.slug),
+          tags: tags.join(', '),
+          draft: record['draft'] === true,
+          body: String(record['body'] ?? ''),
+        });
+        editor.setStatus(`${editing.slug} を編集中`);
+      })
+      .catch((error: unknown) => {
+        // **編集モードに入らない。** 中途半端に入ると、次の送信が
+        // 取得できなかった記事を上書きしようとする。
+        editing = undefined;
+        renderEditState();
+        editor.setStatus(describeFailure(error), 'error');
+      });
+  };
+
+  const onNewPost = (): void => {
+    exitEditMode();
+  };
 
   /**
    * ログイン状態を画面に反映する。
@@ -282,7 +407,8 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
       .then((result) => {
         const record = (result ?? {}) as Record<string, unknown>;
         const posts = Array.isArray(record['posts']) ? (record['posts'] as PostListEntry[]) : [];
-        renderPostList(listItems, posts);
+        // **編集を注入する。** post-list.ts は DOM を組むだけで、何も呼ばない。
+        renderPostList(listItems, posts, { onEdit: enterEditMode });
         listStatus.textContent = `${posts.length} 件`;
       })
       .catch((error: unknown) => {
@@ -339,28 +465,45 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
       client.call(CREATE_POST, overwrite ? { ...body, overwrite: true } : body);
 
     const sendable = post;
+    /** **送信の瞬間のモードを固定する。** 途中で編集をやめられても分岐がぶれない。 */
+    const target = editing;
 
-    void send(false)
-      .catch(async (error: unknown) => {
-        // **409 だけを拾う。** 他の失敗はそのまま下の catch へ落とす。
-        if (!isSlugConflict(error)) throw error;
-        // **無言で再送しない。** ここで承認を取らずに overwrite を付けると、
-        // 409 を出した意味が無くなる（2026-09-07 の事故がそのまま再現する）。
-        const approved = await confirmOverwrite(slugConflictPrompt(sendable.slug));
-        if (!approved) throw new OverwriteDeclinedError();
-        return send(true);
-      })
+    const attempt: Promise<unknown> =
+      target === undefined
+        ? send(false).catch(async (error: unknown) => {
+            // **409 だけを拾う。** 他の失敗はそのまま下の catch へ落とす。
+            if (!isSlugConflict(error)) throw error;
+            // **無言で再送しない。** ここで承認を取らずに overwrite を付けると、
+            // 409 を出した意味が無くなる（2026-09-07 の事故がそのまま再現する）。
+            const approved = await confirmOverwrite(slugConflictPrompt(sendable.slug));
+            if (!approved) throw new OverwriteDeclinedError();
+            return send(true);
+          })
+        : // **編集の 409 では確認を出さない。** stale も would_starve_site も
+          // 「はい」と答えて直る種類ではないので、聞くと押し間違いを誘うだけ。
+          client.call(UPDATE_POST, updateRequestBody(post, target));
+
+    void attempt
       .then((result) => {
         const record = (result ?? {}) as Record<string, unknown>;
         // **成功したときだけ下書きを捨てる。** 残すと次に開いたときに復活する。
         // 失敗時は消さない（書き直せなければならない）。
-        if (store !== undefined) clearDraft(store);
+        //
+        // **編集では消さない。** ストアが持っているのは新規記事の書きかけで、
+        // 編集の成功はそれと無関係である。
+        if (store !== undefined && target === undefined) clearDraft(store);
         const where = `${String(record['commitSha'] ?? '')} ${String(record['path'] ?? '')}`;
         // **記事は保存されているが、デプロイが起動していない状態を成功と混ぜない。**
         // 同じ見た目にすると、利用者はサイトが更新されると信じて待ち続ける。
         // キーが無い = dispatch が無効（今日の既定）なので、成功として扱う。
         if (record['deployTriggered'] === false) {
           editor.setStatus(`保存しました（デプロイ未起動。手動で再実行が必要）: ${where}`);
+          return;
+        }
+        // **編集と新規で文言を分ける。** 更新は `replaced: true` を返すので、
+        // 分けないと編集が「上書きしました」になり、事故の報告と見分けが付かない。
+        if (target !== undefined) {
+          editor.setStatus(`更新しました: ${where}`, 'ok');
           return;
         }
         editor.setStatus(
@@ -433,12 +576,14 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
   };
 
   form.addEventListener('submit', onSubmit);
+  newPostButton.addEventListener('click', onNewPost);
   imageInput.addEventListener('change', onImage);
   signinButton.addEventListener('click', onSignInClick);
   signoutButton.addEventListener('click', onSignOutClick);
   listReload.addEventListener('click', onListReload);
 
   renderAuthState();
+  renderEditState();
   // **起動時に取りに行かない。** 押されるまで API を呼ばない。
   listStatus.textContent = POST_LIST_IDLE;
 
@@ -456,6 +601,7 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
   return {
     destroy: () => {
       form.removeEventListener('submit', onSubmit);
+      newPostButton.removeEventListener('click', onNewPost);
       imageInput.removeEventListener('change', onImage);
       signinButton.removeEventListener('click', onSignInClick);
       signoutButton.removeEventListener('click', onSignOutClick);

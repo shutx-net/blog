@@ -22,6 +22,18 @@ export const EMPTY_POST_LIST_MESSAGE = 'まだ記事が無い';
 /** 下書きのバッジ。**色ではなく文字で示す。** */
 const DRAFT_BADGE = '下書き';
 
+/** 編集ボタンの文字。 */
+const EDIT_LABEL = '編集';
+
+/**
+ * 行に付ける操作。**このモジュールは何も呼ばない** — 押されたことを外へ渡すだけ。
+ *
+ * 省略すると読み取り専用の一覧になる（一覧だけを出したい経路を壊さない）。
+ */
+export interface PostListActions {
+  onEdit(slug: string): void;
+}
+
 /**
  * slug の日付部分（`2026/09/27`）。
  *
@@ -37,7 +49,7 @@ const dateLabel = (slug: string): string => slug.split('/').slice(0, 3).join('/'
  * `#preview` 以外に `innerHTML` を使わないのがこのアプリの境界。title は自分で
  * 書いた値だが、境界に例外を作らない（例外がある境界は、次に触る人には無い）。
  */
-const renderEntry = (post: PostListEntry): HTMLLIElement => {
+const renderEntry = (post: PostListEntry, actions: PostListActions | undefined): HTMLLIElement => {
   const item = document.createElement('li');
   item.dataset['slug'] = post.slug;
   item.className = 'post-list__item';
@@ -60,6 +72,22 @@ const renderEntry = (post: PostListEntry): HTMLLIElement => {
     item.append(badge);
   }
 
+  if (actions !== undefined) {
+    const edit = document.createElement('button');
+    // **type を明示する。** 既定の submit だと、フォームの外にあっても
+    // Enter の扱いが紛らわしくなる（index.html の #post-list-reload と同じ理由）。
+    edit.type = 'button';
+    edit.textContent = EDIT_LABEL;
+    edit.className = 'post-list__edit';
+    edit.dataset['slug'] = post.slug;
+    // **addEventListener で配線する。** on*= 属性は CSP の
+    // `script-src-attr 'none'` で動かない。
+    edit.addEventListener('click', () => {
+      actions.onEdit(post.slug);
+    });
+    item.append(edit);
+  }
+
   return item;
 };
 
@@ -69,7 +97,11 @@ const renderEntry = (post: PostListEntry): HTMLLIElement => {
  * 並びは pubDate の降順（新しいものが上）。**渡された配列は並べ替えない** —
  * 呼び出し側が同じ配列を他の用途に使っても壊れないようにする。
  */
-export const renderPostList = (container: Element, posts: readonly PostListEntry[]): void => {
+export const renderPostList = (
+  container: Element,
+  posts: readonly PostListEntry[],
+  actions?: PostListActions,
+): void => {
   if (posts.length === 0) {
     const empty = document.createElement('li');
     empty.textContent = EMPTY_POST_LIST_MESSAGE;
@@ -79,5 +111,5 @@ export const renderPostList = (container: Element, posts: readonly PostListEntry
   }
 
   const ordered = [...posts].sort((a, b) => Date.parse(b.pubDate) - Date.parse(a.pubDate));
-  container.replaceChildren(...ordered.map(renderEntry));
+  container.replaceChildren(...ordered.map((post) => renderEntry(post, actions)));
 };

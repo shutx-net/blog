@@ -24,6 +24,7 @@ export const API_OPERATIONS: readonly ApiOperation[] = [
   { method: 'GET', path: '/api/posts' },
   { method: 'GET', path: '/api/posts/detail' },
   { method: 'POST', path: '/api/posts' },
+  { method: 'PUT', path: '/api/posts' },
   { method: 'POST', path: '/api/media/presign' },
 ];
 

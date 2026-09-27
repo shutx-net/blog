@@ -45,9 +45,19 @@ const headersOf = (captured: Captured): Record<string, string> => {
   return out;
 };
 
+/**
+ * ボディを運ぶメソッド。**`method === 'POST'` で決め打ちにしない。**
+ *
+ * PUT を足したときに、content-type の主張が POST だけに絞られたままだと
+ * **新しい書き込み経路が検査されずに通る**（415 で落ちるのは本番で気づく）。
+ * 集合として持てば、動詞が増えたときにここを直す必要があることが型と
+ * 突き合わせの両方から見える。
+ */
+const BODY_METHODS: readonly string[] = ['POST', 'PUT'];
+
 /** 経路ごとの最小のボディ。bodyKind: 'json' の経路だけ中身が要る。 */
 const bodyFor = (operation: ApiOperation): Record<string, unknown> | undefined =>
-  operation.method === 'POST' ? { slug: 'x', nested: { 日本語: '🎉\r\n' } } : undefined;
+  BODY_METHODS.includes(operation.method) ? { slug: 'x', nested: { 日本語: '🎉\r\n' } } : undefined;
 
 const invoke = async (
   operation: ApiOperation,
@@ -109,7 +119,7 @@ describe('x-amz-content-sha256 を構造的に外せない', () => {
     expect(fetchSpy.calls[0]?.url).toBe(`https://example.invalid${operation.path}`);
   });
 
-  it.each(API_OPERATIONS.filter((operation) => operation.method === 'POST'))(
+  it.each(API_OPERATIONS.filter((operation) => BODY_METHODS.includes(operation.method)))(
     '$method $path が content-type: application/json を明示する',
     async (operation) => {
       // fetch は Uint8Array の body に Content-Type を付けない。無いと API が
@@ -119,6 +129,10 @@ describe('x-amz-content-sha256 を構造的に外せない', () => {
       expect(headersOf(fetchSpy.calls[0]!)['content-type']).toBe('application/json');
     },
   );
+
+  it('ボディを運ぶ経路が 1 つ以上ある（上の it.each が空集合で緑にならない）', () => {
+    expect(API_OPERATIONS.filter((o) => BODY_METHODS.includes(o.method)).length).toBeGreaterThan(1);
+  });
 
   it('GET には空ペイロードの定数が付く（body の有無で分岐しない）', async () => {
     const fetchSpy = spyFetch(() => jsonResponse(200, {}));
