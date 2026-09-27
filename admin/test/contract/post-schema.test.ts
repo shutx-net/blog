@@ -10,7 +10,6 @@ import type { DraftFields } from '../../src/editor/model.ts';
 const NOW = Date.parse('2026-08-31T02:30:00.000Z');
 
 const draft = (overrides: Partial<DraftFields> = {}): DraftFields => ({
-  slug: 'a-post',
   title: 'A title',
   description: 'A description',
   pubDate: '',
@@ -35,7 +34,6 @@ const ACCEPTED: Array<[string, DraftFields]> = [
   ['タブ入り', draft({ title: 'tab\there' })],
   ['絵文字', draft({ title: '🎉 released', description: '🎉' })],
   ['前後に空白のあるタイトル', draft({ title: '  padded  ' })],
-  ['長い slug', draft({ slug: 'a'.repeat(180) })],
   ['コードフェンス入りの本文', draft({ body: '```ts\nconst a = 1;\n```' })],
 ];
 
@@ -44,10 +42,6 @@ const ACCEPTED: Array<[string, DraftFields]> = [
  * （= admin が api より緩くない）。
  */
 const REJECTED: Array<[string, DraftFields]> = [
-  ['slug 空', draft({ slug: '' })],
-  ['slug に大文字', draft({ slug: 'A-Post' })],
-  ['slug にドット', draft({ slug: 'a.b' })],
-  ['slug にスラッシュ', draft({ slug: 'a/b' })],
   ['title 空白のみ', draft({ title: '  ' })],
   ['description 空白のみ', draft({ description: '' })],
   ['タグに大文字', draft({ tags: 'Astro' })],
@@ -115,7 +109,6 @@ describe('**admin が拒否するものは api も拒否する**（admin が緩�
     expect(() =>
       validatePost(
         {
-          slug: fields.slug,
           title: fields.title,
           description: fields.description,
           draft: fields.draft,

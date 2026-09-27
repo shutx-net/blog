@@ -66,7 +66,6 @@ const statusText = (root: HTMLElement): string => el(root, '#status').textConten
 const statusHtml = (root: HTMLElement): string => el(root, '#status').innerHTML;
 
 const fillValid = (root: HTMLElement): void => {
-  set(root, 'slug', 'a-post');
   set(root, 'title', 'A title');
   set(root, 'description', 'A description');
   set(root, 'body', 'Body text.');
@@ -255,7 +254,6 @@ describe('**認証済みで起動したとき**', () => {
     const store = newStore();
     const redirects: string[] = [];
     saveDraft(store, {
-      slug: '',
       title: '残るはず',
       description: '',
       pubDate: '',

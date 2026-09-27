@@ -63,7 +63,6 @@ const stored = (root: HTMLElement, id: string): string =>
   root.querySelector<HTMLInputElement | HTMLTextAreaElement>(`#${id}`)?.value ?? '';
 
 const saved: DraftFields = {
-  slug: 'restored-post',
   title: '復元されたタイトル',
   description: '復元された説明',
   pubDate: '2026-08-31T12:00',
@@ -83,7 +82,6 @@ describe('**フォームの値が復元される**', () => {
     createApp({ root, auth, store, renderPreview: noPreview, now: () => Date.parse('2026-08-31T02:30:00.000Z') });
 
     // **textContent ではなく value を見る。**
-    expect(stored(root, 'slug')).toBe(saved.slug);
     expect(stored(root, 'title')).toBe(saved.title);
     expect(stored(root, 'description')).toBe(saved.description);
     expect(stored(root, 'pubDate')).toBe(saved.pubDate);
@@ -174,7 +172,6 @@ describe('**打鍵のたびに保存される**', () => {
 
 describe('**公開に成功したら下書きを消す**', () => {
   const validFields = (root: HTMLElement): void => {
-    set(root, 'slug', 'a-post');
     set(root, 'title', 'A title');
     set(root, 'description', 'A description');
     set(root, 'body', 'Body text.');
@@ -229,7 +226,7 @@ describe('**公開に成功したら下書きを消す**', () => {
     await vi.waitFor(() => {
       expect(root.querySelector('#status')?.textContent ?? '').not.toBe('送信中…');
     });
-    expect(loadDraft(store)?.slug).toBe('a-post');
+    expect(loadDraft(store)?.title).toBe('A title');
   });
 
   it('clearDraft の後に打鍵すればまた保存される', () => {
@@ -287,7 +284,6 @@ describe('**ストレージが使えなくてもエディタは動く**', () => 
       },
     });
 
-    set(root, 'slug', 'a-post');
     set(root, 'title', 'A title');
     set(root, 'description', 'A description');
     set(root, 'body', 'Body text.');

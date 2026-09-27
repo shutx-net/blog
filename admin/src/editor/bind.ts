@@ -1,4 +1,4 @@
-import { draftProblems, type DraftFields, type DraftProblem } from './model.ts';
+import { draftProblems, publishPathLabel, type DraftFields, type DraftProblem } from './model.ts';
 
 /**
  * DOM 結線。**ここには「何を描くか」しか無く、「どこに送るか」は無い**
@@ -19,14 +19,13 @@ const require$ = <T extends Element>(root: ParentNode, selector: string): T => {
   return element;
 };
 
-const FIELD_IDS = ['slug', 'title', 'description', 'pubDate', 'tags', 'body'] as const;
+const FIELD_IDS = ['title', 'description', 'pubDate', 'tags', 'body'] as const;
 
-/** フォームの 7 フィールドを読み出す。checkbox だけ `checked` を見る。 */
+/** フォームの 6 フィールドを読み出す。checkbox だけ `checked` を見る。 */
 export const readFields = (root: ParentNode): DraftFields => {
   const value = (id: string): string =>
     require$<HTMLInputElement | HTMLTextAreaElement>(root, `#${id}`).value;
   return {
-    slug: value('slug'),
     title: value('title'),
     description: value('description'),
     pubDate: value('pubDate'),
@@ -57,6 +56,7 @@ export const bindEditor = (root: HTMLElement, ports: EditorPorts): BoundEditor =
   const draftInput = require$<HTMLInputElement>(root, '#draft');
   const preview = require$<HTMLElement>(root, '#preview');
   const problemList = require$<HTMLElement>(root, '#problems');
+  const targetPath = require$<HTMLElement>(root, '#targetPath');
   const submit = require$<HTMLButtonElement>(root, '#submit');
   const status = require$<HTMLElement>(root, '#status');
 
@@ -83,8 +83,13 @@ export const bindEditor = (root: HTMLElement, ports: EditorPorts): BoundEditor =
 
   const update = (): void => {
     const fields = readFields(root);
+    // **時計を 1 回だけ読む。** 検証と公開先の表示が別の瞬間を見ると、
+    // 秒をまたいだときに「指摘は無いのに公開先が 1 秒ずれている」状態が出る。
+    const nowMs = Date.now();
     // 検証は同期。プレビューだけが非同期なので、ボタンの状態は即座に決まる。
-    renderProblems(draftProblems(fields, Date.now()));
+    renderProblems(draftProblems(fields, nowMs));
+    // **textContent で入れる。** #preview 以外に innerHTML を使わないのがこのアプリの境界。
+    targetPath.textContent = publishPathLabel(fields, nowMs);
     ports.onChange(fields);
 
     const mine = ++generation;

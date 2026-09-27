@@ -36,7 +36,6 @@ const set = (root: HTMLElement, id: string, value: string): void => {
 
 /** 有効な記事を埋める。 */
 const fillValid = (root: HTMLElement): void => {
-  set(root, 'slug', 'a-post');
   set(root, 'title', 'A title');
   set(root, 'description', 'A description');
   set(root, 'body', 'Body text.');
@@ -97,8 +96,8 @@ describe('送信', () => {
     const captured = fetchSpy.calls[0];
     expect(captured?.url).toBe('/api/posts');
     expect(captured?.init.method).toBe('POST');
+    // **slug は送らない。** api が pubDate から導出する（送ると 400）。
     expect(JSON.parse(new TextDecoder().decode(captured?.init.body as Uint8Array))).toEqual({
-      slug: 'a-post',
       title: 'A title',
       description: 'A description',
       pubDate: '2026-08-31T02:30:00.000Z',
@@ -112,7 +111,7 @@ describe('送信', () => {
     const root = mount();
     const fetchSpy = queueFetch([json(201, {})]);
     start(root, fetchSpy.impl);
-    set(root, 'slug', 'Bad Slug');
+    set(root, 'pubDate', 'not-a-date');
     submit(root);
 
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -408,7 +407,8 @@ describe('スラッグの衝突（409）', () => {
     fillValid(root);
     submit(root);
     await vi.waitFor(() => expect(confirmImpl).toHaveBeenCalledTimes(1));
-    expect(String(confirmImpl.mock.calls[0]?.[0])).toContain('a-post');
+    // 導出された公開先が確認文に出る（送信した slug を利用者は知らないので、必要な情報）。
+    expect(String(confirmImpl.mock.calls[0]?.[0])).toContain('2026/08/31/113000');
   });
 
   it('**承認しなければ再送しない**', async () => {
@@ -450,7 +450,7 @@ describe('スラッグの衝突（409）', () => {
     await vi.waitFor(() => expect(calls).toHaveLength(2));
     const first = bodyOf(calls[0] as Captured);
     const second = bodyOf(calls[1] as Captured);
-    for (const key of ['slug', 'title', 'description', 'body', 'draft', 'pubDate']) {
+    for (const key of ['title', 'description', 'body', 'draft', 'pubDate']) {
       expect(second[key]).toEqual(first[key]);
     }
   });
