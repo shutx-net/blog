@@ -2,15 +2,13 @@
  * `x-amz-content-sha256` の値を作る。
  *
  * **ハッシュ計算にパッケージを入れていない。** Web Crypto の
- * `crypto.subtle.digest('SHA-256', bytes)` は Node 24 でもブラウザでも
- * グローバルに存在する（実測）。`js-sha256` の類は不要で、api が RS256 を
- * `node:crypto` だけで書いたのと同じ判断（AGENTS.md「依存を足さない選択を
- * 先に検討する」）。
+ * `crypto.subtle.digest('SHA-256', bytes)` は Node 24 でもブラウザでもグローバルに存在する
+ * （実測）。`js-sha256` の類は不要で、api が RS256 を `node:crypto` だけで書いたのと同じ
+ * 判断（AGENTS.md「依存を足さない選択を先に検討する」）。
  *
- * ブラウザでは `crypto.subtle` に secure context が要るが、配信は https、
- * 開発は `http://localhost` で、どちらも secure context に入る。
- * **これはブラウザが無いと確かめられない項目**なので、4.15 の smoke と
- * 手動確認に送っている。
+ * ブラウザでは `crypto.subtle` に secure context が要るが、配信は https、開発は
+ * `http://localhost` で、どちらも secure context に入る。**これはブラウザが無いと
+ * 確かめられない項目**なので、smoke と手動確認に送っている。
  */
 
 /**

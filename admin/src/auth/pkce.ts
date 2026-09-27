@@ -10,10 +10,10 @@ import { base64UrlEncode } from './base64url.ts';
  *   (b) 分岐を作ると「使われない分岐」が残り、いつか誰かがそちらに落ちる。
  *
  * **PKCE はサーバ側で強制されていない。** 実測で `code_challenge` の無い
- * `/oauth2/authorize` も 302 する（`code_challenge_method=plain` を付けた authorize も
- * 302 する。**拒否されるとしても交換の時点であって、認可要求の時点ではない**）。
- * つまり**「PKCE を必ず送る」のはこちら側の規律**であり、`authorize-url.ts` が
- * 空の challenge に対して投げることで機械的に守っている。
+ * `/oauth2/authorize` も、`code_challenge_method=plain` を付けた authorize も 302 する
+ * （**拒否されるとしても交換の時点であって認可要求の時点ではない**）。つまり
+ * **「PKCE を必ず送る」のはこちら側の規律**で、`authorize-url.ts` が空の challenge に
+ * 対して投げることで機械的に守っている。
  */
 
 /** verifier の乱数バイト数。32 バイト -> base64url 43 文字（RFC 7636 の下限ちょうど）。 */

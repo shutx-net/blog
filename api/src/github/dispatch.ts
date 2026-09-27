@@ -114,13 +114,11 @@ export const createDeployDispatcher = (deps: DeployDispatcherDeps): DeployDispat
 
     // **2xx を成功として扱う。204 ちょうどは要求しない。**
     //
-    // 以前は 204 ちょうどを要求していたが、2026-09-06 10:47 の投稿で
-    // **GitHub が run を作った**（actor=shutx-blog[bot] の workflow_dispatch が
-    // 起動し完走してサイトに記事が出た）のに、Lambda はこの分岐で失敗を返した。
-    //
-    // 偽陰性の代償が大きい: 管理画面が「保存済み・デプロイ未起動」と嘘を表示し、
-    // DEVELOPERS.md の復旧手順（gh workflow run）に従うとデプロイが 2 本走る。
-    // 「想定外の 2xx を成功と呼ぶ」ほうが、「起動したのに失敗と言う」より害が小さい。
+    // 以前は 204 ちょうどを要求していたが、2026-09-06 10:47 の投稿で **GitHub が run を
+    // 作った**（actor=shutx-blog[bot] の workflow_dispatch が起動し完走してサイトに記事が
+    // 出た）のに、Lambda はこの分岐で失敗を返した。偽陰性の代償が大きい — 管理画面が
+    // 「保存済み・デプロイ未起動」と嘘を表示し、DEVELOPERS.md の復旧手順（gh workflow run）
+    // に従うとデプロイが 2 本走る。「想定外の 2xx を成功と呼ぶ」ほうが害が小さい。
     //
     // **ただし黙って通さない。** 204 以外なら warn に実際のステータスを残す。
     if (!isSuccess(response.status)) {

@@ -2,10 +2,8 @@ import { markdownConfigDefaults, syntaxHighlightDefaults } from '@astrojs/markdo
 import type { AstroMarkdownOptions } from '@astrojs/markdown-remark';
 
 /**
- * astro が `markdown.processor.createRenderer(shared)` に渡す 5 キー。
- *
- * 導出元は astro の実装そのもの（`astro/dist/content/content-layer.js` の
- * `#processMarkdown`）:
+ * astro が `markdown.processor.createRenderer(shared)` に渡す 5 キー。導出元は astro の
+ * 実装そのもの（`astro/dist/content/content-layer.js` の `#processMarkdown`）:
  *
  *     markdown.processor.createRenderer({
  *       image,                              // astro.config.mjs の image（未設定なら zod の既定）
@@ -15,9 +13,8 @@ import type { AstroMarkdownOptions } from '@astrojs/markdown-remark';
  *       smartypants:     markdown.smartypants,
  *     })
  *
- * **マップ型で 5 キーを必須にしている。** `Partial` のままだと 1 つ書き忘れても
- * 型が通り、プレビューだけが静かにずれる。ここは「忘れられないこと」が要件なので、
- * 値が undefined でよいキーもプロパティ自体は必須にする。
+ * **マップ型で 5 キーを必須にしている。** `Partial` のままだと 1 つ書き忘れても型が通り、
+ * プレビューだけが静かにずれる。値が undefined でよいキーもプロパティ自体は必須にする。
  */
 export type SharedRenderOptions = {
   [K in 'image' | 'syntaxHighlight' | 'shikiConfig' | 'gfm' | 'smartypants']: AstroMarkdownOptions[K];

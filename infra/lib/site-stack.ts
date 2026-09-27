@@ -46,28 +46,25 @@ export const MEDIA_PATH_PATTERN = '/media/*';
 export const API_PATH_PATTERN = '/api/*';
 
 /**
- * **サイトのオリジン（CloudFront の配信ドメイン）。**
+ * サイトのオリジン（CloudFront の配信ドメイン）。
  *
- * 「物理名をハードコードしない」方針の **意図的な例外**である。理由は 3 つ。
+ * 「物理名をハードコードしない」方針の**意図的な例外**。理由は 3 つ。
  *
- * 1. **`distribution.distributionDomainName` は原理的に使えない。**
- *    メディアバケットの CORS（`CorsConfiguration` は `AWS::S3::Bucket` **本体**の
- *    プロパティ）に入れると、
+ * 1. **`distribution.distributionDomainName` は原理的に使えない。** メディアバケットの CORS
+ *    （`CorsConfiguration` は `AWS::S3::Bucket` 本体のプロパティ）に入れると、
  *      Media.Properties.CorsConfiguration...AllowedOrigins = Fn::GetAtt [Dist, DomainName]
  *      Dist.Properties...Origins[0].DomainName            = Fn::GetAtt [Media, RegionalDomainName]
- *    という循環参照になる。**`cdk synth` はこれを検出せず成功してしまい**、
- *    cfn-lint の **E3004** だけが捕まえる（実測で 2 件）。バケットポリシー（別リソース）が
- *    Distribution を参照するのは問題ないが、CorsConfiguration には逃げ道が無い。
- * 2. Cognito の `CallbackURLs` でも同じ値が必要で、**どのみち synth 時に確定した
- *    文字列でなければならない。**
- * 3. カスタムドメインを入れるフェーズで、**この 1 定数を差し替えるだけで済む。**
+ *    という循環参照になる。**`cdk synth` はこれを検出せず成功し**、cfn-lint の E3004 だけが
+ *    捕まえる（実測で 2 件）。バケットポリシー（別リソース）が Distribution を参照するのは
+ *    問題ないが、CorsConfiguration には逃げ道が無い。
+ * 2. Cognito の `CallbackURLs` でも同じ値が必要で、どのみち synth 時に確定した文字列が要る。
+ * 3. カスタムドメインを入れるとき、この 1 定数を差し替えるだけで済む。
  *
- * **CORS と Cognito の CallbackURLs の両方がこの 1 定数を参照する。** 2 か所に別々の
- * 文字列を書くと「ログインはできるが画像が上がらない」というデバッグしにくい壊れ方をする。
+ * **CORS と CallbackURLs の両方がこの 1 定数を参照する。** 2 か所に別々の文字列を書くと
+ * 「ログインはできるが画像が上がらない」というデバッグしにくい壊れ方をする。
  *
- * **この定数を変えるのは CloudFront のドメインが変わったときだけ。**
- * デプロイ後に `describe-stacks` の Output `DistributionDomainName` と突き合わせること
- * （手順は infra/README.md）。
+ * 変えるのは CloudFront のドメインが変わったときだけ。デプロイ後に `describe-stacks` の
+ * Output `DistributionDomainName` と突き合わせること（手順は infra/README.md）。
  */
 export const SITE_ORIGIN = 'https://d8gsxbwzr6ft8.cloudfront.net';
 
@@ -95,32 +92,22 @@ export const ADMIN_LOGIN_DOMAIN_PREFIX = 'shutx-blog-admin';
 export const ADMIN_USERNAME = 'shutx';
 
 /**
- * GitHub App の client ID。JWT の `iss` に入る。
+ * GitHub App の client ID。JWT の `iss` に入る（GitHub は app ID よりこちらを推奨）。
  *
- * **秘密ではない。** GitHub は app ID / client ID を公開識別子として扱う。
- * 秘密は秘密鍵だけで、それは Secrets Manager にある（CDK は空のシークレットを
- * 作るだけで値を持たない。DEVELOPERS.md の手順で運用者が CLI から入れる）。
+ * **秘密ではない。** GitHub は app ID / client ID を公開識別子として扱う。秘密は秘密鍵だけで、
+ * それは Secrets Manager にある（CDK は空のシークレットを作るだけで値を持たない。
+ * DEVELOPERS.md の手順で運用者が CLI から入れる）。
  *
- * **GitHub は app ID より client ID を推奨している。**
- *
- * ここが間違っていると GitHub は App JWT を 401 で拒否する。症状は
- * 「鍵は読めているのに GitHub 呼び出しだけ失敗する」という形になり、
- * 鍵の問題と紛らわしい。`/api/health/github-app` は鍵の有無しか見ない。
+ * ここが間違っていると GitHub は App JWT を 401 で拒否する。症状は「鍵は読めているのに GitHub
+ * 呼び出しだけ失敗する」で鍵の問題と紛らわしい（`/api/health/github-app` は鍵の有無しか見ない）。
  */
 export const GITHUB_APP_CLIENT_ID = 'Iv23liVPDAakRE2AKX45';
 
 /**
- * 静的サイト配信スタック。
- *
- * env は意図的に指定しない（env-agnostic）。本フェーズは AWS 認証情報を
- * 一切必要とせず cdk synth が通ることを要件にしているため。
- */
-/**
  * `StackProps` に**テスト専用の seam を 1 つだけ**足したもの。
  *
- * `apiBundleDir` は `lambda-bundle-freshness.test.ts` が使う。あのテストは
- * 「古い成果物を置いてから合成すると作り直されている」ことを見るために成果物を
- * わざと壊すので、本物の `api/dist` を壊すと同時に走る他のテストが巻き添えになる。
+ * `apiBundleDir` は `lambda-bundle-freshness.test.ts` が使う。あのテストは成果物をわざと壊すので、
+ * 本物の `api/dist` を壊すと同時に走る他のテストが巻き添えになる。
  * **既定は `api/dist` のままで、本番の挙動は変わらない。**
  */
 export interface SiteStackProps extends StackProps {
@@ -128,6 +115,12 @@ export interface SiteStackProps extends StackProps {
   apiBundleDir?: string;
 }
 
+/**
+ * 静的サイト配信スタック。
+ *
+ * env は意図的に指定しない（env-agnostic）。AWS 認証情報を一切必要とせず cdk synth が
+ * 通ることを要件にしているため。
+ */
 export class SiteStack extends Stack {
   /** `aws s3 sync` の宛先。CicdStack がデプロイロールの権限をここに絞る。 */
   readonly siteBucket: s3.Bucket;
@@ -155,37 +148,32 @@ export class SiteStack extends Stack {
     this.siteBucket = siteBucket;
 
     // メディアは配信用と別バケットにする。同居させると sync --delete が巻き込んで消す。
-    // 別 Stack ではなく Construct なのは、別 Stack だと synth が DependencyCycle で
-    // 落ちるため（media-bucket.ts のコメントと README を参照）。
-    // **siteOrigin に distribution.distributionDomainName を渡してはいけない。**
-    // CorsConfiguration は S3::Bucket 本体のプロパティなので循環参照になる
+    // 別 Stack ではなく Construct なのは、別 Stack だと synth が DependencyCycle で落ちるため
+    // （media-bucket.ts のコメントと README を参照）。
+    // **siteOrigin に distribution.distributionDomainName を渡してはいけない** — 循環参照になる
     // （SITE_ORIGIN の定義のコメントを参照）。
     const media = new MediaBucket(this, 'MediaBucket', { siteOrigin: SITE_ORIGIN });
     this.mediaBucket = media.bucket;
 
-    // 管理画面のログイン（単一著者の Cognito ユーザプール）。
-    // **Stack ではなく Construct**（CloudFront に紐づくものを別 Stack にすると
-    // DependencyCycle になる、という Phase 2・3 の実測に揃える）。
+    // 管理画面のログイン（単一著者の Cognito ユーザプール）。Stack ではなく Construct
+    // （CloudFront に紐づくものを別 Stack にすると DependencyCycle になる、という実測に揃える）。
     const adminAuth = new AdminAuth(this, 'AdminAuth', {
       domainPrefix: ADMIN_LOGIN_DOMAIN_PREFIX,
       siteOrigin: SITE_ORIGIN,
     });
     this.adminAuth = adminAuth;
 
-    // 投稿 API。**Stack ではなく Construct にしている**（理由は README と
-    // posting-api.ts のコメント）。Distribution が functionUrl を参照するので
-    // ここで先に作る。
+    // 投稿 API。Stack ではなく Construct（理由は README と posting-api.ts のコメント）。
+    // Distribution が functionUrl を参照するのでここで先に作る。
     const postingApi = new PostingApi(this, 'PostingApi', {
       bundleDir: props?.apiBundleDir,
       mediaBucket: this.mediaBucket,
-      // **Phase 4 でここが deny-all から cognito に変わった。**
-      // 型が判別可能ユニオンなので、userPool / userPoolClient / allowedUsername を
-      // 揃えずに mode: 'cognito' にすることは **できない**。
+      // 型が判別可能ユニオンなので、userPool / userPoolClient / allowedUsername を揃えずに
+      // mode: 'cognito' にすることはできない。
       //
-      // **切り戻しは `{ mode: 'deny-all' }` に戻して deploy し直すだけ。**
-      // Cognito のリソースは消えない（deletionProtection + RemovalPolicy.RETAIN）し、
-      // api 側の deny-all は COGNITO_* を 1 つも読まないので、
-      // **壊れた Cognito 設定を抱えたまま安全側に倒せる。**
+      // **切り戻しは `{ mode: 'deny-all' }` に戻して deploy し直すだけ。** Cognito のリソースは
+      // 消えない（deletionProtection + RemovalPolicy.RETAIN）し、api 側の deny-all は COGNITO_* を
+      // 1 つも読まないので、**壊れた Cognito 設定を抱えたまま安全側に倒せる。**
       auth: {
         mode: 'cognito',
         userPool: adminAuth.userPool,
@@ -193,38 +181,32 @@ export class SiteStack extends Stack {
         allowedUsername: ADMIN_USERNAME,
       },
       githubOwner: 'shutx-net',
-      // **記事は private な blog-content、ワークフローは public な blog。**
-      // この 2 つが別であることが分離の実体で、Lambda は記事リポジトリにしか
-      // contents:write を持たない（code repo には actions:write だけ）。
+      // **記事は private な blog-content、ワークフローは public な blog。** この 2 つが別で
+      // あることが分離の実体で、Lambda は記事リポジトリにしか contents:write を持たない
+      // （code repo には actions:write だけ）。
       githubContentRepo: 'blog-content',
       githubCodeRepo: 'blog',
       postsPathPrefix: CONTENT_POSTS_PATH_PREFIX,
-      // **記事が別リポジトリに移ったので、push ではデプロイが走らなくなった。**
-      // dispatch がデプロイの唯一の起動経路になる（Phase 2 では二重デプロイを
-      // 避けるために意図的に未設定にしていた）。
+      // **記事が別リポジトリに移ったので push ではデプロイが走らない。** dispatch が唯一の
+      // 起動経路である。
       deployWorkflowFile: 'deploy.yml',
       // GitHub App の client ID。**秘密ではない**ので public リポジトリに置いてよい。
       // 秘密は秘密鍵のほうだけで、そちらは Secrets Manager にあり CDK は値を持たない。
       githubAppClientId: GITHUB_APP_CLIENT_ID,
     });
 
-    // セキュリティヘッダ。**Phase 5 で新設**（実測で、それまでの実配信は
-    // CSP / HSTS / nosniff を 1 つも返していなかった）。
-    //
-    // **サイトと admin で 1 つのポリシーを共有する。** admin はデフォルトビヘイビアで
-    // 配信されているので、`/admin/*` 専用のビヘイビアを新設しなくてよい
-    // （新設すると distribution-behavior.test.ts と distribution-media-behavior.test.ts の
-    // ビヘイビア件数・順序のアサーションを書き換えることになる）。
+    // セキュリティヘッダ。サイトと admin で 1 つのポリシーを共有する（admin はデフォルト
+    // ビヘイビアで配信されるので `/admin/*` 専用のビヘイビアは要らない。新設すると
+    // distribution-behavior.test.ts と distribution-media-behavior.test.ts のビヘイビア件数・
+    // 順序のアサーションを書き換えることになる）。
     //
     // **ホストは construct から導出する。** 物理名を書くと、片方だけ変わったときに
     // 「ログインだけ動かない」「画像だけ上がらない」という最も分かりにくい壊れ方をする。
-    // **セキュリティヘッダは 1 つの値を 2 本のポリシーで共有する。**
     //
-    // ポリシーが 2 本あるのは Cache-Control の値がサイトとメディアで正反対だから
-    // （毎回検証させる / 1 年持たせる）。**セキュリティヘッダのほうは同一でなければならない。**
-    // 2 箇所に書くと、CSP に connect-src を足した日に片方だけ古くなり、
-    // 「画像だけアップロードできない」という最も分かりにくい壊れ方をする。
-    // ローカル変数に括り出して、値の出所を 1 つにしておく。
+    // ポリシーが 2 本あるのは Cache-Control の値がサイトとメディアで正反対だから（毎回検証させる /
+    // 1 年持たせる）。**セキュリティヘッダのほうは同一でなければならない**ので、ローカル変数に
+    // 括り出して値の出所を 1 つにしておく。2 箇所に書くと CSP に connect-src を足した日に
+    // 片方だけ古くなる。
     const securityHeadersBehavior: cloudfront.ResponseSecurityHeadersBehavior = {
       contentSecurityPolicy: {
         contentSecurityPolicy: buildCsp({
@@ -252,12 +234,11 @@ export class SiteStack extends Stack {
     };
 
     // サイト（HTML / RSS / sitemap / admin）用。**論理 ID は 'SecurityHeaders' のまま。**
-    // 変えると CloudFormation は「削除して作り直す」と解釈し、ビヘイビアの差し替えと
-    // 削除の順序で失敗しうる。名前も `${stackName}-security-headers` のままにする。
+    // 変えると CloudFormation は「削除して作り直す」と解釈し、ビヘイビアの差し替えと削除の順序で
+    // 失敗しうる。名前も `${stackName}-security-headers` のままにする。
     //
-    // override: true の理由。今日はオリジン（S3）が Cache-Control を返さないので
-    // false でも結果は同じだが、**将来 s3 sync に --cache-control が入った日に
-    // 挙動が二股に分かれる。** どちらが勝つかを今ここで決めておく。
+    // override: true は、今日はオリジン（S3）が Cache-Control を返さないので false でも同じだが、
+    // **将来 s3 sync に --cache-control が入った日にどちらが勝つか**を今ここで決めておくため。
     const responseHeaders = new cloudfront.ResponseHeadersPolicy(this, 'SecurityHeaders', {
       responseHeadersPolicyName: `${Stack.of(this).stackName}-security-headers`,
       comment: 'CSP ほか + Cache-Control: no-cache（ブラウザに毎回検証させる）',
@@ -269,13 +250,13 @@ export class SiteStack extends Stack {
       },
     });
 
-    // メディア用。**セキュリティヘッダは上と同一で、Cache-Control だけが違う。**
+    // メディア用。セキュリティヘッダは上と同一で、Cache-Control だけが違う。
     //
     // admin/dist/assets の Vite ハッシュ付きファイル（実測 391 個、shiki の文法定義）も
-    // デフォルトビヘイビア経由なので no-cache になる。**それでよしとする** —
-    // 利用者は 1 人、遅延ロードで実際に読むのは数本、CloudFront にキャッシュがあるので
-    // 304 が返り S3 には行かない。必要になったら admin/assets 専用のビヘイビアを足すより、
-    // ハッシュ付き資産だけ s3 sync --cache-control で長い値を付けるほうが安い。
+    // デフォルトビヘイビア経由なので no-cache になる。**それでよしとする** — 利用者は 1 人、
+    // 遅延ロードで実際に読むのは数本、CloudFront にキャッシュがあるので 304 が返り S3 には行かない。
+    // 必要になったら専用ビヘイビアを足すより、ハッシュ付き資産だけ s3 sync --cache-control で
+    // 長い値を付けるほうが安い。
     const mediaResponseHeaders = new cloudfront.ResponseHeadersPolicy(this, 'MediaHeaders', {
       responseHeadersPolicyName: `${Stack.of(this).stackName}-media-headers`,
       comment: 'CSP ほか + Cache-Control: immutable（キーがランダムで上書きされない）',
@@ -315,26 +296,22 @@ export class SiteStack extends Stack {
       },
       // メディアは 2 本目の OAC オリジンから返す。
       //
-      // functionAssociations は付けない。URI 書き換え Function は拡張子の無いパスに
-      // /index.html を足すので、メディアのキーに適用してはいけない。
+      // functionAssociations は付けない。URI 書き換え Function は拡張子の無いパスに /index.html を
+      // 足すので、メディアのキーに適用してはいけない。
       //
-      // originAccessLevels も指定しない。既定は [READ] でバケットポリシーには
-      // s3:GetObject だけが入る。**LIST を足してはいけない** — CDK が
-      // '@aws-cdk/aws-cloudfront-origins:listBucketSecurityRisk' の警告を出すうえ、
-      // メディアの一覧が CloudFront 経由で晒される。書き込みは管理画面が presigned PUT で
-      // S3 に直接行うので、CloudFront 側には読み取りだけあればよい。
+      // originAccessLevels も指定しない（既定 [READ] でバケットポリシーは s3:GetObject だけ）。
+      // **LIST を足してはいけない** — CDK が
+      // '@aws-cdk/aws-cloudfront-origins:listBucketSecurityRisk' の警告を出すうえ、メディアの一覧が
+      // CloudFront 経由で晒される。書き込みは presigned PUT で S3 に直接行くので読み取りだけでよい。
       //
-      // cachePolicy も既定（CACHING_OPTIMIZED）のままでよい。メディアは不変な静的ファイル。
+      // cachePolicy も既定（CACHING_OPTIMIZED）のまま。メディアは不変な静的ファイル。
       additionalBehaviors: {
         [MEDIA_PATH_PATTERN]: {
           origin: origins.S3BucketOrigin.withOriginAccessControl(this.mediaBucket),
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-          // **メディアにも付ける。** SVG は許可していない（api の
-          // ALLOWED_CONTENT_TYPES に image/svg+xml は無い）が、入口の制限と
-          // 二重化しておく。
-          //
-          // **サイトとは別のポリシー。** セキュリティヘッダは同一だが、
-          // Cache-Control だけが違う（1 年 + immutable）。
+          // **メディアにも付ける。** SVG は許可していない（api の ALLOWED_CONTENT_TYPES に
+          // image/svg+xml は無い）が、入口の制限と二重化しておく。サイトとは別のポリシーで、
+          // 違うのは Cache-Control だけ（1 年 + immutable）。
           responseHeadersPolicy: mediaResponseHeaders,
         },
         // 投稿 API。**/media/* より後に書く**（上の API_PATH_PATTERN のコメント）。
@@ -356,18 +333,16 @@ export class SiteStack extends Stack {
           // /index.html を足すので、/api/posts が /api/posts/index.html になってしまう。
         },
       },
-      // 403 も入れるのが本質。OAC + S3 REST オリジンではバケットポリシーに
-      // s3:ListBucket が無く、S3 が「存在しない」と「権限が無い」を区別しないため、
-      // 存在しないキーは 404 ではなく 403 (AccessDenied) で返る。404 だけマップしても
-      // 閲覧者には 403 が見えたままになる。
+      // **403 も入れるのが本質。** OAC + S3 REST オリジンではバケットポリシーに s3:ListBucket が
+      // 無く、S3 が「存在しない」と「権限が無い」を区別しないため、存在しないキーは 404 ではなく
+      // 403 (AccessDenied) で返る。404 だけマップしても閲覧者には 403 が見えたままになる。
       //
-      // ttl は既定と同じ 10 秒だが、明示するとテンプレートに ErrorCachingMinTTL が
-      // 描画されてテストで固定できる。デプロイ直後に一時的に 404 になったオブジェクトを
-      // 長時間キャッシュされると困るので、短い値であること自体に意味がある。
+      // ttl は既定と同じ 10 秒だが、明示するとテンプレートに ErrorCachingMinTTL が描画されて
+      // テストで固定できる。デプロイ直後に一時的に 404 になったオブジェクトを長時間キャッシュ
+      // されると困るので、短い値であること自体に意味がある。
       //
-      // CustomErrorResponses は DistributionConfig 直下にあり、ビヘイビア単位ではなく
-      // ディストリビューション全体に効く。存在しない /media/* の画像を要求すると
-      // HTML の 404 ページが画像として返るが、壊れた画像に見えるだけで害は無い。
+      // CustomErrorResponses はディストリビューション全体に効く（ビヘイビア単位ではない）。
+      // 存在しない /media/* の画像には HTML の 404 ページが返るが、壊れた画像に見えるだけ。
       errorResponses: [
         {
           httpStatus: 403,
@@ -388,20 +363,17 @@ export class SiteStack extends Stack {
 
     // **CDK が作る permission だけでは CloudFront は Lambda を呼べない。**
     //
-    // FunctionUrlOrigin.withOriginAccessControl が出すのは lambda:InvokeFunctionUrl の
-    // 1 文だけだが、CloudFront 開発者ガイド「Restrict access to an AWS Lambda function
-    // URL origin」は add-permission を **2 回** 実行するよう指示している
-    // （AllowCloudFrontServicePrincipal と AllowCloudFrontServicePrincipalInvokeFunction）。
-    // lambda:InvokeFunction が無いと Function URL の IAM 認可が 403 を返し、
-    // **関数が起動しないのでログも残らない。**
+    // FunctionUrlOrigin.withOriginAccessControl が出すのは lambda:InvokeFunctionUrl の 1 文だけ
+    // だが、CloudFront 開発者ガイド「Restrict access to an AWS Lambda function URL origin」は
+    // add-permission を 2 回実行するよう指示している。lambda:InvokeFunction が無いと Function URL
+    // の IAM 認可が 403 を返し、**関数が起動しないのでログも残らない。**
     //
-    // 実測（2026-08-30, 初回デプロイ後）:
-    //   POST /api/posts -> 404, server: AmazonS3, ロググループは空のまま。
-    //   403 が CustomErrorResponses(403 -> /404.html) で 404 に化けるので、
-    //   症状だけ見ると「ルーティングが効いていない」ように誤読しやすい。
+    // 実測（2026-08-30, 初回デプロイ後）: POST /api/posts -> 404, server: AmazonS3、ロググループは
+    // 空のまま。403 が CustomErrorResponses(403 -> /404.html) で 404 に化けるので、症状だけ見ると
+    // 「ルーティングが効いていない」と誤読しやすい。
     //
-    // AWS のブログ記事は InvokeFunctionUrl だけを示していてドキュメント間で
-    // 食い違うが、**実環境の挙動は開発者ガイドのほうと一致する。**
+    // AWS のブログ記事は InvokeFunctionUrl だけを示していて食い違うが、
+    // **実環境の挙動は開発者ガイドのほうと一致する。**
     new lambda.CfnPermission(this, 'AllowCloudFrontInvokeFunction', {
       action: 'lambda:InvokeFunction',
       functionName: postingApi.handler.functionArn,

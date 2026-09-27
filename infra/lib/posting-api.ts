@@ -13,12 +13,9 @@ import { API_BUNDLE_DIR, API_BUNDLE_FILENAME, buildApiBundle } from '../../api/b
 /**
  * `bundleDir` を省いたときに使うディレクトリ。**本番はこれ。**
  *
- * 定数として出しているのは、テスト用の seam（`PostingApiProps.bundleDir`）を
- * 足した結果、既定が黙って別の場所に変わる余地ができたから。既定が本物であることを
+ * 定数として出しているのは、テスト用の seam（`PostingApiProps.bundleDir`）を足した結果、
+ * 既定が黙って別の場所に変わる余地ができたから。既定が本物であることを
  * posting-api.test.ts が名指しで固定する。
- *
- * cdk synth がどこから実行されるか分からないので cwd 基準の相対パスにしない。
- * "type": "module" なので __dirname は存在しない（site-stack.ts と同じ理由）。
  *
  * **パスも生成器も api 側の定義を実物で import する。** infra が別に組み立てると、
  * 「テストが検証したバンドル」と「本番に載るバンドル」がずれる余地が生まれる。
@@ -34,14 +31,13 @@ export const DEFAULT_API_BUNDLE_DIR = API_BUNDLE_DIR;
 const MEDIA_KEY_PREFIX = 'media/';
 
 /**
- * 予約同時実行数。
+ * 予約同時実行数。**現状で唯一の流量防御。**
  *
- * **本フェーズ唯一の流量防御。** /api/* は CloudFront 経由で匿名でも到達でき、
- * AUTH_MODE=deny-all で 503 を返す場合でも Lambda 自体は起動する（＝課金される）。
+ * /api/* は CloudFront 経由で匿名でも到達でき、AUTH_MODE=deny-all で 503 を返す場合でも
+ * Lambda 自体は起動する（＝課金される）。
  *
- * 実測でこのアカウントの ConcurrentExecutions クォータは 400（既定の 1000 ではない）、
- * UnreservedConcurrentExecutions も 400。2 を予約しても未予約分は 398 残り、
- * AWS が要求する下限 100 を割らない。個人ブログの実利用には十分で、暴走時の上限として働く。
+ * 実測でこのアカウントの ConcurrentExecutions クォータは 400（既定の 1000 ではない）。
+ * 2 を予約しても未予約分は 398 残り、AWS が要求する下限 100 を割らない。
  * WAF とレート制限は運用フェーズに送る。
  */
 const RESERVED_CONCURRENCY = 2;
@@ -51,12 +47,10 @@ const LOG_RETENTION = logs.RetentionDays.ONE_MONTH;
 
 /**
  * **判別可能ユニオン。「AUTH_MODE=cognito なのに pool id が無い」テンプレートを
- * synth 不能にする。**
+ * 型として作れなくする。**
  *
- * これが「中途半端な状態がデプロイできない」の 3 段目である
- * （1 段目は api の AuthConfig 型、2 段目は loadConfig のコールドスタート例外）。
- * 環境変数はこの 1 つの値からまとめて組み立てるので、片方だけ書かれた
- * テンプレートは **型として作れない。**
+ * 「中途半端な状態がデプロイできない」の 3 段目（1 段目は api の AuthConfig 型、
+ * 2 段目は loadConfig のコールドスタート例外）。環境変数はこの 1 つの値からまとめて組み立てる。
  */
 export type PostingApiAuth =
   | { readonly mode: 'deny-all' }
@@ -96,14 +90,12 @@ export interface PostingApiProps {
   /**
    * バンドルを作る／固めるディレクトリ。**既定は `api/dist`。テスト専用の seam。**
    *
-   * これがあるのは、`lambda-bundle-freshness.test.ts` が「古い成果物を置いてから
-   * 合成すると作り直されている」ことを見るために**成果物をわざと壊す**から。
-   * 本物の `api/dist` を壊すと、同時に走る他のテスト
-   * （`site-stack.test.ts` の synth や `api` の `bundle.test.ts`）が
-   * 消えたファイルを読んで落ちる。実際にそれが断続的な失敗の原因だった。
+   * `lambda-bundle-freshness.test.ts` が「古い成果物を置いてから合成すると作り直されている」
+   * ことを見るために**成果物をわざと壊す**ため。本物の `api/dist` を壊すと、同時に走る他の
+   * テスト（`site-stack.test.ts` の synth や `api` の `bundle.test.ts`）が消えたファイルを
+   * 読んで落ちる — 実際にそれが断続的な失敗の原因だった。
    *
-   * **本番の既定は変えない。** 既定が API_BUNDLE_DIR であることは
-   * posting-api.test.ts が固定している。
+   * **本番の既定は変えない。** 既定が API_BUNDLE_DIR であることを posting-api.test.ts が固定。
    */
   bundleDir?: string;
   /**
@@ -118,10 +110,9 @@ export interface PostingApiProps {
 /**
  * 投稿 API。
  *
- * **Stack ではなく Construct にしている。**
- * Distribution が Function URL を参照し（SiteStack -> Api）、Lambda がメディアバケットの
- * 名前と ARN を参照する（Api -> SiteStack）ため、別スタックにすると
- * クロススタック参照が循環して synth が落ちる。詳細は infra/README.md に実測エラー付きで書いた。
+ * Stack ではなく Construct にしているのは、Distribution が Function URL を参照し
+ * （SiteStack -> Api）、Lambda がメディアバケットの名前と ARN を参照する（Api -> SiteStack）ため、
+ * 別スタックだとクロススタック参照が循環して synth が落ちるから（infra/README.md に実測エラー）。
  * **「OAC だから循環する」ではない** — 循環させているのは presigned URL 側の要件である。
  */
 export class PostingApi extends Construct {
@@ -146,27 +137,22 @@ export class PostingApi extends Construct {
     // CDK の Secret は値を渡さないと GenerateSecretString: {} を描画する
     // （aws-secretsmanager/lib/secret.js の
     //  `generateSecretString: props.generateSecretString ?? (secretString ? void 0 : {})`）。
-    // その状態でデプロイすると **32 文字のランダムパスワードが AWSCURRENT に入り**、
-    // 設計判断8 の「空のシークレットを作り、値は後から CLI で入れる」が満たされなくなる。
+    // その状態でデプロイすると **32 文字のランダムパスワードが AWSCURRENT に入る**。
     // 運用者が put-secret-value する前に「鍵が入っている」ように見えるのが特に悪い。
+    // CloudFormation のドキュメントは "If you omit both GenerateSecretString and SecretString,
+    // you create an empty secret." と書いており、削除が正規の方法である。
     //
-    // CloudFormation のドキュメント: "If you omit both GenerateSecretString and
-    // SecretString, you create an empty secret." — 削除が正規の方法である。
-    //
-    // **実測: この override を外しても Phase 2 までの既存テストは 1 つも赤くならなかった。**
+    // **実測: この override を外しても既存テストは 1 つも赤くならなかった。**
     // test/posting-api.test.ts の『Properties のキー集合が ["Description"] ちょうど』だけが
-    // 検出できる。CDK の既定に戻すリファクタが最も起きやすい場所なので、
-    // 触る前に必ずそのテストを読むこと。
+    // 検出できる。CDK の既定に戻すリファクタが最も起きやすい場所なので、触る前にそれを読むこと。
     (secret.node.defaultChild as CfnSecret).addPropertyDeletionOverride('GenerateSecretString');
     this.secret = secret;
 
     // ---- ロググループ（Lambda に作らせない） ----
     //
-    // 先に作っておくと実行ロールに logs:CreateLogGroup が要らなくなり、
-    // CreateLogStream / PutLogEvents をこの ARN にスコープするだけで済む。
-    //
-    // 旧来の logRetention プロパティは使わない。あれは LogRetention のカスタムリソース
-    // （＝追加の Lambda と広い IAM 権限）を引き込む。logGroup プロパティならそれが無い。
+    // 先に作っておくと実行ロールに logs:CreateLogGroup が要らなくなり、CreateLogStream /
+    // PutLogEvents をこの ARN にスコープするだけで済む。旧来の logRetention プロパティは
+    // LogRetention のカスタムリソース（＝追加の Lambda と広い IAM 権限）を引き込むので使わない。
     const logGroup = new logs.LogGroup(this, 'FunctionLogGroup', {
       retention: LOG_RETENTION,
       // ログはいつでも作り直せるので、スタック削除時に残す理由が無い。
@@ -176,18 +162,15 @@ export class PostingApi extends Construct {
 
     // ---- 実行ロール（マネージドポリシーを 1 つも付けない） ----
     //
-    // **CDK 既定に任せてはいけない。** 既定は AWSLambdaBasicExecutionRole を付け、
-    // それは logs:CreateLogGroup / CreateLogStream / PutLogEvents を
-    // **Resource: "*"** に対して許可する（IAM API で内容を確認済み）。
+    // **CDK 既定に任せてはいけない。** 既定の AWSLambdaBasicExecutionRole は
+    // logs:CreateLogGroup / CreateLogStream / PutLogEvents を **Resource: "*"** に許可する
+    // （IAM API で確認済み）。しかも **マネージドポリシーは ARN 参照なのでポリシー文が
+    // テンプレートに現れず**、synth-artifact.test.ts の『Resource が "*" の Allow が 1 つも無い』は
+    // 緑のまま通る（実測）。test/posting-api.test.ts の『ManagedPolicyArns を持つ Role が 0 個』が
+    // 唯一の検出手段である。
     //
-    // しかも **マネージドポリシーは ARN 参照なのでポリシー文がテンプレートに現れない**。
-    // synth-artifact.test.ts の『Resource が "*" の Allow が 1 つも無い』は緑のまま通る
-    // （実測）。test/posting-api.test.ts の『ManagedPolicyArns を持つ Role が 0 個』が
-    // 唯一の検出手段になっている。
-    //
-    // grant メソッドも使わない。secret.grantRead() は DescribeSecret を、
-    // mediaBucket.grantPut() は s3:Abort* を含む 6 アクションを足す（実測）。
-    // どちらも要らない。Phase 2 の cicd-stack.ts が S3 の grant を避けたのと同じ判断。
+    // grant メソッドも使わない。secret.grantRead() は DescribeSecret を、mediaBucket.grantPut() は
+    // s3:Abort* を含む 6 アクションを足す（実測）。cicd-stack.ts が S3 の grant を避けたのと同じ判断。
     const role = new iam.Role(this, 'ExecutionRole', {
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
       description: 'Posting API Lambda execution role (no managed policies by design)',
@@ -219,20 +202,16 @@ export class PostingApi extends Construct {
 
     // ---- 認証まわりの環境変数（判別可能ユニオンから 1 回で組み立てる） ----
     //
-    // **`AUTH_MODE: 'cognito'` という文字列はこの三項演算子の中にしか現れない。**
-    // 型が「cognito なら pool と client がある」を保証しているので、
-    // **片方だけ書かれたテンプレートは synth できない。**
+    // `AUTH_MODE: 'cognito'` という文字列はこの三項演算子の中にしか現れない。型が「cognito なら
+    // pool と client がある」を保証するので、**片方だけ書かれたテンプレートは synth できない**
+    // （保証は props.auth の側なので、ここを Record にしても緩まない）。
     //
-    // api 側の定数（api/src/config.ts の AUTH_MODE_COGNITO / AUTH_MODE_DENY_ALL）と
-    // ずれると synth もテストも通ったうえでコールドスタートで落ちるので、
-    // test/posting-api.test.ts が api の定数を import して等価を主張している。
+    // api 側の定数（api/src/config.ts の AUTH_MODE_COGNITO / AUTH_MODE_DENY_ALL）とずれると
+    // synth もテストも通ったうえでコールドスタートで落ちるので、test/posting-api.test.ts が
+    // api の定数を import して等価を主張している。
     //
-    // **IAM 権限は 1 つも足していない。** JWKS の取得は
-    // https://cognito-idp.<region>.amazonaws.com/... への **認証不要な公開 HTTPS GET** で、
-    // cognito-idp:* の IAM 権限は要らない。足すと「アクションがちょうど 4 つ」が赤くなる。
-    // 型注釈は Lambda の environment（{ [key: string]: string }）に合わせるためだけのもの。
-    // **「cognito なら pool と client がある」の保証は props.auth の判別可能ユニオンが
-    // 担っている**ので、ここを Record にしても何も緩まない。
+    // **IAM 権限は 1 つも足していない。** JWKS の取得は認証不要な公開 HTTPS GET なので
+    // cognito-idp:* は要らない。足すと「アクションがちょうど 4 つ」が赤くなる。
     const authEnvironment: Record<string, string> =
       props.auth.mode === 'cognito'
         ? {
@@ -245,17 +224,14 @@ export class PostingApi extends Construct {
 
     // ---- Lambda ----
     //
-    // **固める直前に、いまのソースから作り直す。**
+    // **固める直前に、いまのソースから作り直す。** Code.fromAsset はディレクトリの中身を
+    // そのまま固めるだけで、ソースと一致しているかは見ない。かつて変異テストが pretest 経由で
+    // api/dist を汚し、ソースだけ復旧したため、**本番の Lambda がソースと 6 バイト食い違ったまま
+    // 動いた**（dispatch の成功判定が 2xx ではなく 204 ちょうどのまま）。テスト 2119 件は緑で、
+    // git status もクリーンだった。
     //
-    // Code.fromAsset はディレクトリの中身をそのまま固めるだけで、それがソースと
-    // 一致しているかは見ない。かつて変異テストが pretest 経由で api/dist を汚し、
-    // ソースだけ復旧したため、**本番の Lambda がソースと 6 バイト食い違ったまま**
-    // 動いた（dispatch の成功判定が 2xx ではなく 204 ちょうどのままだった）。
-    // テスト 2119 件は緑で、git status もクリーンだった。
-    //
-    // 「成果物が新鮮か調べる」のではなく作り直すのは、**調べる方式には必ず
-    // 取りこぼしが残る**から（何を入力と見なすか。node_modules の入れ替えは？
-    // mtime を保つコピーは？）。作り直す方式にはその余地が無い。
+    // 「成果物が新鮮か調べる」ではなく作り直すのは、**調べる方式には必ず取りこぼしが残る**から
+    // （何を入力と見なすか。node_modules の入れ替えは？ mtime を保つコピーは？）。
     // esbuild は 100ms 前後で、1 プロセス 1 回に抑えてある。
     const bundleDir = props.bundleDir ?? DEFAULT_API_BUNDLE_DIR;
     buildApiBundle({ outfile: join(bundleDir, API_BUNDLE_FILENAME) });
@@ -272,9 +248,8 @@ export class PostingApi extends Construct {
       memorySize: 512,
       reservedConcurrentExecutions: RESERVED_CONCURRENCY,
       environment: {
-        // **ここを緩めた瞬間、/api/* に到達できる誰もが書き込み経路に到達できるようになる。**
-        // 守っているのは Authorizer だけになるので、Cognito の実装と
-        // **同一 PR** でなければならない（test/posting-api.test.ts が
+        // **ここを緩めた瞬間、/api/* に到達できる誰もが書き込み経路に到達できる。**
+        // 緩めるなら Cognito の実装と**同一 PR**でなければならない（test/posting-api.test.ts が
         // 「cognito なら COGNITO_* が 3 つ揃っている」を条件付き不変条件として固定している）。
         ...authEnvironment,
         GITHUB_OWNER: props.githubOwner,
@@ -296,12 +271,10 @@ export class PostingApi extends Construct {
     });
     this.handler = handler;
 
-    // authType は **必ず AWS_IAM**。NONE にすると Function URL が完全公開になり、
-    // CloudFront を迂回して直接叩ける。
-    //
-    // **ただしこれはエンドユーザ認証ではない。** OAC の SigningBehavior が always なので、
-    // CloudFront は到達した全リクエストに署名して渡す。匿名の POST でも Lambda は起動する。
-    // 書き込みを止めているのは AUTH_MODE=deny-all のほうである。
+    // authType は **必ず AWS_IAM**。NONE にすると Function URL が完全公開になり、CloudFront を
+    // 迂回して直接叩ける。**ただしこれはエンドユーザ認証ではない** — OAC の SigningBehavior が
+    // always なので CloudFront は到達した全リクエストに署名して渡し、匿名の POST でも Lambda は
+    // 起動する。書き込みを止めているのは AUTH_MODE のほうである。
     this.functionUrl = handler.addFunctionUrl({
       authType: lambda.FunctionUrlAuthType.AWS_IAM,
     });

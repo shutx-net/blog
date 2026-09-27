@@ -13,26 +13,21 @@ import { createSessionStore } from './storage/session-store.ts';
 /**
  * Vite のエントリ。**実物を組み立てて createApp に渡すだけ。**
  *
- * `api/src/index.ts` と同じ思想で、ここに条件分岐を書かない。書いた瞬間に
- * そこがテストできない領域になる（ブラウザが無いので main.ts 自体は実行して
- * 確かめられない）。判断はすべて app.ts / bind.ts / auth/ の側にあり、
- * あちらはすべての依存を引数で受け取るのでテストから駆動できる。
+ * `api/src/index.ts` と同じ思想で、ここに条件分岐を書かない。書いた瞬間にそこがテスト
+ * できない領域になる（ブラウザが無いので main.ts 自体は実行して確かめられない）。判断は
+ * すべて app.ts / bind.ts / auth/ の側にあり、あちらは依存を引数で受け取るので駆動できる。
  * **`test/unit/auth-seam.test.ts` が「if / ? / && が現れない」ことを機械的に見ている。**
- *
- * # このファイルだけがブラウザの現在 URL と履歴 API に触る
  *
  * 下の `redirect` と `replaceSearch` の 2 つが**ブラウザ非依存性の全部**であり、
  * **jsdom で検証できない唯一の部分**でもある（jsdom の `location.assign()` は
- * 「Not implemented: navigation to another Document」を出して**何もしない** —
- * 例外も投げず URL も変わらないので、テストに書くと緑になるが何も検証しない）。
- * よって遷移は必ず注入した関数で観測し、ここは人間の手動確認に送る（DEVELOPERS.md）。
+ * 「Not implemented: navigation to another Document」を出して**何もしない** — 例外も投げず
+ * URL も変わらないので、テストに書くと緑になるが何も検証しない）。よって遷移は必ず注入した
+ * 関数で観測し、ここは人間の手動確認に送る（DEVELOPERS.md）。
  *
- * # 順序
- *
- * **`completeCallback` を `createApp` より先に `await` する。** 先に UI を立ち上げると、
- * `?code=` の処理中に未認証の画面が一瞬出る。ただし **`await` が失敗しても
- * `createApp` は必ず走らせる**（callback が壊れてもエディタは開けなければならない）ので、
- * `catch` で `no_callback` に潰している。
+ * **`completeCallback` を `createApp` より先に `await` する。** 先に UI を立ち上げると
+ * `?code=` の処理中に未認証の画面が一瞬出る。ただし **`await` が失敗しても `createApp` は
+ * 必ず走らせる**（callback が壊れてもエディタは開けなければならない）ので、`catch` で
+ * `no_callback` に潰している。
  */
 const now = (): number => Date.now();
 

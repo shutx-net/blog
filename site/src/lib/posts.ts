@@ -1,15 +1,11 @@
-// Shared rules for listing posts: the draft predicate, the sort order, tag
-// collection and URL normalisation.
+// Shared rules for listing posts: the draft predicate, the sort order, tag collection and
+// URL normalisation.
 //
-// This module must NEVER import `astro:content`. The virtual module cannot be
-// resolved by plain vitest, and getCollection() silently returns an empty Map
-// there -- so pulling it in would make every rule below untestable. getCollection
-// stays on the page side and takes the predicate as an argument:
-//
-//     getCollection("posts", isPublished)
-//
-// which is the same split content.config.ts already uses (real module subpaths in,
-// virtual module out).
+// This module must NEVER import `astro:content`. The virtual module cannot be resolved by
+// plain vitest, and getCollection() silently returns an empty Map there -- so pulling it in
+// would make every rule below untestable. getCollection stays on the page side and takes
+// the predicate as an argument, `getCollection("posts", isPublished)`, which is the same
+// split content.config.ts already uses (real module subpaths in, virtual module out).
 import type { z } from "astro/zod";
 
 import type { postSchema } from "../content.config.ts";
@@ -51,13 +47,11 @@ const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 /**
  * The published date as a Japanese reader expects to see it, in JST.
  *
- * Deliberately NOT Intl.DateTimeFormat: a Node built with small-icu falls back
- * to en-US and would silently print "September 8, 2026" instead, so the same
- * commit could render differently on a developer's machine and in CI. Shifting
- * the instant and reading the UTC parts has no such dependency.
- *
- * The timezone is pinned for the same reason -- reading local parts would make
- * the rendered date depend on the machine's TZ, and a post published late in the
+ * Deliberately NOT Intl.DateTimeFormat: a Node built with small-icu falls back to en-US and
+ * would silently print "September 8, 2026" instead, so the same commit could render
+ * differently on a developer's machine and in CI. Shifting the instant and reading the UTC
+ * parts has no such dependency. The timezone is pinned for the same reason -- reading local
+ * parts would make the date depend on the machine's TZ, and a post published late in the
  * evening JST would date itself a day earlier when built in CI (which runs UTC).
  */
 export const formatPubDate = (date: Date): string => {

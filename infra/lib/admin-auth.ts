@@ -5,26 +5,23 @@ import { Construct } from 'constructs';
 /**
  * 管理画面のログイン用 Cognito ユーザプール（単一著者）。
  *
- * **Stack ではなく Construct にしている**（CloudFront に紐づくものを別 Stack にすると
- * DependencyCycle になる、という Phase 2・3 の実測に揃える）。厳密には Cognito は
- * CloudFront を参照しないが、**CallbackURLs が配信ドメインに依存する**ので
- * MediaBucket / PostingApi と同じ構成にそろえるのが自然である。
+ * Stack ではなく Construct にしているのは、CallbackURLs が配信ドメインに依存するため
+ * MediaBucket / PostingApi と構成をそろえるのが自然だから（CloudFront に紐づくものを
+ * 別 Stack にすると DependencyCycle になる、という実測に揃える）。
  *
  * ## 入れていないもの（意図的）
  *
- * - **UserPoolGroup も IdentityPool も作らない。** 単一著者なので
- *   `cognito:username` の完全一致で足りる。ブラウザに AWS 資格情報を渡す設計は採らない
- *   （S3 への書き込みは API が発行する presigned PUT だけ）。
- * - **カスタムドメインと ACM を入れない。** Managed Login は
- *   `<prefix>.auth.<region>.amazoncognito.com` のまま使う。
- * - **refresh token rotation を入れない。** aws-cdk-lib 2.267.0 の `configureAuthFlows` は
- *   `props.refreshTokenRotationGracePeriod || authFlows.push('ALLOW_REFRESH_TOKEN_AUTH')`
- *   と書かれており、**rotation を有効にすると ExplicitAuthFlows から
- *   ALLOW_REFRESH_TOKEN_AUTH が消える**（実測）。この相互作用を検証する余裕が無い。
- * - **Plus tier / threat protection を入れない。** MAU 1 の個人ブログに月額を払う理由が無く、
- *   Plus には無料枠が無い（AWS 料金ページ:「There is no free tier for the Plus tier.」）。
- * - **`advancedSecurityMode` は 1 文字も書かない。** `undefined` を明示的に渡しても
- *   deprecation 警告が出る（実測）。キーごと存在させない。
+ * - **UserPoolGroup も IdentityPool も作らない。** 単一著者なので `cognito:username` の
+ *   完全一致で足りる。ブラウザに AWS 資格情報を渡す設計は採らない（S3 への書き込みは
+ *   API が発行する presigned PUT だけ）。
+ * - カスタムドメインと ACM。Managed Login は `<prefix>.auth.<region>.amazoncognito.com` のまま。
+ * - refresh token rotation。aws-cdk-lib 2.267.0 の `configureAuthFlows` は
+ *   `props.refreshTokenRotationGracePeriod || authFlows.push('ALLOW_REFRESH_TOKEN_AUTH')` で、
+ *   **rotation を有効にすると ExplicitAuthFlows から ALLOW_REFRESH_TOKEN_AUTH が消える**（実測）。
+ * - Plus tier / threat protection。MAU 1 に月額を払う理由が無く、Plus には無料枠が無い
+ *   （AWS 料金ページ:「There is no free tier for the Plus tier.」）。
+ * - `advancedSecurityMode` は 1 文字も書かない。`undefined` を明示的に渡しても deprecation
+ *   警告が出る（実測）ので、キーごと存在させない。
  */
 export interface AdminAuthProps {
   /**
@@ -50,8 +47,7 @@ export class AdminAuth extends Construct {
 
     this.userPool = new cognito.UserPool(this, 'UserPool', {
       // **ESSENTIALS。Lite ではない。** Managed Login は Essentials 以上でしか使えない
-      // （AWS 開発者ガイド:「Managed login is available in the Essentials and Plus tiers.
-      // The classic hosted UI is available in all feature tiers.」）。
+      // （AWS 開発者ガイド:「Managed login is available in the Essentials and Plus tiers.」）。
       // 無料枠は Lite も Essentials も 10,000 MAU/月なので、MAU 1 では請求額はどちらも 0 円。
       featurePlan: cognito.FeaturePlan.ESSENTIALS,
 
@@ -98,12 +94,11 @@ export class AdminAuth extends Construct {
       // **public client。** SPA にクライアントシークレットは置けない。
       generateSecret: false,
 
-      // **キーを 5 つ明示的に並べる。空オブジェクトにしてはいけない。**
-      // 実測: aws-cdk-lib 2.267.0 の configureAuthFlows は
+      // **キーを 5 つ明示的に並べる。空オブジェクトにしてはいけない。** 実測:
+      // aws-cdk-lib 2.267.0 の configureAuthFlows は
       //   if (!props.authFlows || Object.keys(props.authFlows).length === 0) return;
-      // なので、`authFlows: {}` だと ExplicitAuthFlows が **描画されず**、
-      // Cognito の寛容な既定（SRP / custom を含む）が効いてしまう。
-      // キーが 1 つ以上あれば ALLOW_REFRESH_TOKEN_AUTH だけが描画される。
+      // なので `authFlows: {}` だと ExplicitAuthFlows が描画されず、Cognito の寛容な既定
+      // （SRP / custom を含む）が効く。キーが 1 つ以上あれば ALLOW_REFRESH_TOKEN_AUTH だけが出る。
       authFlows: {
         userSrp: false,
         userPassword: false,
@@ -136,24 +131,16 @@ export class AdminAuth extends Construct {
     });
 
     // **ManagedLoginVersion 2 のドメインは、これが無いとログイン画面が出ない。**
+    // 実測（2026-08-31）: ブランディング未作成で /oauth2/authorize を踏むと 403 と
+    // "Login pages unavailable. Please contact an administrator." が返る。ユーザも OAuth 設定も
+    // 正しいのに画面そのものが存在しない、という原因の見えにくい状態になる。
     //
-    // 実測（2026-08-31）: ブランディング未作成の状態で /oauth2/authorize を踏むと
-    // **403 と "Login pages unavailable. Please contact an administrator."** が返る。
-    // ユーザも OAuth 設定も正しいのに、画面そのものが存在しない状態になる。
+    // AWS のドキュメントが明記している: 「When you use the console, Amazon Cognito assigns a
+    // default branding style automatically. When you use the API or an SDK, you must create a
+    // branding style yourself.」**コンソールなら付いていたものが、CDK で作ったので付かなかった。**
     //
-    // AWS のドキュメントが原因を明記している:
-    //
-    // > A ManagedLoginVersion value of 2 does not activate managed login pages for your
-    // > app client. When you create an app client programmatically, your app client has
-    // > no branding style. ... **When you use the console, Amazon Cognito assigns a
-    // > default branding style automatically. When you use the API or an SDK, you must
-    // > create a branding style yourself.**
-    //
-    // **コンソールで作れば付いていたものが、CDK で作ったので付かなかった。**
-    // 「マネコンなら動くのに IaC だと動かない」という、原因の見えにくい差である。
-    //
-    // useCognitoProvidedValues: true は Cognito の既定スタイルを使う指定。
-    // 見た目を変えたくなったら settings / assets を足す（2MB 上限あり）。
+    // useCognitoProvidedValues: true は既定スタイルを使う指定。見た目を変えたくなったら
+    // settings / assets を足す（2MB 上限あり）。
     new cognito.CfnManagedLoginBranding(this, 'AdminLoginBranding', {
       userPoolId: this.userPool.userPoolId,
       clientId: this.userPoolClient.userPoolClientId,

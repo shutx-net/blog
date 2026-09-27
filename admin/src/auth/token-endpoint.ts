@@ -2,43 +2,33 @@ import { AUTH_CONFIG, REVOKE_PATH, TOKEN_PATH } from './config.ts';
 import type { AuthConfig } from './config.ts';
 
 /**
- * 認可サーバのトークンエンドポイント。**素の fetch の 3 本目。**
+ * 認可サーバのトークンエンドポイント。素の fetch の 3 本目で、3 本とも規則が違う。
  *
- * # 3 本の規則はそれぞれ違う（取り違えないこと）
+ *   api/client.ts   … 同一オリジンの `/api/*`。**api 用のハッシュヘッダを必ず付ける。** JSON
+ *   api/upload.ts   … S3 への presigned PUT。**逆に絶対に付けない**
+ *   このファイル     … **別オリジン**の認可サーバ。どちらのヘッダも付けない。
+ *                     `content-type: application/x-www-form-urlencoded` 1 個だけ、`credentials: 'omit'`
  *
- *   api/client.ts        … 同一オリジンの `/api/*`。**api 用のハッシュヘッダを必ず付ける。** JSON。
- *   api/upload.ts        … S3 への presigned PUT。**逆に絶対に付けない。**
- *   このファイル          … **別オリジン**の認可サーバ。**どちらのヘッダも付けない。**
- *                          `content-type: application/x-www-form-urlencoded` 1 個だけ、
- *                          `credentials: 'omit'`。
+ * # 例外を投げず値で返す
  *
- * `test/unit/no-raw-fetch.test.ts` がこの 3 本目の規則を綴りの走査で固定している。
- *
- * # 例外を投げない設計にする理由
- *
- * この層の失敗は 3 種類しかなく、呼び出し側は必ず分岐する。
- *
- *   `invalid_grant` … **再ログインしかない**（refresh トークンの失効・code の再使用）
- *   `network`       … 一時的。**あとでまた試せる**。セッションを捨ててはいけない
- *   それ以外        … 設定ミス
- *
- * 例外にすると、この分岐が `error.message` の文字列一致になる。
- * **`aws-jwt-verify` の `this.name` で踏んだのと同じ轍**（テストでは通り本番でだけ壊れる）
- * を繰り返さないため、結果を値で返す。
+ * 失敗は 3 種類しかなく、呼び出し側は必ず分岐する。`invalid_grant` は再ログインしかない
+ * （refresh トークンの失効・code の再使用）、`network` は一時的でセッションを捨ててはいけない、
+ * それ以外は設定ミス。例外にするとこの分岐が `error.message` の文字列一致になり、
+ * **`aws-jwt-verify` の `this.name` で踏んだのと同じ轍**（テストでは通り本番でだけ壊れる）。
  *
  * # ログを持たない
  *
- * `api/src/auth/transport.ts` がログ出力を受け取らない設計にした理由と同じで、
- * このモジュールもログ出力を引数に取らず、標準出力にも触らない。
- * **トークンをログに出す経路が構造的に存在しない。**
- * `test/unit/auth-token-endpoint.test.ts` が綴りの走査で固定している。
+ * `api/src/auth/transport.ts` と同じ理由で、ログ出力を引数に取らず標準出力にも触らない。
+ * トークンをログに出す経路が構造的に存在しない。
  *
  * # CORS は防御ではない
  *
  * 実測で認可サーバは preflight の `Origin` を検証せず、任意のオリジンをそのまま
  * `access-control-allow-origin` に反映する（`allow-credentials: true` 付き）。
- * **守っているのは PKCE と `state` だけである。**
- * 「CORS があるから安全」という推論をこのファイルに書かないこと。
+ * **守っているのは PKCE と `state` だけ。** 「CORS があるから安全」と書かないこと。
+ *
+ * 3 本目の規則もログの不在も、`test/unit/no-raw-fetch.test.ts` と
+ * `test/unit/auth-token-endpoint.test.ts` が綴りの走査で固定している。
  */
 
 const FORM_CONTENT_TYPE = 'application/x-www-form-urlencoded';

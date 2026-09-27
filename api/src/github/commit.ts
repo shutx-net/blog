@@ -76,14 +76,14 @@ export interface PostPublisherDeps {
 /**
  * slug からファイルパスを組み立てる。
  *
- * **posts ディレクトリの外に出られないことをここでも検査する**（3.6 の検証と二重化）。
- * 検証は「安全な形だけを通す」allowlist で行う。'../' を除去する blocklist 方式は、
- * 除去後に再び '../' が現れる入力（'....//'）で破れる。
+ * **posts ディレクトリの外に出られないことをここでも検査する**（入力側の検証と二重化）。
+ * 「安全な形だけを通す」allowlist で行う — '../' を除去する blocklist 方式は、除去後に
+ * 再び '../' が現れる入力（'....//'）で破れる。
  *
- * **日付パス（`2026/09/08/054001`）はスラッシュを含むが、封じ込めは弱まっていない。**
- * `POST_SLUG_PATTERN` は平坦スラッグと日付パスの和で、**両辺とも strict allowlist**
- * （文字クラスは `[a-z0-9]` と `[0-9]` だけ、桁数も固定）なので、`..` も `\` も
- * 表現できない。スラッシュを許したことと traversal を許したことは別である。
+ * 日付パス（`2026/09/08/054001`）はスラッシュを含むが封じ込めは弱まっていない。
+ * `POST_SLUG_PATTERN` は**両辺とも strict allowlist**（文字クラスは `[a-z0-9]` と `[0-9]`
+ * だけ、桁数も固定）で `..` も `\` も表現できない。**スラッシュを許したことと traversal を
+ * 許したことは別である。**
  */
 const pathForSlug = (prefix: string, slug: string): string => {
   if (!POST_SLUG_PATTERN.test(slug)) {
@@ -139,18 +139,16 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
 
     // 2. **既存記事の確認。書き込みを 1 本も出す前に行う。**
     //
-    //    Contents API を使うのは、既に持っている base tree では判定できないから。
-    //    docs (Get a tree): 既定では最上位のエントリしか返さないので、posts/ は
-    //    「tree 型のエントリ 1 件」としてしか見えない。?recursive=1 なら全件返るが、
-    //    **100,000 エントリ / 7 MB を超えると truncated: true で黙って切り詰められる** —
-    //    それを「無い」と読む実装は、育ったリポジトリでいつか公開記事を踏み潰す。
-    //    Contents API は 200 / 404 で答えるので、その罠が無い。追加の呼び出しは 1 本。
+    //    base tree では判定できないので Contents API を使う。docs (Get a tree) の既定は
+    //    最上位のエントリだけなので posts/ は「tree 型のエントリ 1 件」にしか見えず、
+    //    ?recursive=1 は **100,000 エントリ / 7 MB を超えると truncated: true で黙って
+    //    切り詰められる** — それを「無い」と読む実装は、育ったリポジトリでいつか公開記事を
+    //    踏み潰す。Contents API は 200 / 404 で答えるのでその罠が無い。呼び出しは 1 本。
     //
-    //    **?ref に base commit の sha を渡すのが TOCTOU 対策の要。** ブランチ名で
-    //    問い合わせると「確認した木」と「コミットの親にする木」がずれうる。
-    //    同じ sha に固定したうえで、6 の PATCH を force なしにしてあるので、
-    //    確認とコミットの間に main が進めば ref 更新が 422 で落ちる。
-    //    **古い読みに基づいて上書きする窓が無い。**
+    //    **?ref に base commit の sha を渡すのが TOCTOU 対策の要。** ブランチ名で問い合わせ
+    //    ると「確認した木」と「コミットの親にする木」がずれうる。同じ sha に固定したうえで
+    //    6 の PATCH を force なしにしてあるので、確認とコミットの間に main が進めば ref 更新
+    //    が 422 で落ちる。**古い読みに基づいて上書きする窓が無い。**
     const lookupResponse = await request(
       'GET',
       `${repoPath}/contents/${path}?ref=${baseCommitSha}`,

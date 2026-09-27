@@ -2,14 +2,12 @@
  * **fail-closed の既定値。** エンドユーザ認証が壊れたときに戻す先。
  *
  * AWS_IAM + OAC はエンドユーザ認証ではない。OAC の SigningBehavior が always である以上、
- * CloudFront は到達したすべてのリクエストに SigV4 署名を付けて Lambda に渡す。
- * つまり誰が /api/posts に POST しても Lambda は起動する。AWS_IAM が防ぐのは
- * Function URL への直接アクセスだけ。**したがって書き込み経路を守っているのは
- * Authorizer だけである。**
+ * CloudFront は到達したすべてのリクエストに SigV4 署名を付けて Lambda に渡す。誰が
+ * /api/posts に POST しても Lambda は起動し、AWS_IAM が防ぐのは Function URL への直接
+ * アクセスだけ。**書き込み経路を守っているのは Authorizer だけである。**
  *
- * **deny-all を消さないこと。** 消すと「Cognito で問題が起きたときに安全側へ戻す」
- * 手段が無くなる。戻すのは環境変数 1 つの変更で済み、しかも deny-all は COGNITO_* を
- * 1 つも読まないので、**壊れた Cognito 設定を抱えたまま安全側に倒せる。**
+ * **deny-all を消さないこと。** 戻すのは環境変数 1 つの変更で済み、しかも deny-all は
+ * COGNITO_* を 1 つも読まないので、**壊れた Cognito 設定を抱えたまま安全側に倒せる。**
  */
 export const AUTH_MODE_DENY_ALL = 'deny-all';
 

@@ -6,16 +6,12 @@ import type { AuthConfig } from './config.ts';
  *
  * **`URLSearchParams` で組む。手で `&` を連結しない** — エスケープの取りこぼしが起きる。
  *
- * # ここが `state` と PKCE の最後の砦である
+ * **ここが `state` と PKCE の最後の砦。** 実測で認可サーバは `state` の無い authorize も
+ * `code_challenge` の無い authorize も **302 する**。つまり片方を落としても**サーバは何も
+ * 言わずに動き続ける**ので、空の値に対して**投げる**。サーバが許すことを、こちら側で禁じている。
  *
- * 実測で認可サーバは `state` の無い authorize も、`code_challenge` の無い authorize も
- * **302 する**。つまり片方を落としても**サーバは何も言わずに動き続ける。**
- * だから空の値に対して**投げる**。サーバが許すことを、こちら側で禁じている。
- *
- * # S256 以外を生成しない
- *
- * `code_challenge_method` は `'S256'` のリテラル 1 つだけで、分岐が無い。
- * `test/unit/auth-authorize-url.test.ts` が「このファイルに `plain` の綴りが現れない」
+ * S256 以外を生成しない — `code_challenge_method` は `'S256'` のリテラル 1 つだけで分岐が
+ * 無く、`test/unit/auth-authorize-url.test.ts` が「このファイルに `plain` の綴りが現れない」
  * ことまで見ている。
  */
 

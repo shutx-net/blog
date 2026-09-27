@@ -17,8 +17,8 @@ export const GITHUB_OWNER = 'shutx-net';
 /**
  * オーナーの数値 ID（`gh api users/shutx-net --jq .id`）。
  *
- * **文字列で持つ。** number にすると template literal へ埋めるときに桁区切りや
- * 指数表記の事故が理屈上あり得るし、そもそもこれは識別子であって数値ではない。
+ * 文字列で持つ。これは識別子であって数値ではないし、number にすると template literal へ
+ * 埋めるときに桁区切りや指数表記の事故が理屈上あり得る。
  */
 export const GITHUB_OWNER_ID = '169037737';
 
@@ -32,40 +32,37 @@ export const GITHUB_REPOSITORY_ID = '1351152011';
 export const GITHUB_REPOSITORY = `${GITHUB_OWNER}/${GITHUB_REPOSITORY_NAME}`;
 
 /**
- * 信頼ポリシーの sub。**StringEquals で完全一致固定する。**
+ * 信頼ポリシーの sub。**StringEquals で完全一致固定する。緩めて回避しないこと** —
+ * StringLike に落とした瞬間にこのスタックの主要な成果が失われる。
  *
  * IAM 自身のガードは弱い。AWS のドキュメントは「条件キー
  * `token.actions.githubusercontent.com:sub` が存在し、その値が単独のワイルドカード
- * (`*` / `?`) や null でないこと」しか検査しないと明記している。つまり、リポジトリ名も
- * ブランチ名もワイルドカードにした sub（どの GitHub リポジトリからでも assume できる）は
- * IAM の検査を通過してしまう。テストは IAM より厳しくなければならない。
+ * (`*` / `?`) や null でないこと」しか検査しないと明記している。リポジトリ名もブランチ名も
+ * ワイルドカードにした sub（どの GitHub リポジトリからでも assume できる）は IAM の検査を
+ * 通過する。テストは IAM より厳しくなければならない。
  *
- * **形式は immutable subject claim である。** GitHub は 2026-07-15 に既定の sub 形式を
- * `repo:OWNER/REPO:...` から `repo:OWNER@OWNER-ID/REPO@REPO-ID:...` に変更した。
- * 同日以降に作成されたリポジトリは既定で新形式を発行する（本リポジトリの created_at は
- * 2026-08-30）。実測でも
+ * 形式は immutable subject claim。GitHub は 2026-07-15 に既定の sub 形式を
+ * `repo:OWNER/REPO:...` から `repo:OWNER@OWNER-ID/REPO@REPO-ID:...` に変更し、同日以降に
+ * 作成されたリポジトリは既定で新形式を発行する（本リポジトリの created_at は 2026-08-30、
  * `gh api repos/shutx-net/blog/actions/oidc/customization/sub` が
- * `sub_claim_prefix: "repo:shutx-net@169037737/blog@1351152011"` を返す。
+ * `sub_claim_prefix: "repo:shutx-net@169037737/blog@1351152011"` を返すことを実測）。
  * **旧形式のまま deploy すると初回の assume が
  * `Not authorized to perform sts:AssumeRoleWithWebIdentity` で必ず落ちる。**
  *
- * 効能と限界: 名前ではなく ID で固定するので **リポジトリ名を変えても、オーナー名を
- * 変えても壊れない**。逆に **リポジトリを作り直すと repo_id が変わって壊れる**
- * （その場合は上の 2 つの ID 定数を実測値で更新して deploy し直す）。
+ * 名前ではなく ID で固定するので、リポジトリ名もオーナー名も変えて壊れない。逆に
+ * リポジトリを作り直すと repo_id が変わって壊れる（上の 2 つの ID 定数を実測値で更新して
+ * deploy し直す）。
  *
- * **この文字列は GitHub 側の挙動と結合した契約である。** ワークフロー YAML を書く
- * フェーズでは次の制約が生じる（infra/README.md にも記載。
- * test/workflow-deploy-oidc.test.ts がこの定数から期待値を導出して機械的に固定している）:
+ * **この文字列は GitHub 側の挙動と結合した契約で、ワークフロー YAML に制約が及ぶ**
+ * （infra/README.md にも記載。test/workflow-deploy-oidc.test.ts がこの定数から期待値を
+ * 導出して機械的に固定している）:
  *
- * - トリガは main への push（または main を ref とする workflow_dispatch）であること。
+ * - トリガは main への push（または main を ref とする workflow_dispatch）。
  *   pull_request で走らせると sub は `...:pull_request` になり assume が失敗する
- * - ジョブに `environment:` を **付けない**。付けると sub は
- *   `...:environment:<name>` になり assume が失敗する
+ * - ジョブに `environment:` を付けない。付けると sub は `...:environment:<name>` になる
  * - ジョブに `permissions: { id-token: write, contents: read }` が要る
  * - ロール ARN は YAML に直書きせず GitHub Actions の変数から読む
  *   （public リポジトリに AWS アカウント ID を晒す必要は無い）
- *
- * **緩めて回避しないこと。** StringLike に落とした瞬間にこのスタックの主要な成果が失われる。
  */
 export const DEPLOY_SUBJECT = `repo:${GITHUB_OWNER}@${GITHUB_OWNER_ID}/${GITHUB_REPOSITORY_NAME}@${GITHUB_REPOSITORY_ID}:ref:refs/heads/main`;
 
@@ -80,9 +77,9 @@ export interface CicdStackProps extends StackProps {
 /**
  * GitHub Actions が OIDC で assume するデプロイロールのスタック。
  *
- * **SiteStack と分けてよい理由は参照が一方向だから。** CicdStack は SiteStack の
- * バケット ARN とディストリビューションを読むだけで、SiteStack 側に何も書き込まない
- * （MediaBucket を別 Stack にできなかったのとは対照的。README を参照）。
+ * SiteStack と分けてよいのは参照が一方向だから。CicdStack は SiteStack のバケット ARN と
+ * ディストリビューションを読むだけで、SiteStack 側に何も書き込まない（MediaBucket を
+ * 別 Stack にできなかったのとは対照的。README を参照）。
  *
  * env は意図的に指定しない（env-agnostic）。必要な ARN はすべて疑似パラメータで組める。
  */
@@ -90,18 +87,17 @@ export class CicdStack extends Stack {
   constructor(scope: Construct, id: string, props: CicdStackProps) {
     super(scope, id, props);
 
-    // **レガシーの iam.OpenIdConnectProvider ではなく OidcProviderNative を使う。**
-    // レガシー版は Custom::AWSCDKOpenIdConnectProvider というカスタムリソースを作り、
-    // その裏の Lambda 実行ロールに iam:CreateOpenIDConnectProvider 等を Resource: "*" で
-    // 付与する。native 版は AWS::IAM::OIDCProvider 1 リソースだけを吐く。
+    // レガシーの iam.OpenIdConnectProvider ではなく OidcProviderNative を使う。レガシー版は
+    // Custom::AWSCDKOpenIdConnectProvider を作り、その裏の Lambda 実行ロールに
+    // iam:CreateOpenIDConnectProvider 等を Resource: "*" で付与する。native 版は
+    // AWS::IAM::OIDCProvider 1 リソースだけを吐く。
     //
-    // **thumbprints は渡さない。** AWS は信頼された root CA で JWKS エンドポイントの
-    // TLS 証明書を検証するため、GitHub のように公的な CA に署名された IdP では
-    // サムプリントは使われない。古い記事の固定値をコピーすると、GitHub が証明書を
-    // 切り替えた日に assume が全部落ちる時限爆弾になる。
+    // **thumbprints は渡さない。** AWS は信頼された root CA で JWKS エンドポイントの TLS 証明書を
+    // 検証するので、公的な CA に署名された IdP ではサムプリントは使われない。古い記事の固定値を
+    // コピーすると、GitHub が証明書を切り替えた日に assume が全部落ちる時限爆弾になる。
     //
-    // removalPolicy の既定は DESTROY。OIDC プロバイダは URL ごとにアカウントに
-    // 1 つしか作れない共有資源で、消すと同じプロバイダを信頼する他のロールが全部壊れる。
+    // RETAIN にするのは、OIDC プロバイダが URL ごとにアカウントへ 1 つしか作れない共有資源で、
+    // 消すと同じプロバイダを信頼する他のロールが全部壊れるから（既定は DESTROY）。
     const provider = new iam.OidcProviderNative(this, 'GitHubOidcProvider', {
       url: GITHUB_OIDC_URL,
       clientIds: [GITHUB_OIDC_AUDIENCE],
@@ -121,21 +117,17 @@ export class CicdStack extends Stack {
       description: 'GitHub Actions assumes this via OIDC to publish site/dist to S3',
     });
 
-    // **S3 だけ grant メソッドを使わない。** cdk_best_practices は grant を勧めるが、
-    // aws-cdk-lib/aws-s3/lib/perms.js を読むと bucket.grantWrite() が展開するのは
-    // BUCKET_PUT_ACTIONS [s3:PutObject, s3:PutObjectLegalHold, s3:PutObjectRetention,
-    // s3:PutObjectTagging, s3:PutObjectVersionTagging, s3:Abort*] と
-    // BUCKET_DELETE_ACTIONS [s3:DeleteObject*] の 7 個で、s3:Abort* と s3:DeleteObject*
-    // というワイルドカードを含む。s3:DeleteObject* はバージョン付きバケットでは
-    // s3:DeleteObjectVersion まで含む。public リポジトリから assume できるロールに
-    // ワイルドカードのアクションを入れない方針を優先し、ここは明示列挙にする。
+    // S3 だけ grant メソッドを使わない。cdk_best_practices は grant を勧めるが、
+    // aws-cdk-lib/aws-s3/lib/perms.js の BUCKET_PUT_ACTIONS + BUCKET_DELETE_ACTIONS を読むと
+    // bucket.grantWrite() が展開する 7 個には s3:Abort* と s3:DeleteObject* というワイルドカードが
+    // 含まれる（後者はバージョン付きバケットでは s3:DeleteObjectVersion まで）。public から assume できる
+    // ロールにワイルドカードのアクションを入れない方針を優先し、ここは明示列挙にする。
     //
     // s3:GetObject は入れない。ローカル -> S3 方向の aws s3 sync は ListObjectsV2
-    // （s3:ListBucket）でリモートを列挙し、サイズと更新時刻で比較して PutObject する
-    // だけで GetObject は使わない。**ただし実デプロイでは未検証**（認証情報が無い）。
+    // （s3:ListBucket）でリモートを列挙し、サイズと更新時刻で比較して PutObject するだけ。
     // AccessDenied が出たら s3:GetObject -> s3:ListBucketMultipartUploads ->
     // s3:ListMultipartUploadParts の順に 1 つずつ足し、そのつど README と
-    // test/cicd-deploy-permissions.test.ts の EXPECTED_ACTIONS を更新すること。
+    // test/cicd-deploy-permissions.test.ts の EXPECTED_ACTIONS を更新する。
     // **まとめて s3:* にしないこと。**
     //
     // s3:PutObjectAcl も入れない（ブロックパブリックアクセスが 4 つとも有効で ACL は使わない）。
@@ -158,9 +150,8 @@ export class CicdStack extends Stack {
       }),
     );
 
-    // **メディアバケットには一切触れない。** 設計判断5 の目的そのもの
-    // （バケットを分けても CI にメディアへの権限を渡したら意味が無い）。
-    // test/cicd-deploy-permissions.test.ts がテンプレート全文を走査して固定している。
+    // **メディアバケットには一切触れない。** バケットを分けても CI にメディアへの権限を
+    // 渡したら意味が無い。test/cicd-deploy-permissions.test.ts がテンプレート全文を走査している。
 
     // CloudFront は grant を使う。実測で
     // arn:<partition>:cloudfront::<account>:distribution/<id> にスコープされた

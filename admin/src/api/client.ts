@@ -11,13 +11,12 @@ export interface ApiOperation {
  * admin が叩く API の全経路。
  *
  * **`api/src/router.ts` の `ROUTES` と集合として一致していること**を
- * test/unit/api-client.test.ts が主張している。api に経路が増えたらここが
- * 赤くなるので、「admin が古い表のまま新しい経路を素の fetch で叩く」という
- * 壊れ方が構造的に起きない。
+ * test/unit/api-client.test.ts が主張している。api に経路が増えたらここが赤くなるので、
+ * 「admin が古い表のまま新しい経路を素の fetch で叩く」という壊れ方が構造的に起きない。
  *
  * **router.ts をブラウザから import しない。** router.ts は media/presign.ts 経由で
- * `@aws-sdk/*` と `node:crypto` を引き込むのでバンドルできない。突き合わせは
- * node 環境のテストの仕事にしてある。
+ * `@aws-sdk/*` と `node:crypto` を引き込むのでバンドルできない。突き合わせは node 環境の
+ * テストの仕事。
  */
 export const API_OPERATIONS: readonly ApiOperation[] = [
   { method: 'GET', path: '/api/health' },

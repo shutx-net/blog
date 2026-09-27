@@ -14,26 +14,23 @@ import { exchangeCode } from './token-endpoint.ts';
 /**
  * **認証の継ぎ目。組み立て役であって、実装ではない。**
  *
- * 暗号もパースも URL の組み立てもここには書かない。それぞれ
- * `pkce.ts` / `claims.ts` / `authorize-url.ts` / `token-endpoint.ts` /
- * `pending-login.ts` / `session-state.ts` / `refresh.ts` にある。
- * このファイルの仕事は**それらを束ねて `AuthTransport` を作ること**だけである。
+ * 暗号もパースも URL の組み立てもここには書かない。それぞれ `pkce.ts` / `claims.ts` /
+ * `authorize-url.ts` / `token-endpoint.ts` / `pending-login.ts` / `session-state.ts` /
+ * `refresh.ts` にある。仕事は**それらを束ねて `AuthTransport` を作ること**だけ。
  *
  * ## 置いている仮定
  *
- * a) admin と `/api/*` は**同一オリジン**（同じ CloudFront ディストリビューション
- *    配下）なので、API 呼び出しに CORS は要らない。
- * b) 輸送方式は「リクエストヘッダの集合」か「`credentials` モード（Cookie）」の
- *    どちらかに落ちる。`AuthTransport` の 3 メンバはその両方を表現できる。
- * c) **`Authorization` は使えない。** CloudFront は OAC の SigV4
- *    （`SigningBehavior: always`）で閲覧者の `Authorization` を上書きするので、
- *    ここに書いても届かない。カスタムヘッダ（`x-blog-authorization`）を使う。
+ * a) admin と `/api/*` は**同一オリジン**（同じ CloudFront ディストリビューション配下）
+ *    なので、API 呼び出しに CORS は要らない。
+ * b) 輸送方式は「リクエストヘッダの集合」か「`credentials` モード（Cookie）」のどちらかに
+ *    落ちる。`AuthTransport` の 3 メンバはその両方を表現できる。
+ * c) **`Authorization` は使えない。** CloudFront は OAC の SigV4（`SigningBehavior: always`）
+ *    で閲覧者の `Authorization` を上書きするので届かない。カスタムヘッダ
+ *    （`x-blog-authorization`）を使う。
  * d) トークン取得の手順は全部 `src/auth/` の内側で完結する。
  *
- * ## 依存はすべて注入する
- *
- * `store` / `fetchImpl` / `now` / `random` / `redirect` / `replaceSearch` / `origin` の
- * 7 つで、**本物を渡すのは `src/main.ts` だけ。** テストは全部偽物を刺す。
+ * 依存は `store` / `fetchImpl` / `now` / `random` / `redirect` / `replaceSearch` / `origin`
+ * の 7 つをすべて注入する。**本物を渡すのは `src/main.ts` だけ**で、テストは全部偽物を刺す。
  */
 export interface AuthTransport {
   /**
@@ -83,14 +80,11 @@ export interface AuthTransportDeps {
  * 4 つ目のメンバを生やさない。増やすと `api/client.ts` と全 DOM テストに波及する。
  * `test/unit/auth-transport.test.ts` が `Object.keys()` で機械的に固定している。
  *
- * ## リアクティブな再送を持たない
- *
- * `AuthTransport` は応答を見られないので「期限切れ -> 拒否 -> 更新して再送」という
- * 一般的な形が採れない。**それで足りる。** `refresh.ts` の just-in-time 更新
- * （skew 120 秒）により期限切れ由来の拒否は原理的にほぼ起きず、残る拒否の原因は
- * refresh トークンの失効・トークンの失効・別ユーザで、**どれも再送では直らない。**
- * つまり拒否は終端であり、`app.ts` は再ログインを促せばよい。
- * **再送を持たないことが、無限ループが構造的に起こり得ないことの証明になっている。**
+ * **リアクティブな再送を持たない。** 応答を見られないので「期限切れ -> 拒否 -> 更新して
+ * 再送」が採れないが、それで足りる。`refresh.ts` の just-in-time 更新（skew 120 秒）で
+ * 期限切れ由来の拒否は原理的にほぼ起きず、残る原因は refresh トークンの失効・トークンの
+ * 失効・別ユーザで、**どれも再送では直らない。** 拒否は終端で、`app.ts` は再ログインを
+ * 促せばよい。**再送が無いことが、無限ループが構造的に起こり得ない証明になっている。**
  */
 export const createCognitoAuthTransport = (deps: AuthTransportDeps): AuthTransport => {
   const source = createTokenSource({

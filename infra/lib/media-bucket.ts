@@ -25,18 +25,17 @@ export interface MediaBucketProps {
 /**
  * 記事に貼る画像などのメディア用バケット。
  *
- * **配信用バケットと分けるのは `aws s3 sync dist/ s3://... --delete` が
- * メディアを巻き込んで消すため**（AGENTS.md「画像を Git に入れない」）。
+ * 配信用バケットと分けるのは `aws s3 sync dist/ s3://... --delete` がメディアを巻き込んで
+ * 消すため（AGENTS.md「画像を Git に入れない」）。
  *
- * **Stack ではなく Construct にしている。** 別 Stack にすると cdk synth が
- * DependencyCycle で落ちるため（README「MediaBucket を別 Stack にできない理由」）。
- * `withOriginAccessControl()` はバケットポリシーに Distribution の Ref を埋め込む一方、
- * Distribution のオリジンはバケットの RegionalDomainName を参照する。バケットと
- * Distribution が別スタックにあると、この 2 本が逆向きのクロススタック参照になって循環する。
+ * Stack ではなく Construct なのは、別 Stack にすると cdk synth が DependencyCycle で落ちるから
+ * （README「MediaBucket を別 Stack にできない理由」）。`withOriginAccessControl()` は
+ * バケットポリシーに Distribution の Ref を埋め込む一方、Distribution のオリジンはバケットの
+ * RegionalDomainName を参照する。別スタックだとこの 2 本が逆向きのクロススタック参照になる。
  *
- * 構築子 ID `MediaBucket` は **絶対に動かさないこと**。論理 ID が変わるとバケットが
- * 作り直される。メディアは設計判断4（画像を Git に入れない）により、このシステムで
- * 唯一 Git から再生成できない資産である。`test/media-bucket.test.ts` が機械的に固定している。
+ * **構築子 ID `MediaBucket` を動かさないこと。** 論理 ID が変わるとバケットが作り直される。
+ * メディアは「画像を Git に入れない」方針により、このシステムで唯一 Git から再生成できない
+ * 資産である。`test/media-bucket.test.ts` が機械的に固定している。
  */
 export class MediaBucket extends Construct {
   readonly bucket: s3.Bucket;
@@ -49,10 +48,9 @@ export class MediaBucket extends Construct {
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
       removalPolicy: RemovalPolicy.RETAIN,
-      // 配信用バケットと違ってバージョニングを有効にする。Phase 1 が配信用で
-      // 見送った理由（sync --delete のたびに削除マーカーと旧版が溜まる）は
-      // メディアには当てはまらない。メディアは管理画面からの presigned PUT で
-      // 上がってきて sync --delete の対象にならず、しかも Git から再生成できない。
+      // 配信用バケットと違ってバージョニングを有効にする。配信用で見送った理由
+      // （sync --delete のたびに削除マーカーと旧版が溜まる）はメディアには当てはまらない
+      // — presigned PUT で上がってきて sync --delete の対象にならず、Git から再生成もできない。
       // この非対称は意図的で、test/media-bucket.test.ts が両方向を固定している。
       versioned: true,
       lifecycleRules: [
@@ -61,13 +59,10 @@ export class MediaBucket extends Construct {
           noncurrentVersionExpiration: Duration.days(NONCURRENT_VERSION_EXPIRATION_DAYS),
         },
       ],
-      // **CORS はメディアバケットにだけ入れる。**
-      //
-      // ブラウザから presigned PUT で画像を上げるために要る。**読み取り用の GET は
-      // 入れない** — 画像は CloudFront 経由で読むので、バケット側の CORS は関与しない。
-      //
-      // AllowedOrigins は CloudFront のドメイン 1 本だけ。`*` にすると、任意のサイトの
-      // JavaScript が（presigned URL さえ手に入れば）このバケットに書けるようになる。
+      // CORS はメディアバケットにだけ入れる。ブラウザから presigned PUT で画像を上げるために
+      // 要る。読み取り用の GET は入れない — 画像は CloudFront 経由で読むので関与しない。
+      // AllowedOrigins は CloudFront のドメイン 1 本だけ。**`*` にすると、任意のサイトの
+      // JavaScript が（presigned URL さえ手に入れば）このバケットに書ける。**
       cors: [
         {
           allowedOrigins: [props.siteOrigin],

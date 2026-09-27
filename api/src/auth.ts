@@ -47,35 +47,26 @@ export interface AuthFailureResponse {
 /**
  * 拒否理由を HTTP に写す表。**403 と 404 は絶対に使わない。**
  *
- * ## なぜ 403 が使えないのか（実測に基づく）
- *
- * CloudFront の `CustomErrorResponses` は DistributionConfig 直下にあり、
- * **ビヘイビア単位では外せない**。origin が返した 403 / 404 も /404.html の
- * HTML に差し替えられる。実測（本番ディストリビューション）:
+ * CloudFront の `CustomErrorResponses` は DistributionConfig 直下にあり、**ビヘイビア単位では
+ * 外せない**。origin が返した 403 / 404 も /404.html の HTML に差し替えられる。実測:
  *
  *     GET /api/nope   -> 404 / content-type: text/html / x-cache: Error from cloudfront
  *     GET /api/health -> 200 / content-type: application/json / x-cache: Miss from cloudfront
  *
  * Lambda のルータは `/api/nope` に `404 {"error":"not_found"}` を返しているのに、
- * 閲覧者には日本語の HTML ページが届く。403 も同じ表に載っているので同様に化ける。
+ * 閲覧者には HTML が届く。
+ * 403 も同じ表に載るので、認可失敗に 403 を使うと admin からは「トークンを出し直せ」
+ * 「あなたは別のユーザだ」「経路が無い」が**全部同じ HTML 404** になる。
+ * `CustomErrorResponses` を外すと OAC + S3 REST オリジンで存在しないキーが 403 のまま
+ * 閲覧者に見える（Phase 2 の判断）。**直すべきは CloudFront ではなく API 側のステータス。**
  *
- * したがって認可失敗に 403 を使うと、admin からは「トークンを出し直せ」
- * 「あなたは別のユーザだ」「経路が無い」の 3 つが**全部同じ HTML 404** になる。
+ * 401 と 503 はこの表に無いので**素通しで JSON のまま届く**（503 は実測済み）。Phase 3 の
+ * router は deny-all に対し「401 は資格情報を出し直せば通るという意味だが、通る資格情報が存在しない」
+ * として 503 を選んだ。**cognito モードではその前提が変わり、通る資格情報が実在する。**
+ * よって 401。deny-all の 503 はそのまま残す。
  *
- * `CustomErrorResponses` を外すと、OAC + S3 REST オリジンで存在しないキーが 403 の
- * まま閲覧者に見える（Phase 2 の判断）。**よって直すべきは CloudFront ではなく
- * API 側のステータス選択である。**
- *
- * ## なぜ 401 なのか
- *
- * 401 と 503 はどちらも `CustomErrorResponses` の表に無いので**素通しで JSON のまま
- * 届く**（実測で 503 が届くことは確認済み）。Phase 3 の router は「401 は資格情報を
- * 出し直せば通るという意味だが deny-all では通る資格情報が存在しない」という理由で
- * 503 を選んだ。**cognito モードではその前提が変わり、通る資格情報が実在する。**
- * よって 401 が正しくなる。deny-all の 503 はそのまま残す。
- *
- * `not-authorized`（正当なトークンだが別ユーザ）に 401 を使うのは意味論的には妥協で、
- * 本来は 403 である。**妥協する代わりに機械可読な `error` コードで区別できるようにした。**
+ * `not-authorized`（正当なトークンだが別ユーザ）に 401 を使うのは意味論的には妥協で本来は
+ * 403。代わりに機械可読な `error` コードで区別できるようにした。
  * **「素直に 403 にしよう」と直さないこと** — CloudFront に食われる。
  */
 export const AUTH_FAILURE_RESPONSES: Readonly<Record<AuthFailureReason, AuthFailureResponse>> = {

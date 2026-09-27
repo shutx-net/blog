@@ -61,12 +61,11 @@ export interface AppDeps {
  * api の拒否コード -> 画面に出す文。
  *
  * **キーは `@blog/api` の `AUTH_FAILURE_RESPONSES` の `error` と一致していなければならない。**
- * その突き合わせは `test/contract/auth-failure-messages.test.ts`（node 環境）が行う。
+ * 突き合わせは `test/contract/auth-failure-messages.test.ts`（node 環境）が行う。
  *
  * **ここで api から import しない。** `@blog/api/src/auth.ts` は認可の実装モジュール経由で
- * `aws-jwt-verify` を引き込むので、import するとそれがブラウザのバンドルに入る
- * （ブラウザに配る依存を増やさないという Phase 4 からの判断に反する）。
- * **代わりに、綴りの一致を contract テストが機械的に見ている。**
+ * `aws-jwt-verify` を引き込むので、import するとブラウザのバンドルに入る（ブラウザに配る
+ * 依存を増やさないという判断に反する）。**代わりに綴りの一致を contract テストが見ている。**
  */
 export const AUTH_FAILURE_MESSAGES: Readonly<Record<string, string>> = {
   // **「認証が未設定」の綴りを保つこと。** Phase 4 の test/dom/submit.test.ts が
