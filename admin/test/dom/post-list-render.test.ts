@@ -8,6 +8,7 @@ const entry = (over: Partial<PostListEntry> = {}): PostListEntry => ({
   title: 'A title',
   draft: false,
   pubDate: '2026-09-27T05:26:21.486Z',
+  sha: 'blob-abc',
   ...over,
 });
 

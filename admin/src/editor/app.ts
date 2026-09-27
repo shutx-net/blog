@@ -20,6 +20,7 @@ import type { PostListEntry } from './post-list.ts';
 
 const CREATE_POST: ApiOperation = { method: 'POST', path: '/api/posts' };
 const UPDATE_POST: ApiOperation = { method: 'PUT', path: '/api/posts' };
+const DELETE_POST: ApiOperation = { method: 'DELETE', path: '/api/posts' };
 const LIST_POSTS: ApiOperation = { method: 'GET', path: '/api/posts' };
 const GET_POST: ApiOperation = { method: 'GET', path: '/api/posts/detail' };
 
@@ -115,6 +116,15 @@ class OverwriteDeclinedError extends Error {
  * それでも経路と確認を残しているのは、**記事の編集機能の土台になる**から
  * （既存の記事を開いて直す操作は、まさに同じパスへの上書きである）。
  */
+/**
+ * 削除の確認文。**失われるものと、失われないものを両方言う。**
+ *
+ * 「履歴には残る」を書くのは、取り消せないと誤解して手が止まるのを避けるため。
+ * サイトからは消えるので**取り消せない操作ではある**が、内容は git に残っている。
+ */
+export const deletePrompt = (slug: string, title: string): string =>
+  `${title}（${slug}）を削除する。Git の履歴には残るが、サイトからは消える。削除するか？`;
+
 export const slugConflictPrompt = (slug: string): string =>
   `${slug} には既に記事がある（同じ秒に投稿したか、pubDate が既存の記事と同じ）。上書きすると今の内容は置き換わる（Git の履歴には残る）。上書きするか？`;
 
@@ -137,6 +147,20 @@ const UPDATE_CONFLICT_MESSAGES: Readonly<Record<string, string>> = {
     'コミットの最中に blog-content が進んだ。「更新」で一覧を読み直してから編集し直すこと',
   would_starve_site:
     '公開記事が 0 本になるので保存できない。ほかの記事を公開してから下書きに戻すこと',
+};
+
+/**
+ * 削除で返る 409 の文言。**保存側（`UPDATE_CONFLICT_MESSAGES`）と分ける。**
+ *
+ * 同じコードでも直しようが違う。保存側は「下書きに戻す」のをやめれば済むが、
+ * 削除側は**別の記事を公開する以外に手が無い**。同じ文にすると、
+ * 削除を押した人に「下書きに戻すな」と言うことになる。
+ */
+const DELETE_CONFLICT_MESSAGES: Readonly<Record<string, string>> = {
+  would_starve_site:
+    '公開記事が 0 本になるので削除できない。ほかの記事を公開してから削除すること',
+  stale_post: 'この記事は別の場所で更新された。「更新」で一覧を読み直すこと',
+  concurrent_update: 'コミットの最中に blog-content が進んだ。「更新」で一覧を読み直すこと',
 };
 
 const isSlugConflict = (error: unknown): boolean =>
@@ -390,6 +414,44 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
    */
   let listInFlight = false;
 
+  /**
+   * 記事を削除する。**確認を通らなければリクエストを 1 本も出さない。**
+   *
+   * `confirmOverwrite` と同じ注入形を使うので、**確認できない環境では false** に
+   * 倒れる（jsdom や `confirm` を潰したブラウザ）。削除は取り消せないので、
+   * 「確認が出せなかったから実行した」は最悪の分岐である。
+   *
+   * **`refreshPostList` は成功時だけ呼ぶ。** 拒否されたときに読み直すと、
+   * 残っている行が消えたように見えたり、逆に理由の表示が上書きされたりする。
+   */
+  const deletePost = async (slug: string, sha: string, title: string): Promise<void> => {
+    let approved = false;
+    try {
+      approved = await confirmOverwrite(deletePrompt(slug, title));
+    } catch {
+      // 確認そのものが投げた場合も**実行しない側**に倒す。
+      approved = false;
+    }
+    if (!approved) {
+      listStatus.textContent = '削除しなかった';
+      return;
+    }
+
+    listStatus.textContent = '削除中…';
+    try {
+      await client.call(DELETE_POST, undefined, { slug, sha });
+    } catch (error) {
+      const conflict = error instanceof ApiError ? DELETE_CONFLICT_MESSAGES[error.code] : undefined;
+      listStatus.textContent = conflict ?? describeFailure(error);
+      return;
+    }
+
+    // **編集中の記事が消えたら新規モードへ。** 残すと、次の送信が
+    // 存在しない記事を更新しようとして 404 になる。
+    if (editing?.slug === slug) exitEditMode();
+    refreshPostList();
+  };
+
   const refreshPostList = (): void => {
     if (listInFlight) return;
     if (!deps.auth.isAuthenticated()) {
@@ -407,8 +469,16 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
       .then((result) => {
         const record = (result ?? {}) as Record<string, unknown>;
         const posts = Array.isArray(record['posts']) ? (record['posts'] as PostListEntry[]) : [];
-        // **編集を注入する。** post-list.ts は DOM を組むだけで、何も呼ばない。
-        renderPostList(listItems, posts, { onEdit: enterEditMode });
+        // **編集と削除を注入する。** post-list.ts は DOM を組むだけで、何も呼ばない。
+        renderPostList(listItems, posts, {
+          onEdit: enterEditMode,
+          onDelete: (slug, sha) => {
+            // **title は一覧が持っている値を使う。** 確認文に出すために
+            // 詳細を取り直すと、押してから確認が出るまでに往復が入る。
+            const target = posts.find((post) => post.slug === slug);
+            void deletePost(slug, sha, target?.title ?? slug);
+          },
+        });
         listStatus.textContent = `${posts.length} 件`;
       })
       .catch((error: unknown) => {

@@ -14,6 +14,8 @@ export interface PostListEntry {
   draft: boolean;
   /** ISO の実値。`<time datetime>` にそのまま入れる。 */
   pubDate: string;
+  /** blob sha。**編集と削除の楽観的並行制御に使う。** */
+  sha: string;
 }
 
 /** 記事が 1 本も無いときの文言。 */
@@ -25,13 +27,21 @@ const DRAFT_BADGE = '下書き';
 /** 編集ボタンの文字。 */
 const EDIT_LABEL = '編集';
 
+/** 削除ボタンの文字。 */
+const DELETE_LABEL = '削除';
+
 /**
  * 行に付ける操作。**このモジュールは何も呼ばない** — 押されたことを外へ渡すだけ。
  *
  * 省略すると読み取り専用の一覧になる（一覧だけを出したい経路を壊さない）。
+ *
+ * **確認はここで出さない。** 削除が取り消せないことの扱いは呼び出し側の責務で、
+ * このモジュールに `confirm` を持たせると「DOM を組むだけ」という境界が崩れる。
  */
 export interface PostListActions {
   onEdit(slug: string): void;
+  /** **sha も渡す。** 楽観的並行制御のトークンは一覧の行が持っている。 */
+  onDelete(slug: string, sha: string): void;
 }
 
 /**
@@ -85,7 +95,19 @@ const renderEntry = (post: PostListEntry, actions: PostListActions | undefined):
     edit.addEventListener('click', () => {
       actions.onEdit(post.slug);
     });
-    item.append(edit);
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = DELETE_LABEL;
+    remove.className = 'post-list__delete';
+    remove.dataset['slug'] = post.slug;
+    remove.addEventListener('click', () => {
+      // **sha は行が持っている値をそのまま渡す。** ここで取り直すと、
+      // 一覧を読んだ時点との差分を検出できなくなる。
+      actions.onDelete(post.slug, post.sha);
+    });
+
+    item.append(edit, remove);
   }
 
   return item;
