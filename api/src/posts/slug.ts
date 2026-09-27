@@ -7,53 +7,21 @@
  */
 
 /**
- * 記事リポジトリ分離前から使ってきた平坦スラッグの形。
- *
- * `validate.ts` の `SLUG_PATTERN` と同じ正規表現。意図的な重複で、`post-slug.test.ts` が
- * `source` と `flags` の一致を機械で固定している。ここに置くのは循環 import を避けるため —
- * `validate.ts` は `dateSlug` を使う側なので依存は **validate → slug の一方向**でなければ
- * ならず、逆向きに import するとモジュール初期化順で正規表現が TDZ で undefined になる。
- */
-export const FLAT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-/**
- * 投稿日時から導出する日付パスの形。`YYYY/MM/DD/HHmmss`。
+ * 記事スラッグの形。`YYYY/MM/DD/HHmmss` の日付パスだけが正当。
  *
  * **桁数を固定しゼロ埋めを必須にする。** `2026/9/8/54001` を許すと同じ時刻から 2 通りの
  * スラッグが作れ、`/posts/<slug>/` が一意でなくなる。
+ *
+ * **strict allowlist なので `..` を表現できない。** 文字クラスは `[0-9]` だけ、桁数も階層も
+ * 固定。これがパストラバーサル対策の根拠で、`commit.ts` の `pathForSlug` はこのパターン
+ * だけに頼って封じ込めを主張している。「`../` を除去する」blocklist 方式は `....//` のような
+ * 入力で破れるので採らない。
  *
  * ドットを含まないので `infra/functions/rewrite-uri.js` の「最終セグメントにドットがあれば
  * 静的ファイル」判定に引っかからない。CloudFront Function は階層の深さを見ないので
  * `/index.html` が付く。
  */
 export const DATE_SLUG_PATTERN = /^[0-9]{4}\/[0-9]{2}\/[0-9]{2}\/[0-9]{6}$/;
-
-/**
- * 両端のアンカーを外して、和に埋め込める形にする。
- *
- * **アンカーを検査してから外す。** 片側しか無い正規表現を黙って切り詰めると、
- * 和にしたときに部分一致を許す形（= traversal を通す形）に化けうる。
- */
-const withoutAnchors = (pattern: RegExp): string => {
-  const { source } = pattern;
-  if (!source.startsWith('^') || !source.endsWith('$')) {
-    throw new Error('slug pattern must be anchored at both ends');
-  }
-  return source.slice(1, -1);
-};
-
-/**
- * 記事スラッグとして正当な形。平坦スラッグと日付パスの和。
- *
- * 和をリテラルで書き直さず両者から組み立てるのは 3 つ目の写しを作らないため。
- *
- * **両辺が strict allowlist なので `..` を表現できない。** これがパストラバーサル対策の
- * 根拠で、`commit.ts` の `pathForSlug` はこのパターンだけに頼って封じ込めを主張している。
- * 「`../` を除去する」blocklist 方式は `....//` のような入力で破れるので採らない。
- */
-export const POST_SLUG_PATTERN = new RegExp(
-  `^(?:${withoutAnchors(FLAT_SLUG_PATTERN)}|${withoutAnchors(DATE_SLUG_PATTERN)})$`,
-);
 
 /**
  * 日本標準時のオフセット。

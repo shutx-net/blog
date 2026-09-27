@@ -38,8 +38,9 @@ const REWRITTEN = [
   { input: '/about', expected: '/about/index.html' },
   { input: '/about/', expected: '/about/index.html' },
   { input: '/', expected: '/index.html' },
-  { input: '/posts/hello-world', expected: '/posts/hello-world/index.html' },
-  { input: '/posts/hello-world/', expected: '/posts/hello-world/index.html' },
+  // 日付パスは 4 階層。**CloudFront Function は深さを見ない**ことの確認でもある。
+  { input: '/posts/2026/09/27/142621', expected: '/posts/2026/09/27/142621/index.html' },
+  { input: '/posts/2026/09/27/142621/', expected: '/posts/2026/09/27/142621/index.html' },
 ];
 
 const UNCHANGED = ['/assets/app.css', '/favicon.ico', '/robots.txt', '/index.html'];
@@ -74,7 +75,8 @@ describe('rewrite-uri.js の URI 書き換え', () => {
   });
 
   it('【既知の限界】最終セグメントにドットを含むスラッグは書き換えない', () => {
-    // 記事スラッグにドットを使うとこの偽陰性を踏む。運用でドットを使わないこと。
+    // 記事スラッグにドットを使うとこの偽陰性を踏む。DATE_SLUG_PATTERN が数字とスラッシュ
+    // しか許さないので**スラッグとしては作れない**が、関数の振る舞いの記録として残す。
     expect(rewrite('/posts/node-24.19-notes')).toBe('/posts/node-24.19-notes');
   });
 

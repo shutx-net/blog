@@ -39,7 +39,13 @@ const collectDistFiles = (dir: string, prefix = ""): string[] =>
 // the corpus the build above actually rendered rather than a second directory
 // that merely used to be the same one.
 const postsDir = fileURLToPath(postsDirUrl(process.env, new URL("../../", import.meta.url)));
-const postFiles = readdirSync(postsDir).filter((name) => name.endsWith(".md"));
+// Recursive because a slug is a date path (YYYY/MM/DD/HHmmss), so every post sits
+// four levels down and a plain readdirSync finds no .md at all. That failure is
+// silent in the worst way: draftCount falls to 0 and the leak scan below turns
+// green with nothing to exclude. The floors in "draft leakage" are what catch it.
+const postFiles = readdirSync(postsDir, { recursive: true, encoding: "utf8" }).filter((name) =>
+  name.endsWith(".md"),
+);
 const draftCount = postFiles.filter((name) => {
   const { frontmatter } = parseFrontmatter(readFileSync(join(postsDir, name), "utf8"));
   return frontmatter.draft === true;
@@ -49,7 +55,7 @@ const expectedPages = Math.ceil(publishedCount / POSTS_PER_PAGE);
 
 /** The strings the leak scan below hunts for, and where each one comes from. */
 const DRAFT_MARKERS = [
-  // draft-post.md's title, which a listing that forgot isPublished would print.
+  // the draft fixture's title, which a listing that forgot isPublished would print.
   "Draft post",
   // a tag carried by no published post, so a getStaticPaths that forgot it would
   // emit a whole /tags/draft-only/ directory.
@@ -96,7 +102,7 @@ describe("shared layout", () => {
   // The value is asserted too: a canonical that is not absolute is useless.
   it.each([
     ["index.html", ""],
-    ["posts/hello-world/index.html", "posts/hello-world/"],
+    ["posts/2026/08/01/090000/index.html", "posts/2026/08/01/090000/"],
   ])("gives %s an absolute canonical link", (file, path) => {
     expect(readDist(file)).toContain(`<link rel="canonical" href="${site}${path}">`);
   });
@@ -115,7 +121,7 @@ describe("tag pages", () => {
   });
 
   // Vacuously true on its own, so it only means something beside the assertions
-  // above that tag pages get generated at all. draft-post.md carries
+  // above that tag pages get generated at all. The draft fixture carries
   // tags: ["astro", "draft-only"] precisely so that a missing isPublished in
   // getStaticPaths leaves a trace right here.
   it("generates no page for a tag only a draft carries", () => {
@@ -183,7 +189,7 @@ describe("draft leakage", () => {
   });
 
   // ...and the markers themselves have to still be in the corpus. Renaming
-  // draft-post.md's title or dropping its draft-only tag would leave the scan
+  // the draft fixture's title or dropping its draft-only tag would leave the scan
   // running against strings that appear nowhere, which is green for the wrong
   // reason.
   it.each(DRAFT_MARKERS)("still has %j somewhere in the corpus", (marker) => {

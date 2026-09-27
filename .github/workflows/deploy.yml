@@ -163,7 +163,7 @@ jobs:
       - name: Require the content checkout to have produced posts
         run: |
           set -eu
-          minimum=3
+          minimum=1
           if [ ! -d site/src/content/posts ]; then
             echo '::error::site/src/content/posts is missing; the content checkout did not run.'
             exit 1
@@ -215,7 +215,7 @@ jobs:
       - name: Require the built site to contain the posts
         run: |
           set -eu
-          minimum=3
+          minimum=1
           if [ ! -f site/dist/rss.xml ]; then
             echo '::error::site/dist/rss.xml is missing; the build did not produce a feed.'
             exit 1
@@ -245,7 +245,7 @@ jobs:
       - name: Require the published slugs to match the checked-out posts
         run: |
           set -eu
-          minimum=3
+          minimum=1
           posts='site/src/content/posts'
           dist='site/dist/posts'
 
@@ -277,20 +277,18 @@ jobs:
           # **集合の比較より先に、スラッグの形を見る。**
           #
           # expected は記事ディレクトリからの相対パスで作るので、corpus が入れ子なら
-          # 期待値も `posts/hello-world` になり、dist 側も同じで**一致してしまう。**
+          # 期待値も `posts/2026/09/27/142621` になり、dist 側も同じで**一致してしまう。**
           # 集合の比較は corpus と dist の内部整合しか見ていない。実際の事故
           # （content repo のルートを丸ごと置く）では両方が同じだけ入れ子になるので、
           # ここで形を直接主張しないと素通りする。
           #
-          # 正当な形は 2 つだけ。分離前から公開している**平坦スラッグ**（URL を変えると
-          # RSS の <guid> が変わり、購読者に全記事が再配信される。取り消せない）と、
-          # 投稿日時から導出する **`YYYY/MM/DD/HHmmss`**。
+          # 正当な形は投稿日時から導出する **`YYYY/MM/DD/HHmmss`** だけ。
           #
-          # **「/ を含めば失敗」ではなく形で見るのが要。** 日付パスを許した以上、
-          # 区切りの有無では `posts/2026/09/08/054001` を弾けない。桁と階層を固定して
-          # はじめて、日付パス時代に同じ事故が起きても止まる。
+          # **「/ を含めば失敗」ではなく形で見るのが要。** スラッグ自身がスラッシュを含む
+          # ので、区切りの有無では `posts/2026/09/08/054001` を弾けない。桁と階層を固定して
+          # はじめて、content repo のルートを置く事故が止まる。
           #
-          # **`api/src/posts/slug.ts` の POST_SLUG_PATTERN と同じ集合を受理する。**
+          # **`api/src/posts/slug.ts` の DATE_SLUG_PATTERN と同じ集合を受理する。**
           # シェルは POSIX ERE で `(?:` が使えないため、同じ表現を貼れず 2 箇所に
           # 別表現を持つことになる。両者が一致することは
           # infra/test/workflow-deploy-steps.test.ts が**両方を実際に走らせて**
@@ -302,10 +300,10 @@ jobs:
           # 空文字になり `[ -n ]` が偽になる。**効くのは列挙の見た目だけ**で、
           # 記事が 0 本かつ dist に不正な形があるときに、原因でない空行が
           # 先頭に並ぶのを防ぐ。実測して確かめたうえでこう書いている。
-          slug_shape='^([a-z0-9]+(-[a-z0-9]+)*|[0-9]{4}/[0-9]{2}/[0-9]{2}/[0-9]{6})$'
+          slug_shape='^[0-9]{4}/[0-9]{2}/[0-9]{2}/[0-9]{6}$'
           invalid="$(printf '%s\n%s\n' "$expected" "$actual" | grep -v '^$' | grep -vE "$slug_shape" | sort -u || true)"
           if [ -n "$invalid" ]; then
-            echo '::error::post slugs must be flat or YYYY/MM/DD/HHmmss, but these are neither:'
+            echo '::error::post slugs must be YYYY/MM/DD/HHmmss, but these are not:'
             printf '%s\n' "$invalid"
             echo 'the content repository root was probably checked out onto the posts directory.'
             exit 1

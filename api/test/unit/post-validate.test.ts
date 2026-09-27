@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { POST_SLUG_PATTERN, dateSlug } from '../../src/posts/slug.ts';
-import { PostValidationError, SLUG_PATTERN, TAG_PATTERN, validatePost } from '../../src/posts/validate.ts';
+import { DATE_SLUG_PATTERN, dateSlug } from '../../src/posts/slug.ts';
+import { PostValidationError, TAG_PATTERN, validatePost } from '../../src/posts/validate.ts';
 
 const NOW_MS = Date.UTC(2026, 7, 30, 12, 34, 56);
 
@@ -45,14 +45,14 @@ describe('slug は入力ではなく pubDate から導出される', () => {
     expect(validatePost(valid({ pubDate }), NOW_MS).slug).toBe(expected);
   });
 
-  it('導出された slug は POST_SLUG_PATTERN を満たす', () => {
+  it('導出された slug は DATE_SLUG_PATTERN を満たす', () => {
     for (const pubDate of [
       '2026-09-07T20:40:01.277Z',
       '2026-09-07T15:00:00.000Z',
       '2026-12-31T15:00:00.000Z',
       '2020-01-01T00:00:00.000Z',
     ]) {
-      expect(POST_SLUG_PATTERN.test(validatePost(valid({ pubDate }), NOW_MS).slug)).toBe(true);
+      expect(DATE_SLUG_PATTERN.test(validatePost(valid({ pubDate }), NOW_MS).slug)).toBe(true);
     }
   });
 
@@ -77,14 +77,6 @@ describe('slug は入力ではなく pubDate から導出される', () => {
     // 導出順序の主張。slug を先に作ろうとすると dateSlug が素の Error を投げ、
     // PostValidationError ではなくなって 400 にならない（500 になる）。
     expectRejected(valid({ pubDate: 'not a date' }), 'pubDate');
-  });
-
-  it('SLUG_PATTERN は既存の平坦スラッグの形として残っている', () => {
-    // 入力の検査には使わなくなったが、移行前の 8 本が従う形の定数として
-    // site / admin の契約テストが参照している。
-    expect(SLUG_PATTERN.test('hello-world')).toBe(true);
-    expect(SLUG_PATTERN.test('a.b')).toBe(false);
-    expect(SLUG_PATTERN.test('2026/09/08/054001')).toBe(false);
   });
 });
 

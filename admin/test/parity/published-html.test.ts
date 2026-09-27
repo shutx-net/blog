@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseFrontmatter } from '@astrojs/markdown-remark';
 import { describe, expect, it } from 'vitest';
@@ -22,7 +23,11 @@ interface Post {
   body: string;
 }
 
-const posts: Post[] = readdirSync(POSTS_DIR)
+// **再帰で読む。** スラッグは日付パス（YYYY/MM/DD/HHmmss）なので記事は 4 階層下に
+// あり、非再帰だと `.md` が 1 件も見つからない。そのとき posts が空になって
+// `it.each(published)` がテストを 0 件生成し、**一致テストが消滅したまま緑になる。**
+// 直下の 3 つの床（フィクスチャ / 公開記事 / 下書きが 1 件以上）がそれを捕まえる。
+const posts: Post[] = readdirSync(POSTS_DIR, { recursive: true, encoding: 'utf8' })
   .filter((name) => name.endsWith('.md'))
   .sort()
   .map((name) => {
@@ -128,10 +133,13 @@ describe('公開済み HTML と renderPreview のバイト一致', () => {
   // なった時点で、これが POSTS_DIR の配線ミスを捕まえる唯一の主張になる。**
   it('dist の記事ページ集合が corpus の公開記事集合と一致する', () => {
     const postsRoot = `${DIST_DIR}posts/`;
+    // **葉のディレクトリを再帰で集める。** 直下の名前だけを取る形だと、日付パスでは
+    // `['2026']` になって集合比較が必ず食い違う（= 常に赤で、何も証明しない）。
+    // `index.html` を持つディレクトリを `dist/posts/` からの相対パスで拾う。
     const inDist = existsSync(postsRoot)
-      ? readdirSync(postsRoot, { withFileTypes: true })
-          .filter((entry) => entry.isDirectory())
-          .map((entry) => entry.name)
+      ? readdirSync(postsRoot, { recursive: true, encoding: 'utf8' })
+          .filter((name) => name.endsWith('index.html'))
+          .map((name) => dirname(name))
           .sort()
       : [];
 

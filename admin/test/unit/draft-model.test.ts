@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { dateSlug } from '@blog/api/src/posts/slug.ts';
-import { SLUG_PATTERN, TAG_PATTERN, PostValidationError } from '@blog/api/src/posts/validate.ts';
+import { TAG_PATTERN, PostValidationError } from '@blog/api/src/posts/validate.ts';
 import {
-  SLUG_PATTERN as ADMIN_SLUG_PATTERN,
   TAG_PATTERN as ADMIN_TAG_PATTERN,
   dateSlug as ADMIN_DATE_SLUG,
   emptyDraft,
@@ -54,13 +53,9 @@ describe('parseTags', () => {
 });
 
 describe('**規則を admin 側で再定義していない**', () => {
-  it('SLUG_PATTERN が api から import した同一オブジェクトである', () => {
+  it('TAG_PATTERN が api から import した同一オブジェクトである', () => {
     // toBe（参照同一性）。toEqual だと「同じ形の別の正規表現」でも通ってしまい、
     // 片方だけ緩めたときに気づけない。
-    expect(ADMIN_SLUG_PATTERN).toBe(SLUG_PATTERN);
-  });
-
-  it('TAG_PATTERN が api から import した同一オブジェクトである', () => {
     expect(ADMIN_TAG_PATTERN).toBe(TAG_PATTERN);
   });
 
