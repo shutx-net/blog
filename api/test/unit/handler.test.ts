@@ -146,7 +146,7 @@ describe('handler の応答', () => {
     const response = await (await handler())({
       ...base,
       rawPath: '/api/posts',
-      body: JSON.stringify({ slug: 'x', title: 't', description: 'd', body: 'b' }),
+      body: JSON.stringify({ title: 't', description: 'd', body: 'b' }),
       requestContext: {
         ...base.requestContext,
         http: { ...base.requestContext.http, method: 'POST', path: '/api/posts' },

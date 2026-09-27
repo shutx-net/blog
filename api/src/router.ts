@@ -4,6 +4,7 @@ import type { ApiRequest, ApiResponse } from './http.ts';
 import { InvalidJsonBodyError, errorResponse, isJsonContentType, jsonResponse, parseJsonObject } from './http.ts';
 import { SlugConflictError } from './github/commit.ts';
 import { DeployDispatchError } from './github/dispatch.ts';
+import { commitMessages } from './posts/commit-message.ts';
 import { renderMarkdown } from './posts/frontmatter.ts';
 import { PostValidationError, validateOverwrite, validatePost } from './posts/validate.ts';
 import { MediaValidationError } from './media/presign.ts';
@@ -95,8 +96,10 @@ const createPost = async ({ body, deps }: RouteContext): Promise<ApiResponse> =>
       // AGENTS.md の Conventional Commits はリポジトリ規約なので、API 経由の
       // コミットにも同じように適用する。
       // **どちらが使われるかは publisher が決める**（存在確認を持っているのが向こう）。
-      createMessage: `feat(site): 記事 ${post.slug} を追加`,
-      replaceMessage: `feat(site): 記事 ${post.slug} を更新`,
+      //
+      // **slug ではなく title で組む。** slug は pubDate から導出した日付パスなので、
+      // `記事 2026/09/08/054001 を追加` では履歴から中身が読めない。
+      ...commitMessages(post.title),
       overwrite,
     });
   } catch (error) {

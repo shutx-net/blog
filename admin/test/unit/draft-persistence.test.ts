@@ -29,7 +29,6 @@ const memoryStorage = (): WebStorageLike => {
 const newStore = (): SessionStore => createSessionStore(memoryStorage());
 
 const typed = (overrides: Partial<DraftFields> = {}): DraftFields => ({
-  slug: 'a-post',
   title: '記事のタイトル',
   description: '説明',
   pubDate: '2026-08-31T12:00',
@@ -40,7 +39,7 @@ const typed = (overrides: Partial<DraftFields> = {}): DraftFields => ({
 });
 
 describe('saveDraft -> loadDraft', () => {
-  it('7 フィールドすべてが往復する', () => {
+  it('6 フィールドすべてが往復する', () => {
     const store = newStore();
     saveDraft(store, typed());
     expect(loadDraft(store)).toEqual(typed());
@@ -93,7 +92,7 @@ describe('**空の下書きは保存しない**', () => {
   });
 
   it.each([
-    ['slug だけ', { slug: 'x' }],
+    ['title だけ', { title: 'x' }],
     ['body だけ', { body: 'x' }],
     ['draft が false', { draft: false }],
     ['pubDate だけ', { pubDate: '2026-01-01T00:00' }],
@@ -110,10 +109,10 @@ describe('**空の下書きは保存しない**', () => {
 
 describe('**壊れていても投げない**（復元に失敗してもエディタは開ける）', () => {
   it.each([
-    ['壊れたレコード', { slug: 123 }],
-    ['draft が欠けている', { slug: '', title: '', description: '', pubDate: '', tags: '', body: '' }],
+    ['壊れたレコード', { title: 123 }],
+    ['draft が欠けている', { title: '', description: '', pubDate: '', tags: '', body: '' }],
     ['draft が文字列', { ...typed(), draft: 'true' }],
-    ['body が欠けている', { slug: 'x', title: '', description: '', pubDate: '', tags: '', draft: true }],
+    ['body が欠けている', { title: '', description: '', pubDate: '', tags: '', draft: true }],
     ['空オブジェクト', {}],
     ['配列', [1, 2]],
     ['文字列', 'nope'],
@@ -122,6 +121,15 @@ describe('**壊れていても投げない**（復元に失敗してもエディ
     store.set(DRAFT_KEY, record);
     expect(() => loadDraft(store)).not.toThrow();
     expect(loadDraft(store)).toBeUndefined();
+  });
+
+  it('**slug を含む旧形式の下書きも復元できる**（余分なキーは無視する）', () => {
+    // 移行前のタブが残した下書きで、エディタが開けなくなってはいけない。
+    const store = newStore();
+    store.set(DRAFT_KEY, { ...typed(), slug: 'a-post' });
+    const loaded = loadDraft(store);
+    expect(loaded?.title).toBe('記事のタイトル');
+    expect(loaded?.draft).toBe(true);
   });
 
   it('保存していなければ undefined', () => {

@@ -41,9 +41,8 @@ const noopPorts = {
 };
 
 describe('readFields', () => {
-  it('7 フィールドを DraftFields に読み出す', () => {
+  it('6 フィールドを DraftFields に読み出す', () => {
     const root = mount();
-    set(root, 'slug', 'a-post');
     set(root, 'title', 'A title');
     set(root, 'description', 'A description');
     set(root, 'pubDate', '2026-08-31T11:30');
@@ -52,7 +51,6 @@ describe('readFields', () => {
     set(root, 'body', '## H');
 
     expect(readFields(root)).toEqual({
-      slug: 'a-post',
       title: 'A title',
       description: 'A description',
       pubDate: '2026-08-31T11:30',
@@ -72,7 +70,7 @@ describe('readFields', () => {
 });
 
 describe('必須要素が無ければ即座に投げる', () => {
-  it.each(['#preview', '#body', '#problems', '#submit', '#slug'])(
+  it.each(['#preview', '#body', '#problems', '#submit', '#targetPath'])(
     '%s が無いと bindEditor が投げる',
     (selector) => {
       // 存在チェックを黙って握りつぶすと、UI が「動いているように見えて
@@ -143,18 +141,22 @@ describe('検証エラーの表示と送信ボタン', () => {
   it('エラーが #problems に field 名つきで出る', async () => {
     const root = mount();
     bindEditor(root, noopPorts);
-    set(root, 'slug', 'Bad Slug');
+    // **他を埋めてから壊す。** validatePost は title を先に見るので、
+    // title が空のままだと tags まで到達しない。
+    set(root, 'title', 'A title');
+    set(root, 'description', 'A description');
+    set(root, 'tags', 'Astro');
 
     await vi.waitFor(() => {
       const problems = root.querySelector('#problems');
-      expect(problems?.textContent).toContain('slug');
+      expect(problems?.textContent).toContain('tags');
     });
   });
 
   it('エラーがある間は送信ボタンが disabled', async () => {
     const root = mount();
     bindEditor(root, noopPorts);
-    set(root, 'slug', '');
+    set(root, 'title', '');
 
     await vi.waitFor(() => {
       expect(root.querySelector<HTMLButtonElement>('#submit')?.disabled).toBe(true);
@@ -164,7 +166,6 @@ describe('検証エラーの表示と送信ボタン', () => {
   it('全部埋めると送信ボタンが有効になる', async () => {
     const root = mount();
     bindEditor(root, noopPorts);
-    set(root, 'slug', 'a-post');
     set(root, 'title', 'A title');
     set(root, 'description', 'A description');
     set(root, 'body', 'Body.');
@@ -178,7 +179,6 @@ describe('検証エラーの表示と送信ボタン', () => {
   it('**相対パス画像の警告が出る**', async () => {
     const root = mount();
     bindEditor(root, noopPorts);
-    set(root, 'slug', 'a-post');
     set(root, 'title', 'A title');
     set(root, 'description', 'A description');
     set(root, 'body', '![a](./x.png)');
@@ -195,10 +195,10 @@ describe('onChange', () => {
   it('入力のたびに最新の DraftFields が渡る', async () => {
     const root = mount();
     const seen: string[] = [];
-    bindEditor(root, { renderPreview: async () => '', onChange: (fields) => seen.push(fields.slug) });
+    bindEditor(root, { renderPreview: async () => '', onChange: (fields) => seen.push(fields.title) });
 
-    set(root, 'slug', 'one');
-    set(root, 'slug', 'two');
+    set(root, 'title', 'one');
+    set(root, 'title', 'two');
 
     await vi.waitFor(() => {
       expect(seen.at(-1)).toBe('two');
@@ -218,6 +218,62 @@ describe('onChange', () => {
 
     await vi.waitFor(() => {
       expect(seen.at(-1)).toBe(false);
+    });
+  });
+});
+
+describe('**公開先の表示**', () => {
+  it('**pubDate を入れると #targetPath に URL が出る（TZ に依存しない）**', async () => {
+    // 入力した壁時計時刻は JST として扱われるので、テストを走らせる TZ が
+    // 変わっても期待値は同じ。**ここが TZ 依存だと本番のバグを隠す。**
+    const root = mount();
+    bindEditor(root, noopPorts);
+    set(root, 'pubDate', '2026-09-08T05:40:01');
+
+    await vi.waitFor(() => {
+      expect(root.querySelector('#targetPath')?.textContent).toBe(
+        '公開先: /posts/2026/09/08/054001/',
+      );
+    });
+  });
+
+  it('**pubDate 未入力なら「送信時刻で確定する」と出る**', async () => {
+    const root = mount();
+    bindEditor(root, noopPorts);
+    await vi.waitFor(() => {
+      expect(root.querySelector('#targetPath')?.textContent).toContain('送信時刻で確定する');
+    });
+  });
+
+  it('**textContent で入る**（innerHTML を使っていない）', async () => {
+    // #preview 以外に innerHTML を使わないのがこのアプリの境界。
+    const root = mount();
+    bindEditor(root, noopPorts);
+    set(root, 'pubDate', '2026-09-08T05:40:01');
+    await vi.waitFor(() => {
+      const element = root.querySelector('#targetPath') as HTMLElement;
+      expect(element.children).toHaveLength(0);
+      expect(element.innerHTML).toBe(element.textContent);
+    });
+  });
+
+  it('**不正な日付は入力欄に入らないので、未入力として扱われる**', async () => {
+    // `<input type="datetime-local">` は任意の文字列を保持できず、
+    // 不正な値を書き込むと value が '' になる（jsdom もブラウザも同じ）。
+    // つまり publishPathLabel の「決まらない」分岐は **DOM 経由では到達しない** —
+    // それでも関数側に残してあるのは、投げると update() ごと落ちて画面が
+    // 一切更新されなくなるため（分岐自体は draft-model.test.ts が固定している）。
+    const root = mount();
+    bindEditor(root, noopPorts);
+    set(root, 'title', 'A title');
+    set(root, 'description', 'A description');
+    set(root, 'pubDate', 'not-a-date');
+
+    expect(root.querySelector<HTMLInputElement>('#pubDate')?.value).toBe('');
+    await vi.waitFor(() => {
+      expect(root.querySelector('#targetPath')?.textContent).toContain('送信時刻で確定する');
+      // 画面は動いている（update() が落ちていない）。
+      expect(root.querySelector<HTMLButtonElement>('#submit')?.disabled).toBe(false);
     });
   });
 });

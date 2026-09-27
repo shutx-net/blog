@@ -118,7 +118,7 @@ describe('AUTH_MODE=deny-all のとき書き込み経路に到達できない', 
   it('POST /api/posts が 503 を返し、コラボレータを 1 つも呼ばない', async () => {
     const { deps, expectNoCollaboratorCalls } = spyDeps();
     const response = await dispatch(
-      jsonPost('/api/posts', { title: 't', description: 'd', body: 'b', slug: 'hello' }),
+      jsonPost('/api/posts', { title: 't', description: 'd', body: 'b' }),
       deps,
     );
     expect(response.statusCode).toBe(503);
@@ -178,7 +178,6 @@ describe('拒否テストが空虚でないことの対照（同じ入力を許�
     const { deps, publisher } = spyDeps(allowAuthorizer);
     await dispatch(
       jsonPost('/api/posts', {
-        slug: 'hello-world',
         title: 'タイトル',
         description: '説明',
         body: '本文',
@@ -222,7 +221,6 @@ describe('鍵が未投入のとき', () => {
     });
     const response = await dispatch(
       jsonPost('/api/posts', {
-        slug: 'hello-world',
         title: 'タイトル',
         description: '説明',
         body: '本文',
@@ -240,7 +238,6 @@ describe('鍵が未投入のとき', () => {
     });
     const response = await dispatch(
       jsonPost('/api/posts', {
-        slug: 'hello-world',
         title: 'タイトル',
         description: '説明',
         body: '本文',
@@ -334,7 +331,6 @@ describe('リクエストのかたちの検証（認可を通した後）', () =
         path: '/api/posts',
         headers: { 'content-type': 'application/json; charset=utf-8' },
         rawBody: JSON.stringify({
-          slug: 'hello-world',
           title: 'タイトル',
           description: '説明',
           body: '本文',
@@ -444,7 +440,7 @@ describe('認証の拒否は 401 と 503 だけ（403 と 404 を絶対に返さ
 
   /** 認証が要る 3 経路すべてを走査する（health だけが requiresAuth: false）。 */
   const protectedRequests: [string, () => ApiRequest][] = [
-    ['POST /api/posts', () => jsonPost('/api/posts', { slug: 'x', title: 't', description: 'd', body: 'b' })],
+    ['POST /api/posts', () => jsonPost('/api/posts', { title: 't', description: 'd', body: 'b' })],
     ['POST /api/media/presign', () => jsonPost('/api/media/presign', { contentType: 'image/png', size: 100 })],
     ['GET /api/health/github-app', () => request({ path: '/api/health/github-app' })],
   ];
@@ -527,7 +523,6 @@ describe('認証の拒否は 401 と 503 だけ（403 と 404 を絶対に返さ
 describe('公開後のデプロイ起動', () => {
   const postRequest = (): ApiRequest =>
     jsonPost('/api/posts', {
-      slug: 'hello-world',
       title: 'タイトル',
       description: '説明',
       body: '本文',
@@ -672,10 +667,53 @@ describe('公開後のデプロイ起動', () => {
   });
 });
 
+describe('コミットメッセージ', () => {
+  const publishArg = async (extra: Record<string, unknown> = {}) => {
+    const { deps, publisher } = spyDeps(allowAuthorizer);
+    await dispatch(
+      jsonPost('/api/posts', {
+        title: 'タイトル',
+        description: '説明',
+        body: '本文',
+        ...extra,
+      }),
+      deps,
+    );
+    return publisher.publish.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+  };
+
+  it('**title を含み、導出された日付パスを含まない**', async () => {
+    // `記事 2026/09/08/054001 を追加` では履歴から中身が読めない。
+    const arg = await publishArg({ pubDate: '2026-09-07T20:40:01.277Z' });
+    expect(String(arg['createMessage'])).toContain('タイトル');
+    expect(String(arg['replaceMessage'])).toContain('タイトル');
+    expect(String(arg['createMessage'])).not.toContain('2026/09/08');
+    // slug のほうは日付パスで publisher に渡っている（書き込み先だから）。
+    expect(arg['slug']).toBe('2026/09/08/054001');
+  });
+
+  it('**改行入りの title が 1 行に畳まれる**', async () => {
+    // title は自由入力。改行が残ると Conventional Commits の 1 行目が壊れる。
+    const arg = await publishArg({ title: 'まとも\ndraft: true' });
+    expect(String(arg['createMessage'])).not.toMatch(/[\r\n]/);
+    expect(String(arg['createMessage'])).toContain('まとも draft: true');
+  });
+
+  it('長い title は切り詰められる', async () => {
+    const arg = await publishArg({ title: 'あ'.repeat(200) });
+    expect([...String(arg['createMessage'])].length).toBeLessThanOrEqual(50);
+    expect(String(arg['createMessage'])).toContain('…');
+  });
+
+  it('作成と更新で文言が違う', async () => {
+    const arg = await publishArg();
+    expect(arg['createMessage']).not.toBe(arg['replaceMessage']);
+  });
+});
+
 describe('スラッグの衝突', () => {
   const post = (extra: Record<string, unknown> = {}): ApiRequest =>
     jsonPost('/api/posts', {
-      slug: 'hello-world',
       title: 'タイトル',
       description: '説明',
       body: '本文',
@@ -719,7 +757,6 @@ describe('スラッグの衝突', () => {
 describe('overwrite フラグ', () => {
   const post = (extra: Record<string, unknown> = {}): ApiRequest =>
     jsonPost('/api/posts', {
-      slug: 'hello-world',
       title: 'タイトル',
       description: '説明',
       body: '本文',

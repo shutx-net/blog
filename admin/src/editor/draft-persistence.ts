@@ -16,7 +16,7 @@ import type { DraftFields } from './model.ts';
  *
  * `bind.ts` の `EditorPorts.onChange(fields)` が毎 input / change で `DraftFields` ごと
  * 呼ばれる。`app.ts` がそこに `saveDraft` を挿すだけでよく、**新しいイベント配線を
- * 足していない**（`bind.ts` は 1 行も変えていない）。
+ * 足していない**（この保存のために `bind.ts` を変えた箇所は無い)。
  *
  * # beforeunload も sendBeacon も使わない
  *
@@ -37,7 +37,7 @@ import type { DraftFields } from './model.ts';
 export const DRAFT_KEY = 'draft';
 
 /** フォームの `<input>` / `<textarea>` の id。`bind.ts` の `readFields` と対になる。 */
-const TEXT_FIELD_IDS = ['slug', 'title', 'description', 'pubDate', 'tags', 'body'] as const;
+const TEXT_FIELD_IDS = ['title', 'description', 'pubDate', 'tags', 'body'] as const;
 
 /**
  * 何も書かれていない下書きか。
@@ -91,8 +91,8 @@ export const clearDraft = (store: SessionStore): void => {
 /**
  * 下書きをフォームに書き戻す。
  *
- * **`bind.ts` を変えずに済ませるためにここに置いてある**（`readFields` の対になるが、
- * あちらはプレビュー一致の証明に関わるので差分を作らない）。id がずれると片方だけ
+ * **`readFields` の対**だが、あちら（`bind.ts`）はプレビュー一致の証明に関わるので、
+ * 復元のためだけの差分は入れない方針でここに置いてある。id がずれると片方だけ
  * 復元される壊れ方をするので、DOM テストが `readFields` との往復で固定している。
  *
  * **イベントは発火しない。** 呼び出し側（`app.ts`）が `bindEditor` より前に呼び、

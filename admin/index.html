@@ -25,12 +25,6 @@
 
       <form id="post-form" autocomplete="off">
         <div class="field">
-          <label for="slug">slug</label>
-          <input id="slug" name="slug" type="text" required />
-          <p class="hint">小文字・数字・ハイフンのみ。ドットは使えない（URL 書き換えが効かなくなる）。</p>
-        </div>
-
-        <div class="field">
           <label for="title">title</label>
           <input id="title" name="title" type="text" required />
         </div>
@@ -44,6 +38,13 @@
           <label for="pubDate">pubDate</label>
           <input id="pubDate" name="pubDate" type="datetime-local" />
           <p class="hint">空にすると送信時刻になる。</p>
+          <!--
+            **公開先は入力ではなく pubDate から決まる**（日本時間の YYYY/MM/DD/HHmmss）。
+            手入力だった頃は、前回の下書きから復元された slug が残ったまま別の記事を
+            投稿し、公開済みの記事を黙って置き換える事故が起きた（2026-09-07）。
+            読み取り専用で見せるだけにして、入力させない。
+          -->
+          <p id="targetPath" class="hint" role="status"></p>
         </div>
 
         <div class="field">

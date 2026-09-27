@@ -14,7 +14,6 @@ const NOW_MS = Date.UTC(2026, 7, 30, 12, 34, 56);
 const build = (overrides: Record<string, unknown> = {}) =>
   validatePost(
     {
-      slug: 'hello-world',
       title: 'こんにちは',
       description: '最初の記事',
       body: '本文です。\n',

@@ -73,6 +73,50 @@ export const POST_SLUG_PATTERN = new RegExp(
  */
 export const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
+/** `JST_OFFSET_MS` を ISO 8601 のオフセット表記で書いたもの。 */
+export const JST_OFFSET_SUFFIX = '+09:00';
+
+/**
+ * ISO 8601 の日時に**明示的なオフセットが付いているか**。
+ *
+ * # なぜ要るか
+ *
+ * `Date.parse('2026-09-08T05:40:01')` は**オフセットの無い日時をホストの
+ * タイムゾーンで解釈する**。`<input type="datetime-local">` が返すのはまさにこの形で、
+ * ブラウザは著者の TZ、Lambda は UTC なので、**同じ入力から違う瞬間ができる**。
+ *
+ * 実測（`2026-09-08T05:40:01` を dateSlug に通した結果）:
+ *
+ * ```
+ * TZ=Asia/Tokyo        2026/09/08/054001
+ * TZ=UTC               2026/09/08/144001
+ * TZ=America/New_York  2026/09/08/184001
+ * ```
+ *
+ * **公開先の URL が著者の居場所で変わってはいけない**（RSS の guid も変わる）。
+ * だから曖昧な形は入口で拒み、admin 側で `jstWallClockToInstant` を通させる。
+ *
+ * 日付だけ（`2026-09-08`）も false にする。ES の仕様では UTC 扱いだが、
+ * 「著者が何時のつもりだったか」は表現されていないので、推測しない。
+ */
+const EXPLICIT_OFFSET_PATTERN =
+  /T[0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?(?:[Zz]|[+-][0-9]{2}(?::?[0-9]{2})?)$/;
+
+export const hasExplicitOffset = (value: string): boolean => EXPLICIT_OFFSET_PATTERN.test(value);
+
+/**
+ * 著者が入力した**壁時計時刻を JST の瞬間として**読める文字列にする。
+ *
+ * **「ブラウザのローカル時刻の瞬間」として送る案は採らない。** JST の著者では同じ
+ * 結果になるが、旅行先や UTC のランナーで書いた日に公開先が変わる。
+ * **ブログの日付が著者の居場所で変わるのは筋が悪い** — 利用者が選んだ
+ * 「タイムゾーンは Asia/Tokyo」という決定は、まさにそれを避けるためのもの。
+ *
+ * 既にオフセットがあるものは触らない（二重に付けない）。
+ */
+export const jstWallClockToInstant = (wallClock: string): string =>
+  hasExplicitOffset(wallClock) ? wallClock : `${wallClock}${JST_OFFSET_SUFFIX}`;
+
 /**
  * 投稿日時から日付パスのスラッグを作る。
  *

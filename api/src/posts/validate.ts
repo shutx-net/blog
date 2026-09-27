@@ -1,14 +1,19 @@
+import { dateSlug, hasExplicitOffset } from './slug.ts';
+
 /**
- * 記事スラッグの許容形。
+ * 移行前から使ってきた平坦スラッグの形。**入力の検査には使わない。**
  *
- * **ドットを許さないのは infra/functions/rewrite-uri.js と結合しているため。**
- * CloudFront Function の URI 書き換えは「最後のスラッシュより後にドットがあれば
- * 静的ファイル」というヒューリスティックなので、/posts/node-24.19-notes には
- * /index.html が付かず S3 が 403 を返す。infra/README.md の「記事スラッグに
- * ドットを使わない」はこれまで人間の規律でしかなく、**この API が最初の機械的な
- * 防波堤になる**。片方だけ直さないこと。
+ * **slug は入力ではなくなった**（`pubDate` から `dateSlug` で導出する）。この定数が
+ * 残っているのは、移行前に公開した 8 本がこの形に従っており、**その URL を変えられない**
+ * から（変えると RSS の `<guid>` が変わり、購読者に全記事が再配信される。取り消せない）。
+ * `slug.ts` の `FLAT_SLUG_PATTERN` と同一で、`POST_SLUG_PATTERN` の片側になっている。
  *
- * スラッシュも大文字も許さないので、パストラバーサルもここで同時に閉じる。
+ * ドットを許さない理由も引き続き有効: `infra/functions/rewrite-uri.js` の URI 書き換えは
+ * 「最後のスラッシュより後にドットがあれば静的ファイル」というヒューリスティックなので、
+ * `/posts/node-24.19-notes` には `/index.html` が付かず S3 が 403 を返す。
+ * 導出される日付パスにドットが入らないのは `DATE_SLUG_PATTERN` が保証している。
+ *
+ * **site / admin の契約テストがこの定数を参照している。** 消さないこと。
  */
 export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -20,10 +25,8 @@ export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
  */
 export const TAG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-/** slug の上限。ファイル名として現実的な長さに収める。 */
-const SLUG_MAX_LENGTH = 200;
-
 export interface ValidatedPost {
+  /** **導出値。** 入力ではない。`dateSlug(pubDate)` の結果が入る。 */
   slug: string;
   title: string;
   description: string;
@@ -83,9 +86,15 @@ export const validateOverwrite = (raw: Record<string, unknown>): boolean => {
  * @param nowMs 注入するクロック（ミリ秒）。pubDate 省略時の既定値に使う。
  */
 export const validatePost = (raw: Record<string, unknown>, nowMs: number): ValidatedPost => {
-  const slug = raw['slug'];
-  if (typeof slug !== 'string' || slug.length > SLUG_MAX_LENGTH || !SLUG_PATTERN.test(slug)) {
-    throw new PostValidationError('slug', 'must match /^[a-z0-9]+(?:-[a-z0-9]+)*$/ (no dots)');
+  // **送られてきたら拒否する。黙って捨てない。**
+  //
+  // 捨てると「この slug で公開されるつもりだった」という呼び出し側の思い違いが無言で
+  // 通り、意図しない URL に記事が出る。`validateOverwrite` が `overwrite: 'true'` を
+  // 400 にしているのと同じ立場で、曖昧な入力を勝手に解釈しない。
+  //
+  // `undefined` だけは通す。JSON に現れない形なので「送っていない」と区別できない。
+  if (raw['slug'] !== undefined) {
+    throw new PostValidationError('slug', 'is derived from pubDate and must not be supplied');
   }
 
   const title = requireTrimmedString(raw, 'title');
@@ -118,10 +127,25 @@ export const validatePost = (raw: Record<string, unknown>, nowMs: number): Valid
     pubDate = new Date(nowMs).toISOString();
   } else {
     if (typeof rawPubDate !== 'string') throw new PostValidationError('pubDate', 'must be a string');
+    // **オフセットの無い日時を黙って推測しない。**
+    //
+    // `Date.parse('2026-09-08T05:40:01')` はホストの TZ で解釈するので、同じ入力から
+    // ブラウザ（著者の TZ）と Lambda（UTC）で違う瞬間ができ、**公開先の URL が著者の
+    // 居場所で変わる**（RSS の guid も変わる。取り消せない）。
+    //
+    // 著者の壁時計時刻を JST として送るのは呼び出し側の責任にする
+    // （`admin` は `jstWallClockToInstant` を通す）。`slug` を 400 にしたのと同じ立場。
+    if (!hasExplicitOffset(rawPubDate)) {
+      throw new PostValidationError('pubDate', 'must carry an explicit UTC offset (Z or +09:00)');
+    }
     const parsed = Date.parse(rawPubDate);
     if (Number.isNaN(parsed)) throw new PostValidationError('pubDate', 'must be a valid date');
     pubDate = new Date(parsed).toISOString();
   }
+
+  // **導出は pubDate が確定したあと。** 先に作ろうとすると dateSlug が素の Error を
+  // 投げ、PostValidationError にならないので 400 ではなく 500 になる。
+  const slug = dateSlug(pubDate);
 
   return { slug, title, description, pubDate, draft, tags: tags as string[], body };
 };

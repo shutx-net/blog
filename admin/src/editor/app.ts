@@ -13,7 +13,7 @@ import type { AuthTransport } from '../auth/session.ts';
 import type { SessionStore } from '../storage/session-store.ts';
 import { bindEditor } from './bind.ts';
 import { applyDraftToForm, clearDraft, loadDraft, saveDraft } from './draft-persistence.ts';
-import { validateDraft } from './model.ts';
+import { postRequestBody, validateDraft } from './model.ts';
 
 const CREATE_POST: ApiOperation = { method: 'POST', path: '/api/posts' };
 
@@ -92,9 +92,16 @@ class OverwriteDeclinedError extends Error {
   }
 }
 
-/** 409 のときの確認文。**失われるものを先に言う。** */
+/**
+ * 409 のときの確認文。**失われるものを先に言う。**
+ *
+ * **ここに到達するのは同じ秒に 2 本投稿したときだけ。** slug は pubDate から
+ * `YYYY/MM/DD/HHmmss` で導出されるので、秒が違えば衝突しない。
+ * それでも経路と確認を残しているのは、**記事の編集機能の土台になる**から
+ * （既存の記事を開いて直す操作は、まさに同じパスへの上書きである）。
+ */
 export const slugConflictPrompt = (slug: string): string =>
-  `すでに「${slug}」という記事がある。上書きすると今の内容は置き換わる（Git の履歴には残る）。上書きするか？`;
+  `${slug} には既に記事がある（同じ秒に投稿したか、pubDate が既存の記事と同じ）。上書きすると今の内容は置き換わる（Git の履歴には残る）。上書きするか？`;
 
 /** api が返す衝突コード。`api/src/router.ts` の綴りと一致していること。 */
 const SLUG_CONFLICT = 'slug_conflict';
@@ -112,14 +119,14 @@ const isSlugConflict = (error: unknown): boolean =>
  */
 const describeFailure = (error: unknown): string => {
   if (error instanceof OverwriteDeclinedError) {
-    return '上書きしなかったので、何も変更していない。スラッグを変えるか、もう一度送信して上書きすること';
+    return '上書きしなかったので、何も変更していない。pubDate を変えるか、もう一度送信して上書きすること';
   }
   if (!(error instanceof ApiError)) {
     return `送信に失敗した: ${(error as Error).message}`;
   }
   if (isSlugConflict(error)) {
     // 確認を出せなかった場合にここへ来る（confirm が無い環境など）。
-    return 'そのスラッグの記事は既にある。上書きするなら確認に「はい」と答えること';
+    return 'その公開先には既に記事がある。上書きするなら確認に「はい」と答えること';
   }
   if (error.status === 404) {
     return '404 が返った。経路が無いのではなく、x-amz-content-sha256 が届いていない可能性が高い（署名に失敗した 403 が CloudFront で 404 の HTML に化ける）';
@@ -198,7 +205,7 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
   const editor = bindEditor(deps.root, {
     renderPreview: deps.renderPreview,
     // **既存の差し込み口をそのまま使う。** 毎 input / change で呼ばれるので、
-    // 新しいイベント配線は要らない（bind.ts は 1 行も変えていない）。
+    // 新しいイベント配線は要らない。
     onChange: (fields) => {
       if (!ready || store === undefined) return;
       saveDraft(store, fields);
@@ -264,9 +271,14 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
     editor.setBusy(true);
     editor.setStatus('送信中…');
 
-    /** **上書きの意思は 2 回目の送信でしか付かない。** 1 回目は必ず付けない。 */
+    /**
+     * **上書きの意思は 2 回目の送信でしか付かない。** 1 回目は必ず付けない。
+     *
+     * **slug は送らない**（`postRequestBody`）。api は付いていたら 400 にする。
+     */
+    const body = postRequestBody(post);
     const send = (overwrite: boolean): Promise<unknown> =>
-      client.call(CREATE_POST, overwrite ? { ...post, overwrite: true } : post);
+      client.call(CREATE_POST, overwrite ? { ...body, overwrite: true } : body);
 
     const sendable = post;
 
