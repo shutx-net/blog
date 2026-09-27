@@ -116,3 +116,43 @@ describe('oxlint の走査範囲', () => {
     expect(summary?.number_of_files).toBeGreaterThan(0);
   });
 });
+
+/**
+ * **規約ルールが設定に残っていることの主張。テキスト一致であることを承知で置く。**
+ *
+ * 上の床は「走査対象が縮む」を捕まえるが、**overrides の `files` グロブを 1 文字
+ * 変えても、ルールを丸ごと消しても落ちない**（実測で確認済み）。どちらもルールを
+ * 静かに無効にする。
+ *
+ * **本来は違反を実際に書いて落ちることを見たい**が、走査対象のディレクトリに
+ * 一時ファイルを作ると、同時に走る別のスイートの oxlint や `npm run lint` が
+ * それを拾う。**この repo はプロセス横断の共有状態で 3 回事故を起こしている**
+ * （`api/dist` を壊す、書きかけを `Code.fromAsset` の対象に置く、`os.tmpdir()`）。
+ * 同じ形を作るくらいなら、弱い主張で止めるほうがよい。
+ *
+ * **振る舞いの証明は導入時に 1 度だけ手で行った**（各 override の対象で違反が
+ * 実際に報告され、対象外では報告されないことを 12 通り確認）。ここが守るのは
+ * 「そのとき確かめた設定が黙って書き換わらないこと」だけで、**グロブが本当に
+ * 意図した場所に当たるかまでは見ていない。**
+ */
+const EXPECTED_OVERRIDES: ReadonlyArray<{ label: string; glob: string; rule: string }> = [
+  { label: 'テストは OS の一時ディレクトリに書かない', glob: '**/test/**/*.ts', rule: 'no-restricted-imports' },
+  { label: 'ブラウザにも載るコードは node 組み込みに触らない', glob: 'api/src/posts/**/*.ts', rule: 'no-restricted-imports' },
+  { label: 'admin は XMLHttpRequest を使わない', glob: 'admin/src/**/*.ts', rule: 'no-restricted-globals' },
+];
+
+describe('oxlint の規約ルール', () => {
+  const config = (): string =>
+    execFileSync('cat', ['.oxlintrc.json'], { cwd: REPO_ROOT, encoding: 'utf8' });
+
+  it('主張の表が空でない', () => {
+    expect(EXPECTED_OVERRIDES.length).toBeGreaterThan(0);
+  });
+
+  it.each(EXPECTED_OVERRIDES)('「$label」の override が残っている', ({ glob, rule }) => {
+    const source = config();
+
+    expect(source, `${glob} の override が消えている`).toContain(JSON.stringify(glob));
+    expect(source, `${rule} が設定から消えている`).toContain(JSON.stringify(rule));
+  });
+});
