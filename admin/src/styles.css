@@ -144,3 +144,55 @@ button[disabled] {
 .auth-bar button[hidden] {
   display: none;
 }
+
+/*
+ * 既存記事の一覧。**下書きは色ではなく文字で示す**（post-list.ts が「下書き」を
+ * 入れる）。色を足しても、それは装飾でしかない。
+ */
+#post-list {
+  min-width: 0;
+}
+
+.post-list__bar {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.post-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.post-list__item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding-block: 0.35rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.post-list__date {
+  flex: none;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+.post-list__title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.post-list__draft {
+  flex: none;
+  padding: 0 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.75em;
+}
+
+.post-list__empty {
+  opacity: 0.75;
+}

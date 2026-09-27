@@ -23,6 +23,21 @@
         <button id="signout" type="button" hidden>サインアウト</button>
       </div>
 
+      <!--
+        既存記事の一覧。**読み込みは明示的な操作**（ログインと同じ方針）。
+        起動時に自動で取らないのは、開いただけで API を呼ばないため、そして
+        `blog-content` への直接コミットで増えた記事を任意のタイミングで拾えるため。
+        **インライン <script> と on*= を書かないこと** — CSP を成立させる invariant。
+      -->
+      <section id="post-list">
+        <h2>既存の記事</h2>
+        <div class="post-list__bar">
+          <button id="post-list-reload" type="button">更新</button>
+        </div>
+        <p id="post-list-status" class="hint" role="status"></p>
+        <ul id="post-list-items" class="post-list"></ul>
+      </section>
+
       <form id="post-form" autocomplete="off">
         <div class="field">
           <label for="title">title</label>

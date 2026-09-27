@@ -14,8 +14,17 @@ import type { SessionStore } from '../storage/session-store.ts';
 import { bindEditor } from './bind.ts';
 import { applyDraftToForm, clearDraft, loadDraft, saveDraft } from './draft-persistence.ts';
 import { postRequestBody, validateDraft } from './model.ts';
+import { renderPostList } from './post-list.ts';
+import type { PostListEntry } from './post-list.ts';
 
 const CREATE_POST: ApiOperation = { method: 'POST', path: '/api/posts' };
+const LIST_POSTS: ApiOperation = { method: 'GET', path: '/api/posts' };
+
+/** 一覧を読む前に出す文。**「0 件」と区別する。** */
+const POST_LIST_IDLE = '「更新」を押すと既存の記事を読み込む';
+
+/** 未認証で「更新」を押されたとき。**API は呼ばない。** */
+const POST_LIST_SIGNED_OUT = 'ログインすると既存の記事を読み込める';
 
 export interface AppDeps {
   root: HTMLElement;
@@ -217,10 +226,16 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
   const imageInput = deps.root.querySelector<HTMLInputElement>('#image');
   const signinButton = deps.root.querySelector<HTMLButtonElement>('#signin');
   const signoutButton = deps.root.querySelector<HTMLButtonElement>('#signout');
+  const listReload = deps.root.querySelector<HTMLButtonElement>('#post-list-reload');
+  const listStatus = deps.root.querySelector<HTMLElement>('#post-list-status');
+  const listItems = deps.root.querySelector<HTMLElement>('#post-list-items');
   if (form === null) throw new Error('admin app: #post-form が見つからない');
   if (imageInput === null) throw new Error('admin app: #image が見つからない');
   if (signinButton === null) throw new Error('admin app: #signin が見つからない');
   if (signoutButton === null) throw new Error('admin app: #signout が見つからない');
+  if (listReload === null) throw new Error('admin app: #post-list-reload が見つからない');
+  if (listStatus === null) throw new Error('admin app: #post-list-status が見つからない');
+  if (listItems === null) throw new Error('admin app: #post-list-items が見つからない');
 
   /** **二重送信の防止はここ 1 箇所。** ボタンの disabled は表示にすぎない。 */
   let inFlight = false;
@@ -239,6 +254,50 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
     signinButton.hidden = signedIn;
     signoutButton.hidden = !signedIn;
     editor.setBusy(inFlight || !signedIn);
+  };
+
+  /**
+   * 一覧の読み込み。**エディタの状態には触らない。**
+   *
+   * 失敗は `#post-list-status` にだけ出す。`#problems`（入力の指摘）や
+   * `#status`（送信の結果）に混ぜると、一覧が読めないだけで「記事が書けない」と
+   * 読めてしまう。**一覧が読めなくても記事は書ける。**
+   */
+  let listInFlight = false;
+
+  const refreshPostList = (): void => {
+    if (listInFlight) return;
+    if (!deps.auth.isAuthenticated()) {
+      // **API を呼ばない。** 401 を並べても情報が増えない。
+      listStatus.textContent = POST_LIST_SIGNED_OUT;
+      return;
+    }
+
+    listInFlight = true;
+    listReload.disabled = true;
+    listStatus.textContent = '読み込み中…';
+
+    void client
+      .call(LIST_POSTS)
+      .then((result) => {
+        const record = (result ?? {}) as Record<string, unknown>;
+        const posts = Array.isArray(record['posts']) ? (record['posts'] as PostListEntry[]) : [];
+        renderPostList(listItems, posts);
+        listStatus.textContent = `${posts.length} 件`;
+      })
+      .catch((error: unknown) => {
+        // **describeFailure を再利用する。** 404 が署名の失敗であるという知識を
+        // 一覧側でも共有する（別の文言を書くと片方だけ古くなる）。
+        listStatus.textContent = describeFailure(error);
+      })
+      .finally(() => {
+        listInFlight = false;
+        listReload.disabled = false;
+      });
+  };
+
+  const onListReload = (): void => {
+    refreshPostList();
   };
 
   const onSignInClick = (): void => {
@@ -377,8 +436,11 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
   imageInput.addEventListener('change', onImage);
   signinButton.addEventListener('click', onSignInClick);
   signoutButton.addEventListener('click', onSignOutClick);
+  listReload.addEventListener('click', onListReload);
 
   renderAuthState();
+  // **起動時に取りに行かない。** 押されるまで API を呼ばない。
+  listStatus.textContent = POST_LIST_IDLE;
 
   // **起動時のメッセージ。** callback の結果があればそれを優先する。
   // どちらも `setStatus`（`textContent`）を通すので、認可サーバが返した任意文字列が
@@ -397,6 +459,7 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
       imageInput.removeEventListener('change', onImage);
       signinButton.removeEventListener('click', onSignInClick);
       signoutButton.removeEventListener('click', onSignOutClick);
+      listReload.removeEventListener('click', onListReload);
     },
   };
 };
