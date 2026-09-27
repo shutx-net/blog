@@ -164,6 +164,19 @@ describe("pagination", () => {
     expect(readDist("2/index.html")).toContain('rel="prev" href="/"');
   });
 
+  // Prev/next alone do not say where the reader is. expectedPages is derived from
+  // the fixtures, so this keeps saying the truth when a post is added.
+  it("says which page of how many the reader is on", () => {
+    expect(readDist("index.html")).toContain(`1 / ${expectedPages}`);
+    expect(readDist("2/index.html")).toContain(`2 / ${expectedPages}`);
+  });
+
+  // The position is for the reader, and the reader is told it by the surrounding
+  // prose -- "1 / 2" on its own is not a sentence a screen reader can place.
+  it("labels the position for assistive technology", () => {
+    expect(readDist("index.html")).toContain('aria-label="ページ送り"');
+  });
+
   it("splits the posts across the pages", () => {
     expect(readDist("2/index.html")).toContain("Fourth post");
     expect(readDist("index.html")).not.toContain("Fourth post");

@@ -482,10 +482,44 @@ main > h1 {
   margin-block-start: 0.2rem;
 }
 
-main > nav {
+/*
+ * Three columns so the position stays centred regardless of which links exist:
+ * the two edges take equal space and the middle is only as wide as "1 / 2".
+ * A flex row with `gap` alone would shift the number sideways on the first and
+ * last page.
+ */
+.pager {
   display: flex;
-  gap: 1.5rem;
-  margin-block-start: 2rem;
+  align-items: baseline;
+  gap: 1rem;
+  margin-block-start: 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.9375rem;
+}
+
+.pager__edge {
+  flex: 1;
+}
+
+/* The next link sits against the right edge; the previous one against the left. */
+.pager__edge--next {
+  text-align: end;
+}
+
+.pager__position {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.pager a {
+  text-decoration: none;
+}
+
+.pager a:hover {
+  text-decoration: underline;
 }
 
 main > p {
