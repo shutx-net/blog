@@ -2,6 +2,7 @@ import { isUnifiedProcessor } from "@astrojs/markdown-remark";
 import { describe, expect, it } from "vitest";
 
 import config from "../../astro.config.mjs";
+import { defined } from "../support/defined.ts";
 
 // This suite is the only effective guard on AGENTS.md's non-negotiable decision 1
 // ("use @astrojs/markdown-remark explicitly"). The generated HTML cannot protect it:
@@ -10,15 +11,17 @@ import config from "../../astro.config.mjs";
 // `processor:` line being deleted. Keep the config-level assertion below.
 describe("markdown processor configuration", () => {
   it("is explicitly set to the unified() processor", () => {
-    const processor = config.markdown?.processor;
+    // `toBeDefined()` は実行時の主張で、TS の型は絞らない（それが `possibly undefined`
+    // を 3 件出していた元）。存在の主張として残し、型の絞りは defined() が担う。
+    expect(config.markdown?.processor).toBeDefined();
+    const processor = defined(config.markdown?.processor, "config.markdown.processor");
 
-    expect(processor).toBeDefined();
     expect(processor.name).toBe("unified");
     expect(isUnifiedProcessor(processor)).toBe(true);
   });
 
   it("renders GFM strikethrough, smart quotes and heading ids", async () => {
-    const processor = config.markdown?.processor;
+    const processor = defined(config.markdown?.processor, "config.markdown.processor");
     const renderer = await processor.createRenderer({ syntaxHighlight: false });
 
     const { code, metadata } = await renderer.render(
