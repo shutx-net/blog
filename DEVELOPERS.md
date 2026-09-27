@@ -125,9 +125,19 @@ JST の 14:26 なので `142621` になる。`pubDate` を空にすると送信�
 データベースが無い設計では「次の番号」をリポジトリから読むことになり、
 **同時投稿で同じ番号を計算する**（送信ボタンの二度押しで足りる）。時刻ベースなら採番に読み取りが要らない。
 
-**移行前の記事は平坦スラッグのまま**（`/posts/hello-world/` など）。混在は恒久的に正当で、
-既存の URL は変えない — RSS の `<guid isPermaLink="true">` が変わると
-購読者に全記事が再配信され、取り消せない。
+**スラッグは日付パスだけ。** 以前は手入力の平坦スラッグ（`/posts/hello-world/` など）も
+許していたが撤廃した。撤廃時に残っていた平坦スラッグの記事 8 本はすべて捨て記事
+（スキャフォールドと動作確認用）だったので削除し、**URL の消滅に伴う
+`<guid isPermaLink="true">` の変更を許容した** — 独自ドメインが無く公開直後で購読者が
+実質いなかったため。記事が 1 本だけになったので、3 つのガードの下限も 3 → 1 に下げた。
+
+**下限 1 でも本来の危険は止まる。** 止めたいのは「checkout が失敗して記事 0 本のサイトが
+`aws s3 sync --delete` で publish される」ことなので、1 で足りる。**0 にしてはならない。**
+副作用として `README.md` 1 つでも本数ガードは通るようになったが（下限 3 の時代は足りなかった）、
+形のガードが `README` を弾く。層として重ねてあることをテストが固定している。
+
+**既存の URL は変えないこと。** `<guid isPermaLink="true">` が変わると購読者に全記事が
+再配信され、取り消せない。
 
 #### `pubDate` は明示的なオフセットが必須
 
@@ -180,24 +190,23 @@ cp content-repo/posts/*.md site/src/content/posts/
 3 が 2 つの主張から成るのには理由がある。
 
 **1 と 2 はどちらも「数」しか見ていない。** content repo のルートを丸ごと降ろすと、
-記事は `posts/hello-world` という id で見つかり、件数は変わらないまま
-`/posts/posts/hello-world/` として publish される。RSS の
+記事は `posts/2026/09/27/142621` という id で見つかり、件数は変わらないまま
+`/posts/posts/2026/09/27/142621/` として publish される。RSS の
 `<guid isPermaLink="true">` が変わる = 購読者への全記事再配信で、この系で唯一
 取り消せない出力。
 
 **そして集合の一致でもこれは捕まらない。** 期待値は記事ディレクトリからの相対パスで
-作るので、corpus が入れ子なら期待値も `posts/hello-world` になり、dist 側も同じで
+作るので、corpus が入れ子なら期待値も `posts/2026/09/27/142621` になり、dist 側も同じで
 一致してしまう。集合の比較が見ているのは corpus と dist の**内部整合**だけ。
-だから**スラッグの「形」を直接主張する** — 平坦（`hello-world`）か日付パス
-（`2026/09/27/142621`）のどちらかに合致すること。事故の形（`posts/hello-world`、
-`posts/2026/09/27/142621`）はどちらにも合致しないので、日付パスを許しても検知力は落ちない。
+だから**スラッグの「形」を直接主張する** — 日付パス（`2026/09/27/142621`）に合致すること。
+事故の形（`posts/2026/09/27/142621`）は桁数とスラッシュの数が合わないので弾かれる。
 
 ```sh
-slug_shape='^([a-z0-9]+(-[a-z0-9]+)*|[0-9]{4}/[0-9]{2}/[0-9]{2}/[0-9]{6})$'
+slug_shape='^[0-9]{4}/[0-9]{2}/[0-9]{2}/[0-9]{6}$'
 ```
 
 **シェルは POSIX ERE なので `(?:` が書けず、`api/src/posts/slug.ts` の
-`POST_SLUG_PATTERN` と同じ意味の別表現になっている。** 定義が 2 箇所にあるので、
+`DATE_SLUG_PATTERN` と同じ意味の別表現になっている。** 定義が 2 箇所にあるので、
 `infra/test/workflow-deploy-steps.test.ts` が**両方を実際に走らせて**、
 同じ入力集合を受理することを固定している。**スラッグの形を変えるときは両方を直すこと。**
 
@@ -345,6 +354,11 @@ TS1294、`skipLibCheck` を api から外すと 124 件）。詳細は各 `toolc
 **`site/` はこの 3 本に入っていない。** `typescript` を devDependency に持たず
 `typecheck` スクリプトも無いので、`tsc` は一度も走っていない
 （`astro/tsconfigs/strict` を extends しているだけ）。
+
+**この穴は理論上のものではない。** `npx tsc --noEmit -p site/tsconfig.json` を実際に走らせると
+`site/test/` の複数ファイルでエラーが出る（`possibly undefined` 系）。手を入れる前に
+**まず自分で走らせて現状の件数を数え、自分の変更で増えていないことを確認すること** —
+CI は検査しないので、増やしても誰も気づかない。
 
 ## oxlint
 
@@ -530,7 +544,7 @@ curl -sI https://d8gsxbwzr6ft8.cloudfront.net/ | grep -i cache-control
 # → cache-control: no-cache
 
 # 記事ページも同じ（HTML 全般に効いていること）
-curl -sI https://d8gsxbwzr6ft8.cloudfront.net/posts/hello-world/ | grep -i cache-control
+curl -sI https://d8gsxbwzr6ft8.cloudfront.net/posts/2026/09/27/142621/ | grep -i cache-control
 
 # メディアは 1 年 + immutable
 MEDIA_BUCKET=$(aws cloudformation describe-stacks --stack-name BlogSiteStack \

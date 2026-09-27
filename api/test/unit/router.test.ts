@@ -722,7 +722,7 @@ describe('スラッグの衝突', () => {
 
   const conflicting = () => ({
     publish: vi.fn(async () => {
-      throw new SlugConflictError('hello-world');
+      throw new SlugConflictError('2026/09/27/142621');
     }),
   });
 
@@ -737,7 +737,7 @@ describe('スラッグの衝突', () => {
     const response = await dispatch(post(), { ...deps, publisher: conflicting() });
     const body = bodyOf(response);
     expect(body).toEqual({ error: 'slug_conflict', field: 'slug' });
-    expect(JSON.stringify(body)).not.toContain('hello-world');
+    expect(JSON.stringify(body)).not.toContain('2026/09/27/142621');
   });
 
   it('**409 のときは dispatch しない**（何も変わっていない）', async () => {
@@ -836,7 +836,7 @@ describe('overwrite フラグ', () => {
   it('publisher が返した replaced が 201 の本文に載る', async () => {
     const { deps } = spyDeps(allowAuthorizer);
     const publisher = {
-      publish: vi.fn(async () => ({ commitSha: 'abc', path: 'posts/hello-world.md', replaced: true })),
+      publish: vi.fn(async () => ({ commitSha: 'abc', path: 'posts/2026/09/27/142621.md', replaced: true })),
     };
     const response = await dispatch(post({ overwrite: true }), { ...deps, publisher });
     expect(response.statusCode).toBe(201);
