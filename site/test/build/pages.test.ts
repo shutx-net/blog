@@ -129,6 +129,52 @@ describe("tag pages", () => {
   });
 });
 
+describe("tag index", () => {
+  const index = (): string => readDist("tags/index.html");
+
+  it("is generated at dist/tags/index.html", () => {
+    expect(existsSync(join(distDir, "tags", "index.html"))).toBe(true);
+  });
+
+  it("links to every tag a published post carries", () => {
+    const html = index();
+
+    expect(html).toContain('href="/tags/astro/"');
+    expect(html).toContain('href="/tags/nix/"');
+    expect(html).toContain('href="/tags/aws/"');
+  });
+
+  // astro: hello-world + second-post. nix: second-post + third-post. aws: one.
+  // The draft also carries astro, so a count of 3 would mean the filter is gone.
+  it("counts only the published posts", () => {
+    expect(index()).toMatch(/astro[\s\S]{0,120}?2/);
+  });
+
+  // The whole point of filtering before collecting. `draft-only` belongs to no
+  // published post, so its presence here would tell a reader that an unpublished
+  // post exists -- and the site-wide scan in "draft leakage" below catches it too,
+  // but this names the page.
+  it("omits a tag only a draft carries", () => {
+    expect(index()).not.toContain("draft-only");
+  });
+
+  it("offers a way back to the listing", () => {
+    expect(index()).toContain('href="/"');
+  });
+});
+
+describe("tag page furniture", () => {
+  // The post page has had a back link since it was styled; the tag page was the
+  // one dead end left in the site.
+  it("offers a way back to the listing", () => {
+    expect(readDist("tags/astro/index.html")).toContain('<nav class="post__back"><a href="/">');
+  });
+
+  it("links to the tag index", () => {
+    expect(readDist("tags/astro/index.html")).toContain('href="/tags/"');
+  });
+});
+
 describe("pagination", () => {
   // Guards every assertion below from being vacuously true: with a single page
   // there is no next/prev link and nothing is split. A failure here means "add

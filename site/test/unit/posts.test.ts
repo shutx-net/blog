@@ -5,6 +5,7 @@ import {
   POSTS_PER_PAGE,
   byPubDateDesc,
   collectTags,
+  countByTag,
   formatPubDate,
   isPublished,
   withTrailingSlash,
@@ -43,6 +44,43 @@ describe("byPubDateDesc", () => {
     const sorted = [older, newer].sort(byPubDateDesc).map((post) => post.data.title);
 
     expect(sorted).toEqual(["newer", "older"]);
+  });
+});
+
+describe("countByTag", () => {
+  it("counts the posts carrying each tag, most used first", () => {
+    const posts = [
+      entry({ tags: ["astro", "nix"] }),
+      entry({ tags: ["astro"] }),
+      entry({ tags: ["aws"] }),
+    ];
+
+    expect(countByTag(posts)).toEqual([
+      { tag: "astro", count: 2 },
+      { tag: "aws", count: 1 },
+      { tag: "nix", count: 1 },
+    ]);
+  });
+
+  // Ties break alphabetically so two builds of the same commit cannot order the
+  // index differently -- dist/ is byte-compared when the deploy pipeline changes.
+  it("breaks ties alphabetically", () => {
+    const posts = [entry({ tags: ["nix"] }), entry({ tags: ["astro"] })];
+
+    expect(countByTag(posts).map((row) => row.tag)).toEqual(["astro", "nix"]);
+  });
+
+  it("returns nothing for posts with no tags", () => {
+    expect(countByTag([entry()])).toEqual([]);
+  });
+
+  // The caller filters drafts before calling this; countByTag counts whatever it
+  // is handed. Pinned so nobody moves the filter in here and leaves the tag
+  // pages' own getStaticPaths relying on a filter that no longer runs.
+  it("does not filter drafts itself", () => {
+    expect(countByTag([entry({ draft: true, tags: ["astro"] })])).toEqual([
+      { tag: "astro", count: 1 },
+    ]);
   });
 });
 

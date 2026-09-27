@@ -188,7 +188,11 @@ main {
   color: var(--muted);
 }
 
+/* Also used by the tag pages, which carry two links rather than one. */
 .post__back {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
   margin-block: 3rem 0;
   padding-top: 1.5rem;
   border-top: 1px solid var(--border);
@@ -199,7 +203,11 @@ main {
   text-decoration: none;
 }
 
-.post__back a::before {
+/*
+ * The arrow marks the way back, so only the first link gets one -- on the tag
+ * page the second link goes sideways to the tag index, not back.
+ */
+.post__back a:first-child::before {
   content: "\2190";
   margin-inline-end: 0.5em;
 }
@@ -382,6 +390,28 @@ article > ul:last-child:has(> li > a[href^="/tags/"]) {
 .tag-list {
   margin: 0;
   padding: 0;
+}
+
+/* The index is the page's content rather than an entry's footnote, so it breathes. */
+.tag-list--index {
+  gap: 0.6rem;
+  margin-block-end: 1rem;
+}
+
+.tag-list--index > li > a {
+  font-size: 0.9375rem;
+  padding: 0.35rem 0.85rem;
+}
+
+/*
+ * Inside the link so the whole chip is one target, dimmed so the tag name still
+ * reads first. tabular-nums keeps the counts from jittering the chip widths.
+ */
+.tag-list__count {
+  margin-inline-start: 0.5em;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8125rem;
+  opacity: 0.7;
 }
 
 article > ul:last-child:has(> li > a[href^="/tags/"]) > li,
