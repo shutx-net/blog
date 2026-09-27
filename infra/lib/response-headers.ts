@@ -160,10 +160,10 @@ export const MEDIA_CACHE_CONTROL = 'public, max-age=31536000, immutable';
  *
  * # `style-src 'unsafe-inline'` を外せない
  *
- * 実測で site/dist にインライン `<style>` が 10 個あり（Astro のスコープ付きスタイル）、
+ * site/dist の HTML は全件がインライン `<style>` を持ち（`inlineStylesheets: "always"`）、
  * shiki はトークンごとに `style="color:#..."` 属性を吐く。厳格な `style-src 'self'` は
- * **両方を壊す。** インラインスタイルはスクリプトを実行しないので、
- * `script-src` の厳格さと引き換えにはならない。
+ * 両方を壊す。インラインスタイルはスクリプトを実行しないので、`script-src` の
+ * 厳格さと引き換えにはならない。
  */
 export const buildCsp = (origins: CspOrigins): string =>
   [

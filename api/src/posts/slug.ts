@@ -2,8 +2,8 @@
  * 記事スラッグの形と、投稿日時からの導出。
  *
  * **依存ゼロの純粋 TypeScript として保つこと。** `admin/src/editor/model.ts` が
- * `api/src/posts/validate.ts` を直接 import しており、このモジュールもいずれ同じ経路で
- * ブラウザのバンドルに入る。`node:` の builtin を import した瞬間に admin のビルドが壊れる。
+ * このモジュールを直接 import しているので、`node:` の builtin を import した瞬間に
+ * admin のビルドが壊れる。
  */
 
 /**
