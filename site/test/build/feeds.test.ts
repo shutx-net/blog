@@ -27,7 +27,7 @@ describe("rss.xml", () => {
     expect(readDist("rss.xml")).toContain(`<link>${site}</link>`);
   });
 
-  it.each(["posts/second-post/", "posts/hello-world/"])(
+  it.each(["posts/2026/08/02/090000/", "posts/2026/08/01/090000/"])(
     "gives %s an absolute item link",
     (path) => {
       expect(readDist("rss.xml")).toContain(`<link>${site}${path}</link>`);
@@ -68,7 +68,7 @@ describe("sitemap", () => {
 
   // Guards against the file existing but being empty, which the assertions above
   // cannot distinguish. One post, one tag page, one paginated page.
-  it.each(["posts/second-post/", "tags/astro/", "2/"])("lists %s", (path) => {
+  it.each(["posts/2026/08/02/090000/", "tags/astro/", "2/"])("lists %s", (path) => {
     expect(readDist("sitemap-0.xml")).toContain(`<loc>${site}${path}</loc>`);
   });
 

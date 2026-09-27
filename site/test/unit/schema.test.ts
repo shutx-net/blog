@@ -30,7 +30,11 @@ const withoutKey = (key: string): Record<string, unknown> => {
 // whichever corpus the run is actually building -- the fixtures under test, the
 // real posts when POSTS_DIR is unset.
 const postsDir = fileURLToPath(postsDirUrl(process.env, new URL("../../", import.meta.url)));
-const postFiles = readdirSync(postsDir)
+// Recursive because a slug is a date path (YYYY/MM/DD/HHmmss): the posts sit four
+// levels down, and a plain readdirSync would hand back an empty list. "ships at
+// least one markdown post" below is the floor that refuses that silently -- an
+// empty list also makes the it.each() under it generate zero tests.
+const postFiles = readdirSync(postsDir, { recursive: true, encoding: "utf8" })
   .filter((name) => name.endsWith(".md"))
   .sort();
 
