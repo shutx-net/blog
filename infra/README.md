@@ -718,7 +718,16 @@ CloudFront の `errorResponses` は 403 と 404 の両方を `ResponsePagePath: 
 URI 書き換えは「最後のスラッシュより後にドットがあれば静的ファイル」というヒューリスティック。
 そのため `/posts/node-24.19-notes` のようなドット入りスラッグは書き換えられない
 （`test/rewrite-uri.test.ts` に既知の限界として固定済み）。
-`site/src/content.config.ts` の Zod スキーマでスラッグを検証する際にドットを弾くこと。
+
+**強制点は `site/src/content.config.ts` ではない**（あのスキーマはフロントマターを検証するもので、
+スラッグはファイル名から決まる）。実際に弾いているのは次の 2 つで、どちらもドットを含まない
+文字だけを許す。**緩めるとここが壊れる。**
+
+- `api/src/posts/slug.ts` の `POST_SLUG_PATTERN` — 投稿 API がコミット先のパスを組む前に検査する
+- `.github/workflows/deploy.yml` の `slug_shape` — ビルド後に publish されるスラッグを検査する
+
+スラッグは平坦（`hello-world`）と日付パス（`2026/09/27/142621`）の 2 形式があり、
+新規記事は後者になる。どちらもドットを含まない。
 
 ### メディアバケットを別 Stack にできない（実験で確定済み）
 
