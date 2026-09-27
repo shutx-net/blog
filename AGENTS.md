@@ -205,5 +205,7 @@ gh api repos/<owner>/<repo> --jq '{archived, pushed_at, open_issues_count}'
 ## リポジトリ運用
 
 - `main` に直接 push しない。ブランチを切って PR を出す
-- コミットメッセージは日本語で可。1 行目は 50 字程度に収める
+- **コミットメッセージの 1 行目は Conventional Commits のプレフィックスで始める**
+  （`feat` / `fix` / `docs` / `test` / `refactor` / `build` / `ci` / `chore`）。
+  scope は省略可、使うならワークスペース名。本文は日本語で可、1 行目は 50 字程度
 - `infra/` を変えた PR では `npx -w infra cdk diff` の出力を本文に貼る
