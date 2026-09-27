@@ -974,7 +974,7 @@ aws cloudformation describe-stacks --stack-name BlogSiteStack \
 
 | 設定 | 既定 | 既定のままだと |
 | --- | --- | --- |
-| `allowedMethods` | `GET` / `HEAD` | **POST が 405 になる** |
+| `allowedMethods` | `GET` / `HEAD` | **POST が 405 になる**（`ALLOW_ALL` なので `PUT` / `DELETE` も届く。下記） |
 | `cachePolicy` | `CACHING_OPTIMIZED` | API の応答がキャッシュされる |
 | `originRequestPolicy` | なし | — （`ALL_VIEWER` にすると `Host` が転送され、**OAC の署名が必ず失敗する**） |
 | `viewerProtocolPolicy` | — | `redirect-to-https` にすると **リダイレクトで POST のボディが失われる**。`https-only` で拒否する |
@@ -982,6 +982,15 @@ aws cloudformation describe-stacks --stack-name BlogSiteStack \
 `functionAssociations` は **付けない**。URI 書き換え Function は拡張子の無いパスに `/index.html` を
 足すので、`/api/posts` が `/api/posts/index.html` になって 404 になる。
 `test/distribution-api-behavior.test.ts` が 4 つとも固定している。
+
+`allowedMethods` は `ALLOW_ALL`（7 メソッド）にしてある。**そのおかげで記事の更新（`PUT`）と
+削除（`DELETE`）を足すときに infra を 1 行も変えずに済んだ** — 動詞を増やすのは
+`api/src/router.ts` の `ROUTES` に行を足すだけになる。CloudFront 側で絞っていたら、
+API の変更とディストリビューションの変更が同じ PR に縛られていた。
+
+トークンも増えていない。記事用の installation token は `contents:write` で、
+**write が read を含む**ので一覧・取得のために新しいトークンを鋳造する必要がない。
+`actions:write` の 2 本目（デプロイの `workflow_dispatch` 用）とは別物のまま。
 
 ### 投稿 API も別 Stack にできない（ただし理由が上とは違う）
 

@@ -380,7 +380,11 @@ const presignMedia = async ({ body, deps }: RouteContext): Promise<ApiResponse> 
  *
  * **経路を足すときは requiresAuth を必ず true にすること。** test/unit/router.test.ts が
  * 表を全件走査して「GET /api/health 以外はすべて認証必須」を主張しているので、
- * 忘れると赤くなる。
+ * 忘れると赤くなる。記事の読み取りもここに含まれる — `blog-content` は private で
+ * 下書きが入っているので、開けると下書きが誰にでも読める。
+ *
+ * **CloudFront 側は絞っていない**（`/api/*` の allowedMethods は ALLOW_ALL）。
+ * 動詞を増やすのはこの表に行を足すだけで、infra の変更は要らない。
  */
 export const ROUTES: readonly Route[] = [
   { method: 'GET', path: '/api/health', requiresAuth: false, bodyKind: 'none', handle: health },
