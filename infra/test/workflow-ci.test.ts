@@ -115,12 +115,6 @@ const allRunsOf = (workflow: Workflow): string[] =>
     .filter((run): run is string => typeof run === 'string');
 
 /** `uses:` を含む行を落とす。SHA（16 進 40 桁）に数字だけの長い並びが現れうるため。 */
-const withoutUsesLines = (text: string): string =>
-  text
-    .split('\n')
-    .filter((line) => !line.includes('uses:'))
-    .join('\n');
-
 describe('ci.yml の骨格', () => {
   it('【非空ガード】.github/workflows/ci.yml がディスク上に存在する', () => {
     expect(existsSync(workflowPath('ci.yml'))).toBe(true);
@@ -167,8 +161,12 @@ describe('ci.yml の骨格', () => {
 });
 
 describe('ci.yml が回すコマンド', () => {
-  it('ジョブのキー集合が 4 ワークスペースちょうどである', () => {
-    expect(Object.keys(jobsOf(ci())).sort()).toEqual(['admin', 'api', 'infra', 'site']);
+  it('ジョブのキー集合が 4 ワークスペース + lint ちょうどである', () => {
+    // **集合の完全一致を保つ**（部分集合に緩めない）。緩めると、誰かがジョブを
+    // 足した日に気づけなくなる — 特に AWS の資格情報を要求するジョブが PR 経路に
+    // 生えたときに、このファイルの他の主張が見ているのは「既存ジョブ」だけなので
+    // 素通りしうる。oxlint の lint ジョブを足したのでここも 1 つ増やした。
+    expect(Object.keys(jobsOf(ci())).sort()).toEqual(['admin', 'api', 'infra', 'lint', 'site']);
   });
 
   it('site ジョブが npm run -w site test を実行する', () => {

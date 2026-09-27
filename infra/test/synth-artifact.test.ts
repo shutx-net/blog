@@ -141,9 +141,15 @@ describe('cdk synth が出力した実テンプレート: BlogSiteStack 固有',
       ([, r]) => r.Properties?.['CorsConfiguration'] !== undefined,
     );
     expect(withCors).toHaveLength(1);
-    const rules = (withCors[0]?.[1]?.Properties?.['CorsConfiguration'] as {
+    const [corsBucket] = withCors;
+    expect(corsBucket, 'CORS を持つバケットが 1 つも無い').toBeDefined();
+    // 上の filter が CorsConfiguration の存在を保証している。**短絡しうる書き方に
+    // しない** — undefined に .CorsRules を当てると TypeError になり、
+    // 「CORS が無い」ではなく「テストが壊れた」という読みにくい失敗になる。
+    const cors = corsBucket![1].Properties!['CorsConfiguration'] as {
       CorsRules?: Record<string, unknown>[];
-    }).CorsRules;
+    };
+    const rules = cors.CorsRules;
     expect(rules).toHaveLength(1);
     expect(rules?.[0]?.['AllowedMethods']).toEqual(['PUT']);
     const origins = rules?.[0]?.['AllowedOrigins'] as string[];

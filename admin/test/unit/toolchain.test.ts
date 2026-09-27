@@ -209,7 +209,7 @@ describe('プレビュー一致の前提になるバージョン固定', () => {
 describe('admin の依存はすべて完全固定', () => {
   it('dependencies / devDependencies の全バージョンが ^ ~ >= x * を含まない', () => {
     const pkg = adminPkg();
-    const all = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+    const all = { ...pkg.dependencies, ...pkg.devDependencies };
     // 依存が 1 つも無ければ for が 0 周で緑になる。先に非空を主張する。
     expect(Object.keys(all).length, 'admin に依存が 1 つも宣言されていない').toBeGreaterThan(0);
     for (const [name, version] of Object.entries(all)) {

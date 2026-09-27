@@ -89,6 +89,35 @@ describe('npm workspaces のルート', () => {
     expect(Array.isArray(root.workspaces)).toBe(true);
     expect(root.workspaces).toContain('api');
   });
+
+  it('**oxlint が完全固定の "1.85.0" である**（^ も ~ も付けない）', () => {
+    // **oxlint 自身は package.json を検査できない。** バージョン固定の規約は
+    // ここでしか守られないので、他の依存と同じ厳しさで固定する。
+    const version = rootPkg().devDependencies?.['oxlint'];
+    expect(version, 'oxlint が root の devDependencies に必要').toBeDefined();
+    expect(version).toBe('1.85.0');
+    expect(version).toMatch(EXACT_VERSION);
+  });
+
+  it('**root の scripts.lint が --deny-warnings を付けている**', () => {
+    // **引数なしの `oxlint` は warning を出しても exit 0 になる**（実測）。
+    // --deny-warnings が無いと CI は緑のまま素通りし、リンタを入れた意味が消える。
+    // このリポジトリが繰り返し踏んでいる「緑だが実物は壊れている」と同じ形なので、
+    // フラグの存在そのものを固定する。
+    const lint = rootPkg().scripts?.['lint'];
+    expect(lint, 'root に scripts.lint が必要').toBeDefined();
+    expect(lint).toContain('oxlint');
+    expect(lint, '--deny-warnings が無いと warning が素通りする').toContain('--deny-warnings');
+  });
+
+  it('oxlint が root にだけあり、ワークスペースに散らばっていない', () => {
+    // 定義が 2 箇所にあると片方だけ直る。ルールも .oxlintrc.json 1 つに保つ。
+    const adminPackage = readJson<PackageJson>('../../../admin/package.json');
+    for (const pkg of [apiPkg(), infraPkg(), adminPackage]) {
+      expect(pkg.devDependencies?.['oxlint']).toBeUndefined();
+      expect(pkg.dependencies?.['oxlint']).toBeUndefined();
+    }
+  });
 });
 
 describe('api の実行時依存', () => {

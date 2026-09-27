@@ -105,7 +105,9 @@ describe('GetSecretValue の入力', () => {
     const { reader, send } = readerWith(() => ({ SecretBinary: binary(PEM) }));
     await reader.readPrivateKey();
     expect(send).toHaveBeenCalledTimes(1);
-    const input = (send.mock.calls[0]?.[0] as SentCommand).input;
+    const [command] = send.mock.calls[0] ?? [];
+    expect(command, 'send が 1 度も呼ばれていない').toBeDefined();
+    const input = (command as SentCommand).input;
     // **コマンド入力を deep-equal で固定する。** VersionStage を渡すか渡さないかは
     // 完全にこちらの責任で、AWS の既定に頼っている部分。
     expect(input).toEqual({ SecretId: SECRET_ID });
@@ -117,7 +119,9 @@ describe('GetSecretValue の入力', () => {
     // **実行可能にする**ための経路。
     const { reader, send } = readerWith(() => ({ SecretBinary: binary(PEM) }));
     await reader.readPrivateKey({ versionStage: 'AWSPENDING' });
-    const input = (send.mock.calls[0]?.[0] as SentCommand).input;
+    const [command] = send.mock.calls[0] ?? [];
+    expect(command, 'send が 1 度も呼ばれていない').toBeDefined();
+    const input = (command as SentCommand).input;
     expect(input).toEqual({ SecretId: SECRET_ID, VersionStage: 'AWSPENDING' });
   });
 });

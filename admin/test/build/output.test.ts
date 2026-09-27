@@ -13,9 +13,8 @@ const REWRITE_URI = fileURLToPath(
 const indexHtml = (): string => readFileSync(`${DIST}index.html`, 'utf8');
 
 /** index.html が参照する src / href をすべて集める。 */
-const referencedUrls = (html: string): string[] => [
-  ...[...html.matchAll(/\s(?:src|href)="([^"]+)"/g)].map((match) => match[1] ?? ''),
-];
+const referencedUrls = (html: string): string[] =>
+  [...html.matchAll(/\s(?:src|href)="([^"]+)"/g)].map((match) => match[1] ?? '');
 
 const allFiles = (dir: string, prefix = ''): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>

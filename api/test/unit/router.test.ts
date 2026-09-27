@@ -814,9 +814,9 @@ describe('overwrite フラグ', () => {
     const { deps, publisher } = spyDeps(allowAuthorizer);
     const response = await dispatch(post({ overwrite: undefined }), deps);
     expect(response.statusCode).toBe(201);
-    expect(
-      (publisher.publish.mock.calls[0]?.[0] as unknown as Record<string, unknown>)['overwrite'],
-    ).toBe(false);
+    const [published] = publisher.publish.mock.calls[0] ?? [];
+    expect(published, 'publish が 1 度も呼ばれていない').toBeDefined();
+    expect((published as unknown as Record<string, unknown>)['overwrite']).toBe(false);
   });
 
   it('作成と上書きでコミットメッセージが変わる', async () => {

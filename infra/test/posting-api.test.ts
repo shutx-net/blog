@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { App } from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
 // **api の定数を実物で import する。** infra が書く文字列と api が受け付ける文字列が
 // ずれると synth もテストも通ったうえでコールドスタートだけが落ちる。
