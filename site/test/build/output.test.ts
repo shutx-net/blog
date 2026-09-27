@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { POSTS_PER_PAGE } from "../../src/lib/posts.ts";
+
 // dist/ is produced once by test/setup/build-site.ts (globalSetup). These tests
 // only read it -- they never trigger a build of their own.
 const distDir = fileURLToPath(new URL("../../dist/", import.meta.url));
@@ -21,6 +23,58 @@ describe("listing page", () => {
 
     expect(html).toContain('href="/posts/2026/08/01/090000/"');
     expect(html).toContain('href="/posts/2026/08/02/090000/"');
+  });
+});
+
+describe("listing entries", () => {
+  // The listing used to print nothing but the title, which is not enough to pick
+  // a post out of a list. These four assertions are the contract of an entry.
+  const listing = (): string => readDist("index.html");
+
+  it("prints the published date as a machine-readable <time>", () => {
+    // The fixture carries `pubDate: 2026-08-02`, which parses as UTC midnight.
+    expect(listing()).toContain('<time datetime="2026-08-02T00:00:00.000Z">');
+    expect(listing()).toContain("2026年8月2日");
+  });
+
+  // description is required by postSchema, so a listing that omits it wastes a
+  // field every post is forced to fill in.
+  it("prints the description", () => {
+    expect(listing()).toContain("A second published post, newer than the first.");
+  });
+
+  it("links the tags of each entry", () => {
+    const html = listing();
+
+    expect(html).toContain('href="/tags/astro/"');
+    expect(html).toContain('href="/tags/nix/"');
+  });
+
+  // One date per entry, not one for the page. Counted rather than matched with a
+  // nested-tag regex: the tag chips are a <ul><li> inside each entry, so any
+  // non-greedy /<li>.*?<\/li>/ closes on a chip and slices the entry in half.
+  it("prints one date per entry on the page", () => {
+    const dates = listing().match(/<time datetime="/g) ?? [];
+
+    expect(dates).toHaveLength(POSTS_PER_PAGE);
+  });
+
+  // ...and each date belongs to the entry it precedes. Interleaving is what proves
+  // that: a single page-level date, or dates collected into one block, satisfies
+  // "one per entry" but not this.
+  it("pairs each date with the title that follows it", () => {
+    const html = listing();
+    const at = (needle: string): number => {
+      const index = html.indexOf(needle);
+      // A missing string would score -1 and satisfy every < below for the wrong
+      // reason.
+      expect(index, `${needle} is missing from the listing`).toBeGreaterThan(-1);
+      return index;
+    };
+
+    expect(at("2026年8月2日")).toBeLessThan(at("Second post"));
+    expect(at("Second post")).toBeLessThan(at("2026年8月1日"));
+    expect(at("2026年8月1日")).toBeLessThan(at("Hello world"));
   });
 });
 

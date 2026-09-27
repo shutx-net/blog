@@ -351,27 +351,46 @@ article th {
 /* ------------------------------------------------------------ post: tags -- */
 
 /*
- * The tag list is a bare <ul> that must stay the last child of <article> and
- * carry no class, so it is selected structurally instead. :has() is what keeps
- * this honest: a post that simply ends with a bulleted list also matches
- * `ul:last-child`, and only the links into /tags/ tell the two apart. Where
- * :has() is unsupported the list degrades to an ordinary bulleted list.
+ * Tag chips appear in three places and are declared once, as a selector list.
+ *
+ * On the post page the list is a bare <ul> that must stay the last child of
+ * <article> and carry no class (the parity proof pins that element), so it is
+ * selected structurally. :has() is what keeps that honest: a post ending in an
+ * ordinary bulleted list also matches `ul:last-child`, and only the links into
+ * /tags/ tell the two apart. Where :has() is unsupported it degrades to a
+ * bulleted list.
+ *
+ * The listing and the tag index have no such constraint, so they carry
+ * `.tag-list` and share these declarations rather than repeating them -- one
+ * block, three selectors, so a restyle cannot land on two of them and miss one.
  */
-article > ul:last-child:has(> li > a[href^="/tags/"]) {
+article > ul:last-child:has(> li > a[href^="/tags/"]),
+.tag-list {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin-block: 2.5rem 0;
-  padding: 1.5rem 0 0;
-  border-top: 1px solid var(--border);
   list-style: none;
 }
 
-article > ul:last-child:has(> li > a[href^="/tags/"]) > li {
+/* Only the post page's list is a section divider; the others sit inside an entry. */
+article > ul:last-child:has(> li > a[href^="/tags/"]) {
+  margin-block: 2.5rem 0;
+  padding: 1.5rem 0 0;
+  border-top: 1px solid var(--border);
+}
+
+.tag-list {
+  margin: 0;
+  padding: 0;
+}
+
+article > ul:last-child:has(> li > a[href^="/tags/"]) > li,
+.tag-list > li {
   margin: 0;
 }
 
-article > ul:last-child:has(> li > a[href^="/tags/"]) > li > a {
+article > ul:last-child:has(> li > a[href^="/tags/"]) > li > a,
+.tag-list > li > a {
   display: inline-block;
   padding: 0.25rem 0.7rem;
   border: 1px solid var(--border);
@@ -382,13 +401,15 @@ article > ul:last-child:has(> li > a[href^="/tags/"]) > li > a {
   text-decoration: none;
 }
 
-article > ul:last-child:has(> li > a[href^="/tags/"]) > li > a::before {
+article > ul:last-child:has(> li > a[href^="/tags/"]) > li > a::before,
+.tag-list > li > a::before {
   content: "#";
   margin-inline-end: 0.15em;
   opacity: 0.6;
 }
 
-article > ul:last-child:has(> li > a[href^="/tags/"]) > li > a:hover {
+article > ul:last-child:has(> li > a[href^="/tags/"]) > li > a:hover,
+.tag-list > li > a:hover {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
@@ -396,10 +417,6 @@ article > ul:last-child:has(> li > a[href^="/tags/"]) > li > a:hover {
 
 /* ------------------------------------------------------- listing & 404 -- */
 
-/*
- * Deliberately light: making the listing a real design is a separate job. This
- * is only enough that it does not look broken beside the post page.
- */
 main > h1 {
   margin-block: 0.5rem 2rem;
   font-size: 1.75rem;
@@ -412,22 +429,57 @@ main > h1 {
   list-style: none;
 }
 
-.post-list > li {
-  padding-block: 1.1rem;
+/*
+ * An entry is a stack: date, title, summary, chips. `gap` rather than margins on
+ * the children, so the spacing cannot be doubled by a child that brings its own
+ * margin (both <p>s below would).
+ */
+.post-list__item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding-block: 1.5rem;
   border-bottom: 1px solid var(--border);
 }
 
-.post-list > li:first-child {
+.post-list__item:first-child {
   border-top: 1px solid var(--border);
 }
 
-.post-list a {
-  font-size: 1.125rem;
+/* Same treatment as the post page's date, so the two read as the same thing. */
+.post-list__meta {
+  margin: 0;
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.post-list__title {
+  font-size: 1.1875rem;
+  font-weight: 700;
+  line-height: 1.5;
   text-decoration: none;
 }
 
-.post-list a:hover {
+.post-list__title:hover {
   text-decoration: underline;
+}
+
+/*
+ * Body colour, not --muted: this is the sentence the reader uses to decide, so
+ * dimming it would work against the entry. The title carries the emphasis by
+ * weight and size instead.
+ */
+.post-list__summary {
+  margin: 0;
+  font-size: 0.9375rem;
+  line-height: 1.8;
+}
+
+/* Chips sit closer to the summary than the entries do to each other. */
+.post-list__item > .tag-list {
+  margin-block-start: 0.2rem;
 }
 
 main > nav {

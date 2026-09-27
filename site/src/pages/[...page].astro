@@ -6,9 +6,11 @@ import Layout from "../layouts/Layout.astro";
 import {
   POSTS_PER_PAGE,
   byPubDateDesc,
+  formatPubDate,
   isPublished,
   withTrailingSlash,
 } from "../lib/posts.ts";
+import { SITE_DESCRIPTION, SITE_NAME } from "../lib/site-meta.ts";
 
 // Replaces the old index.astro rather than sitting beside it. Keeping both makes
 // astro warn `Could not render '' from route '/[...page]' as it conflicts with
@@ -24,13 +26,47 @@ export const getStaticPaths = (async ({ paginate }) => {
 const { page } = Astro.props;
 ---
 
-<Layout title="blog" description="shutx-net の個人ブログ。">
-  <h1>blog</h1>
+<Layout title={SITE_NAME} description={SITE_DESCRIPTION}>
+  <h1>{SITE_NAME}</h1>
   <ul class="post-list">
     {
       page.data.map((post) => (
-        <li>
-          <a href={`/posts/${post.id}/`}>{post.data.title}</a>
+        <li class="post-list__item">
+          {
+            /* The date leads the entry for the same reason it leads the post page:
+               it reads as a kicker above the title rather than a stray line under
+               it. datetime carries the machine-readable form; the visible text is
+               the JST date a Japanese reader expects. */
+          }
+          <p class="post-list__meta">
+            <time datetime={post.data.pubDate.toISOString()}>
+              {formatPubDate(post.data.pubDate)}
+            </time>
+          </p>
+          <a class="post-list__title" href={`/posts/${post.id}/`}>
+            {post.data.title}
+          </a>
+          {
+            /* description is required by postSchema. Printing it here is what makes
+               that requirement pay for itself -- before this the field was written
+               for every post and shown nowhere. */
+          }
+          <p class="post-list__summary">{post.data.description}</p>
+          {
+            /* Same chip styling as the post page, reached by class here because
+               this list is free to carry one. The post page's own tag list cannot
+               (the parity proof pins that element), so global.css declares the
+               chip look once for both selectors. */
+            post.data.tags.length > 0 && (
+              <ul class="tag-list">
+                {post.data.tags.map((tag) => (
+                  <li>
+                    <a href={`/tags/${tag}/`}>{tag}</a>
+                  </li>
+                ))}
+              </ul>
+            )
+          }
         </li>
       ))
     }
