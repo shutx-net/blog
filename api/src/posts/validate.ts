@@ -1,4 +1,4 @@
-import { dateSlug } from './slug.ts';
+import { dateSlug, hasExplicitOffset } from './slug.ts';
 
 /**
  * 移行前から使ってきた平坦スラッグの形。**入力の検査には使わない。**
@@ -127,6 +127,17 @@ export const validatePost = (raw: Record<string, unknown>, nowMs: number): Valid
     pubDate = new Date(nowMs).toISOString();
   } else {
     if (typeof rawPubDate !== 'string') throw new PostValidationError('pubDate', 'must be a string');
+    // **オフセットの無い日時を黙って推測しない。**
+    //
+    // `Date.parse('2026-09-08T05:40:01')` はホストの TZ で解釈するので、同じ入力から
+    // ブラウザ（著者の TZ）と Lambda（UTC）で違う瞬間ができ、**公開先の URL が著者の
+    // 居場所で変わる**（RSS の guid も変わる。取り消せない）。
+    //
+    // 著者の壁時計時刻を JST として送るのは呼び出し側の責任にする
+    // （`admin` は `jstWallClockToInstant` を通す）。`slug` を 400 にしたのと同じ立場。
+    if (!hasExplicitOffset(rawPubDate)) {
+      throw new PostValidationError('pubDate', 'must carry an explicit UTC offset (Z or +09:00)');
+    }
     const parsed = Date.parse(rawPubDate);
     if (Number.isNaN(parsed)) throw new PostValidationError('pubDate', 'must be a valid date');
     pubDate = new Date(parsed).toISOString();

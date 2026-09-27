@@ -124,12 +124,19 @@ describe('pubDate', () => {
     expect(validateDraft(draft({ pubDate: '' }), other).pubDate).toBe('2020-01-02T03:04:05.000Z');
   });
 
-  it('datetime-local の文字列を ISO 8601 に正規化する', () => {
-    // <input type="datetime-local"> は '2026-08-31T11:30' の形を返す。
-    // **空文字を api に渡すと Date.parse('') が NaN で落ちる**ので、
-    // 空のときは key ごと落として api の「未指定なら now」に委ねている。
+  it('**datetime-local の壁時計を JST の瞬間として正規化する**', () => {
+    // <input type="datetime-local"> は '2026-08-31T11:30' の形（オフセット無し）を返す。
+    // そのまま渡すと Date.parse がホストの TZ で解釈し、**公開先が著者の居場所で
+    // 変わる**（CI の UTC ランナーが本番の挙動として検出した）。
+    //
+    // **期待値をホストの TZ から計算しない。** JST の 11:30 は UTC の 02:30 ちょうど。
     const result = validateDraft(draft({ pubDate: '2026-08-31T11:30' }), NOW);
-    expect(result.pubDate).toBe(new Date('2026-08-31T11:30').toISOString());
+    expect(result.pubDate).toBe('2026-08-31T02:30:00.000Z');
+  });
+
+  it('**空文字は key ごと落として api の「未指定なら now」に委ねる**', () => {
+    // 空文字を渡すと Date.parse('') が NaN で落ちる。
+    expect(validateDraft(draft({ pubDate: '' }), NOW).pubDate).toBe('2026-08-31T02:30:00.000Z');
   });
 
   it('壊れた日付は field === "pubDate" で落ちる', () => {
@@ -189,11 +196,22 @@ describe('publishPathLabel', () => {
     expect(publishPathLabel(draft({ pubDate: 'not-a-date' }), NOW)).toContain('決まらない');
   });
 
-  it('出す値が api の dateSlug と一致する（画面と実際の URL がずれない）', () => {
-    for (const pubDate of ['2026-09-08T05:40:01', '2026-01-01T00:00:00', '2026-12-31T23:59:59']) {
-      const expected = dateSlug(new Date(pubDate).toISOString());
-      expect(publishPathLabel(draft({ pubDate }), NOW)).toBe(`公開先: /posts/${expected}/`);
+  it('**出す値が実際に送る値と一致する**（画面と公開先がずれない）', () => {
+    // **api の導出をそのまま通して突き合わせる。** 期待値をホストの TZ から
+    // 計算すると、TZ が変わった日に両方が同じだけずれて一致したまま素通りする。
+    for (const pubDate of ['2026-09-08T05:40:01', '2026-01-01T00:00', '2026-12-31T23:59:59']) {
+      const sent = validateDraft(draft({ pubDate }), NOW);
+      expect(publishPathLabel(draft({ pubDate }), NOW)).toBe(`公開先: /posts/${sent.slug}/`);
     }
+  });
+
+  it.each([
+    ['JST の朝', '2026-09-08T05:40:01', '/posts/2026/09/08/054001/'],
+    ['JST の 0 時', '2026-09-08T00:00:00', '/posts/2026/09/08/000000/'],
+    ['JST の 23:59', '2026-12-31T23:59:59', '/posts/2026/12/31/235959/'],
+  ])('**%s は TZ に関係なく %s**', (_label, pubDate, expected) => {
+    // 入力した壁時計時刻がそのまま URL になる（JST 固定なので）。
+    expect(publishPathLabel(draft({ pubDate }), NOW)).toBe(`公開先: ${expected}`);
   });
 });
 

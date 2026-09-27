@@ -4,8 +4,11 @@ import {
   DATE_SLUG_PATTERN,
   FLAT_SLUG_PATTERN,
   JST_OFFSET_MS,
+  JST_OFFSET_SUFFIX,
   POST_SLUG_PATTERN,
   dateSlug,
+  hasExplicitOffset,
+  jstWallClockToInstant,
 } from '../../src/posts/slug.ts';
 import { SLUG_PATTERN } from '../../src/posts/validate.ts';
 
@@ -158,5 +161,66 @@ describe('FLAT_SLUG_PATTERN と validate.ts の SLUG_PATTERN', () => {
 
   it('flags も一致する', () => {
     expect(FLAT_SLUG_PATTERN.flags).toBe(SLUG_PATTERN.flags);
+  });
+});
+
+describe('hasExplicitOffset', () => {
+  it.each([
+    '2026-09-08T05:40:01.000Z',
+    '2026-09-08T05:40:01Z',
+    '2026-09-08T05:40:01+09:00',
+    '2026-09-08T05:40:01-05:00',
+    '2026-09-08T05:40+09:00',
+    '2026-09-08T05:40:01+0900',
+    '2026-09-08T05:40:01+09',
+  ])('%o はオフセットを持つ', (value) => {
+    expect(hasExplicitOffset(value)).toBe(true);
+  });
+
+  it.each([
+    // **`<input type="datetime-local">` が返す形。** これが曖昧さの入口だった。
+    '2026-09-08T05:40:01',
+    '2026-09-08T05:40',
+    // 日付だけも拒む。仕様では UTC 扱いだが、著者の意図としては曖昧。
+    '2026-09-08',
+    '',
+    'not a date',
+    '2026-09-08 05:40:01',
+  ])('%o はオフセットを持たない', (value) => {
+    expect(hasExplicitOffset(value)).toBe(false);
+  });
+});
+
+describe('jstWallClockToInstant', () => {
+  it('**オフセットの無い壁時計に +09:00 を付ける**', () => {
+    expect(jstWallClockToInstant('2026-09-08T05:40:01')).toBe('2026-09-08T05:40:01+09:00');
+  });
+
+  it('秒が無い形（datetime-local の既定）でも付く', () => {
+    expect(jstWallClockToInstant('2026-09-08T05:40')).toBe('2026-09-08T05:40+09:00');
+  });
+
+  it('既にオフセットがあるものは触らない', () => {
+    // 復元された下書きや、別の経路から来た値を二重に変換しない。
+    for (const value of ['2026-09-08T05:40:01.000Z', '2026-09-08T05:40:01+09:00']) {
+      expect(jstWallClockToInstant(value)).toBe(value);
+    }
+  });
+
+  it('**結果がホストのタイムゾーンに依存しない**', () => {
+    // dateSlug に通したときの答えが 1 つに決まることが、この関数の存在理由。
+    const instant = jstWallClockToInstant('2026-09-08T05:40:01');
+    expect(new Date(Date.parse(instant)).toISOString()).toBe('2026-09-07T20:40:01.000Z');
+    expect(dateSlug(instant)).toBe('2026/09/08/054001');
+  });
+
+  it('JST_OFFSET_SUFFIX が JST_OFFSET_MS と同じ値を表している', () => {
+    // 片方だけ直すと、表示と実際の公開先が静かに食い違う。
+    const hours = JST_OFFSET_MS / 3_600_000;
+    expect(JST_OFFSET_SUFFIX).toBe(`+${String(hours).padStart(2, '0')}:00`);
+  });
+
+  it('壊れた文字列は付けても壊れたまま（dateSlug が投げる）', () => {
+    expect(() => dateSlug(jstWallClockToInstant('not a date'))).toThrow();
   });
 });

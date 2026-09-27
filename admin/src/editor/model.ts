@@ -1,4 +1,4 @@
-import { DATE_SLUG_PATTERN, dateSlug } from '@blog/api/src/posts/slug.ts';
+import { DATE_SLUG_PATTERN, dateSlug, jstWallClockToInstant } from '@blog/api/src/posts/slug.ts';
 import { SLUG_PATTERN, TAG_PATTERN, validatePost } from '@blog/api/src/posts/validate.ts';
 import type { ValidatedPost } from '@blog/api/src/posts/validate.ts';
 
@@ -17,7 +17,7 @@ import { RELATIVE_IMAGE_WARNING, relativeImagePaths } from '../preview/images.ts
  * 実行時に投げる proxy** が混ざる（実測）。突き合わせは
  * test/contract/post-schema.test.ts（node 環境）の仕事にしてある。
  */
-export { DATE_SLUG_PATTERN, SLUG_PATTERN, TAG_PATTERN, dateSlug };
+export { DATE_SLUG_PATTERN, SLUG_PATTERN, TAG_PATTERN, dateSlug, jstWallClockToInstant };
 export type { ValidatedPost };
 
 /**
@@ -70,6 +70,11 @@ export const parseTags = (raw: string): string[] => [
  * 実装しているので、空文字を渡すと `Date.parse('')` が NaN になって
  * `PostValidationError('pubDate')` で落ちてしまう。
  *
+ * **`pubDate` は JST の瞬間に変換して渡す。** `<input type="datetime-local">` が返すのは
+ * オフセットの無い壁時計時刻で、そのまま渡すと解釈が**ホストの TZ 依存**になる
+ * （api 側は今それを 400 で拒む）。著者が入力した時刻は JST の壁時計時刻を意味する、
+ * という利用者の決定に従って `+09:00` を付ける。
+ *
  * @param nowMs 注入するクロック。`Date.now()` をここで読まない。
  * @throws {PostValidationError} api の実物の例外。`field` がそのまま UI に出る。
  */
@@ -81,7 +86,7 @@ export const validateDraft = (fields: DraftFields, nowMs: number): ValidatedPost
       draft: fields.draft,
       tags: parseTags(fields.tags),
       body: fields.body,
-      ...(fields.pubDate === '' ? {} : { pubDate: fields.pubDate }),
+      ...(fields.pubDate === '' ? {} : { pubDate: jstWallClockToInstant(fields.pubDate) }),
     },
     nowMs,
   );
@@ -110,7 +115,10 @@ export const postRequestBody = (post: ValidatedPost): Omit<ValidatedPost, 'slug'
  * @param nowMs 注入するクロック。**`Date.now()` をここで読まない。**
  */
 export const publishPathLabel = (fields: DraftFields, nowMs: number): string => {
-  const iso = fields.pubDate === '' ? new Date(nowMs).toISOString() : fields.pubDate;
+  // **送信するのと同じ変換を通す。** 別経路にすると、画面の表示と実際の公開先が
+  // 静かに食い違う（それが CI で見つかった TZ のバグそのものだった）。
+  const iso =
+    fields.pubDate === '' ? new Date(nowMs).toISOString() : jstWallClockToInstant(fields.pubDate);
   let slug: string;
   try {
     slug = dateSlug(iso);

@@ -43,6 +43,7 @@ const ACCEPTED: Array<[string, DraftFields]> = [
  */
 const REJECTED: Array<[string, DraftFields]> = [
   ['title 空白のみ', draft({ title: '  ' })],
+  ['pubDate が日付だけ', draft({ pubDate: '2026-08-31' })],
   ['description 空白のみ', draft({ description: '' })],
   ['タグに大文字', draft({ tags: 'Astro' })],
   ['タグに日本語', draft({ tags: 'にほんご' })],
@@ -152,7 +153,9 @@ describe('pubDate が Date として往復する', () => {
     const { frontmatter } = parseFrontmatter(renderMarkdown(post));
     const parsed = postSchema.parse(frontmatter);
     expect(parsed.pubDate).toBeInstanceOf(Date);
-    expect(parsed.pubDate.toISOString()).toBe(new Date('2026-08-31T11:30').toISOString());
+    // **期待値をホストの TZ から計算しない。** 入力は JST の壁時計時刻なので、
+    // 11:30 JST = 02:30 UTC に固定される（どの TZ で走らせても同じ）。
+    expect(parsed.pubDate.toISOString()).toBe('2026-08-31T02:30:00.000Z');
   });
 
   it('pubDate 未指定なら注入した時計の値になる', () => {

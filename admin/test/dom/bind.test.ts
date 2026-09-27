@@ -223,14 +223,16 @@ describe('onChange', () => {
 });
 
 describe('**公開先の表示**', () => {
-  it('pubDate を入れると #targetPath に URL が出る', async () => {
+  it('**pubDate を入れると #targetPath に URL が出る（TZ に依存しない）**', async () => {
+    // 入力した壁時計時刻は JST として扱われるので、テストを走らせる TZ が
+    // 変わっても期待値は同じ。**ここが TZ 依存だと本番のバグを隠す。**
     const root = mount();
     bindEditor(root, noopPorts);
     set(root, 'pubDate', '2026-09-08T05:40:01');
 
     await vi.waitFor(() => {
-      expect(root.querySelector('#targetPath')?.textContent).toContain(
-        '/posts/2026/09/08/054001/',
+      expect(root.querySelector('#targetPath')?.textContent).toBe(
+        '公開先: /posts/2026/09/08/054001/',
       );
     });
   });

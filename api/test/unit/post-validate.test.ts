@@ -152,6 +152,42 @@ describe('pubDate', () => {
       expectRejected(valid({ pubDate }), 'pubDate');
     }
   });
+
+  it.each([
+    // **`<input type="datetime-local">` が返す形。** これを黙って受けると、
+    // ホストの TZ で解釈されて公開先が著者の居場所で変わる。
+    '2026-09-08T05:40:01',
+    '2026-09-08T05:40',
+    '2026-09-08',
+    '2026-09-08 05:40:01',
+  ])('**オフセットの無い %o は 400**（黙って推測しない）', (pubDate) => {
+    expectRejected(valid({ pubDate }), 'pubDate');
+  });
+
+  it.each([
+    '2026-09-08T05:40:01.000Z',
+    '2026-09-08T05:40:01Z',
+    '2026-09-08T05:40:01+09:00',
+    '2026-09-08T05:40:01-05:00',
+    '2026-09-08T05:40+09:00',
+  ])('オフセット付きの %o は通る', (pubDate) => {
+    expect(validatePost(valid({ pubDate }), NOW_MS).pubDate).toBe(
+      new Date(Date.parse(pubDate)).toISOString(),
+    );
+  });
+
+  it('**+09:00 と Z が同じ瞬間なら同じ slug になる**', () => {
+    const viaOffset = validatePost(valid({ pubDate: '2026-09-08T05:40:01+09:00' }), NOW_MS);
+    const viaZ = validatePost(valid({ pubDate: '2026-09-07T20:40:01.000Z' }), NOW_MS);
+    expect(viaOffset.pubDate).toBe(viaZ.pubDate);
+    expect(viaOffset.slug).toBe('2026/09/08/054001');
+    expect(viaZ.slug).toBe('2026/09/08/054001');
+  });
+
+  it('**pubDate 省略時は now から作るので常にオフセット付き**', () => {
+    // 省略の経路が「オフセット必須」で自分を締め出していないことの確認。
+    expect(validatePost(valid(), NOW_MS).pubDate.endsWith('Z')).toBe(true);
+  });
 });
 
 describe('draft', () => {
