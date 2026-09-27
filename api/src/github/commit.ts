@@ -1,4 +1,5 @@
 import type {
+  DeleteInput,
   InstallationTokenProvider,
   Logger,
   PostPublisher,
@@ -215,7 +216,13 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
     token: string;
     baseCommitSha: string;
     path: string;
-    markdown: string;
+    /**
+     * tree に何を載せるか。**書き込みと削除で分岐するのはここだけ。**
+     *
+     * 削除のために別の関数を置くと、`base_tree` を渡す行と `parents` を渡す行が
+     * 2 箇所に増える。どちらも**落とすとリポジトリが壊れる**行なので、写しを作らない。
+     */
+    change: { kind: 'write'; markdown: string } | { kind: 'delete' };
     message: string;
   }): Promise<string> => {
     const { token, baseCommitSha, path } = args;
@@ -227,13 +234,21 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
     if (typeof baseTreeSha !== 'string') throw new Error('GitHub commit response has no tree.sha');
 
     // 4. blob。base64 で送る — YAML front matter と本文に何が来ても安全に運べる。
-    const blobResponse = await request('POST', `${repoPath}/git/blobs`, token, {
-      content: Buffer.from(args.markdown, 'utf8').toString('base64'),
-      encoding: 'base64',
-    });
-    assertOk(blobResponse, 'blob creation');
-    const blobSha = ((await blobResponse.json()) as { sha?: string }).sha;
-    if (typeof blobSha !== 'string') throw new Error('GitHub blob response has no sha');
+    //
+    //    **削除では blob を作らない。** docs (Create a tree): "If the value is null
+    //    then the file will be deleted." — 消すだけなら中身は要らないので、
+    //    無駄な書き込みリクエストを出さない。
+    let blobSha: string | null = null;
+    if (args.change.kind === 'write') {
+      const blobResponse = await request('POST', `${repoPath}/git/blobs`, token, {
+        content: Buffer.from(args.change.markdown, 'utf8').toString('base64'),
+        encoding: 'base64',
+      });
+      assertOk(blobResponse, 'blob creation');
+      const created = ((await blobResponse.json()) as { sha?: string }).sha;
+      if (typeof created !== 'string') throw new Error('GitHub blob response has no sha');
+      blobSha = created;
+    }
 
     // 5. tree。**base_tree を必ず渡す。**
     //    docs: "If not provided, GitHub will create a new Git tree object from only the
@@ -244,6 +259,8 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
       base_tree: baseTreeSha,
       // sha と content を同時に入れない（docs: "Using both tree.sha and content will
       // return an error"）。blob は上で作ってあるので sha だけを指す。
+      // **削除は `sha: null`。** docs: "Returns an error if you try to delete a file
+      // that does not exist." なので存在確認が要るが、それは `locate` が済ませている。
       tree: [{ path, mode: FILE_MODE, type: 'blob', sha: blobSha }],
     });
     assertOk(treeResponse, 'tree creation');
@@ -291,7 +308,7 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
       token,
       baseCommitSha,
       path,
-      markdown: input.markdown,
+      change: { kind: 'write', markdown: input.markdown },
       message: replaced ? input.replaceMessage : input.createMessage,
     });
 
@@ -310,7 +327,7 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
       token,
       baseCommitSha,
       path,
-      markdown: input.markdown,
+      change: { kind: 'write', markdown: input.markdown },
       message: input.message,
     });
 
@@ -319,5 +336,39 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
     return { commitSha, path, replaced: true };
   };
 
-  return { publish, update };
+  /**
+   * 記事を 1 コミットで削除する。
+   *
+   * **`update` と同じ `locate` / `writeCommit` を通る。** 削除だけ別の手順にすると、
+   * `?ref` を base sha に固定する行や `base_tree` を渡す行が写しになり、
+   * いつか片方だけ緩む。**落とすと壊れ方が最も大きいのが削除経路**なので、
+   * 共有する側に倒している。
+   *
+   * **床の判定はここではしない。** 「公開記事が 0 本になるか」はリポジトリ全体を
+   * 見る必要があり、publisher は 1 記事しか知らない。router が `wouldStarveSite` で
+   * 判定してから呼ぶ。
+   */
+  const remove = async (input: DeleteInput): Promise<PublishResult> => {
+    const { token, baseCommitSha, path, existingSha } = await locate(input.slug);
+
+    // **消えていた場合も一致しない側に倒す**（`update` と同じ理由）。
+    // docs も存在しないファイルの削除はエラーになると書いているので、
+    // ここで落としておかないと GitHub 側の 422 として返ることになる。
+    if (existingSha !== input.sha) throw new StalePostError();
+
+    const commitSha = await writeCommit({
+      token,
+      baseCommitSha,
+      path,
+      change: { kind: 'delete' },
+      message: input.message,
+    });
+
+    deps.logger.info('deleted post', { path, commitSha });
+    // **replaced は true。** 「既にあったものに手を入れた」という意味で、
+    // 呼び出し側が作成と区別できる形を揃えている。
+    return { commitSha, path, replaced: true };
+  };
+
+  return { publish, update, remove };
 };

@@ -78,9 +78,25 @@ export interface UpdateInput {
   sha: string;
 }
 
+/**
+ * 既存記事の削除。**これが唯一の破壊的操作。**
+ *
+ * `UpdateInput` と同じ理由で `sha` を必須にしている。削除は取り消せないので、
+ * 「読んだときと同じものを消している」ことを確かめずに実行させない。
+ */
+export interface DeleteInput {
+  /** 消す記事のスラッグ。**`UpdateInput.slug` と同じく、読んだときのパス。** */
+  slug: string;
+  /** コミットメッセージ。削除は 1 種類なので 1 本だけ受ける。 */
+  message: string;
+  /** 呼び出し側が読んだときの blob sha。**省略不可。** */
+  sha: string;
+}
+
 export interface PostPublisher {
   publish(input: PublishInput): Promise<PublishResult>;
   update(input: UpdateInput): Promise<PublishResult>;
+  remove(input: DeleteInput): Promise<PublishResult>;
 }
 
 /**

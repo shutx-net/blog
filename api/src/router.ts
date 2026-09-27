@@ -277,6 +277,86 @@ const getPost = async ({ request, deps }: RouteContext): Promise<ApiResponse> =>
   }
 };
 
+/**
+ * 記事の削除。**唯一の破壊的操作。**
+ *
+ * slug と sha を**クエリで受ける**。ボディ付き DELETE は経路上の中間装置に
+ * 落とされうるのに対し、ボディ無しは `client.ts` が `EMPTY_PAYLOAD_SHA256` を
+ * 送る形で GET が本番で通っている（実証済みの経路に乗せる）。
+ *
+ * 順序が要件: **形（400）→ 読み取り（404）→ sha 一致（409）→ 床（409）→ 削除**。
+ * 書き込みを 1 本も出す前に拒否が全部終わっていることが、
+ * 「拒否したのに消えている」を構造的に起こさないための条件である。
+ */
+const deletePost = async ({ request, deps }: RouteContext): Promise<ApiResponse> => {
+  const slug = request.query['slug'];
+  // **GitHub を呼ぶ前に形を確かめる。** 呼んでから弾くと、不正な入力でも
+  // installation token の交換が起きる（getPost / updatePost と同じ立場）。
+  if (slug === undefined || !DATE_SLUG_PATTERN.test(slug)) {
+    return jsonResponse(400, { error: 'invalid_post', field: 'slug' });
+  }
+  const sha = request.query['sha'];
+  // **省略を許さない。** 許すと「読んだときと同じものを消している」確認を
+  // 外して呼べる経路ができる（UpdateInput.sha と同じ規律）。
+  if (sha === undefined || sha.trim().length === 0) {
+    return jsonResponse(400, { error: 'invalid_post', field: 'sha' });
+  }
+
+  let existing;
+  try {
+    existing = await deps.reader.read(slug);
+  } catch (error) {
+    if (error instanceof PostNotFoundError) {
+      deps.logger.warn('post to delete not found', { slug: error.slug });
+      return jsonResponse(404, { error: 'post_not_found' });
+    }
+    throw error;
+  }
+
+  // **床の判定を書き込みの前に置く。** `deploy.yml` のスラッグ照合ガードが数えて
+  // いるのは**公開分**なので、「総数」で判定すると許可したのにデプロイが落ちる
+  // （公開 1 本 + 下書き 3 本でその公開を消す場合が実例）。
+  // `UnknownSlugError` は**握り潰さない** — read が成功した直後に list に居ないのは
+  // リポジトリの不整合であり、許可に倒すと「拒否されないのにデプロイが落ちる」。
+  if (wouldStarveSite(await deps.reader.list(), { kind: 'delete', slug })) {
+    deps.logger.warn('delete would leave the site with no published posts', { slug });
+    return jsonResponse(409, { error: 'would_starve_site', field: 'slug' });
+  }
+
+  let result;
+  try {
+    result = await deps.publisher.remove({
+      slug,
+      // **title は削除の前にしか読めない。** 履歴から何が消えたか読めるように、
+      // ここで組んだメッセージを渡す。
+      message: commitMessages(existing.title).deleteMessage,
+      sha,
+    });
+  } catch (error) {
+    if (error instanceof StalePostError) {
+      deps.logger.warn('post changed since it was read', { slug });
+      return jsonResponse(409, { error: 'stale_post', field: 'sha' });
+    }
+    if (error instanceof ConcurrentUpdateError) {
+      deps.logger.warn('ref moved while deleting', { slug });
+      return jsonResponse(409, { error: 'concurrent_update', field: 'sha' });
+    }
+    throw error;
+  }
+
+  // **ここから先は記事が既に消えている。** createPost / updatePost と同じ規律で、
+  // 何が起きても成功を返し、削除をやり直さない。
+  if (deps.deployDispatcher === undefined) return jsonResponse(200, result);
+
+  try {
+    await deps.deployDispatcher.dispatch();
+  } catch (error) {
+    deps.logger.error('deploy dispatch failed after delete', describeDispatchFailure(error));
+    return jsonResponse(200, { ...result, deployTriggered: false } satisfies PublishResponse);
+  }
+  return jsonResponse(200, { ...result, deployTriggered: true } satisfies PublishResponse);
+};
+
 const presignMedia = async ({ body, deps }: RouteContext): Promise<ApiResponse> => {
   const filename = body['filename'];
   try {
@@ -321,6 +401,14 @@ export const ROUTES: readonly Route[] = [
   },
   { method: 'POST', path: '/api/posts', requiresAuth: true, bodyKind: 'json', handle: createPost },
   { method: 'PUT', path: '/api/posts', requiresAuth: true, bodyKind: 'json', handle: updatePost },
+  {
+    method: 'DELETE',
+    path: '/api/posts',
+    requiresAuth: true,
+    // **ボディを取らない。** slug と sha はクエリで受ける（deletePost 参照）。
+    bodyKind: 'none',
+    handle: deletePost,
+  },
   {
     method: 'POST',
     path: '/api/media/presign',

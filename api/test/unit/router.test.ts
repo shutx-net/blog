@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AuthFailureReason, Authorizer } from '../../src/auth.ts';
 import { AUTH_FAILURE_REASONS, AUTH_FAILURE_RESPONSES, denyAllAuthorizer } from '../../src/auth.ts';
 import type { ApiRequest, ApiResponse } from '../../src/http.ts';
-import type { Deps, PublishInput, UpdateInput } from '../../src/deps.ts';
+import type { DeleteInput, Deps, PublishInput, UpdateInput } from '../../src/deps.ts';
 import { DeployDispatchError } from '../../src/github/dispatch.ts';
 import { SlugConflictError } from '../../src/github/commit.ts';
 import { PostNotFoundError } from '../../src/github/reader.ts';
@@ -21,6 +21,7 @@ const spyDeps = (authorizer: Authorizer = denyAllAuthorizer) => {
   const publisher = {
     publish: vi.fn(async (_input: PublishInput) => ({ commitSha: 'x', path: 'p', replaced: false })),
     update: vi.fn(async (_input: UpdateInput) => ({ commitSha: 'u', path: 'p', replaced: true })),
+    remove: vi.fn(async (_input: DeleteInput) => ({ commitSha: 'd', path: 'p', replaced: true })),
   };
   const presigner = {
     presign: vi.fn(async () => ({
@@ -125,12 +126,13 @@ const bodyOf = (response: ApiResponse): Record<string, unknown> =>
   JSON.parse(response.body) as Record<string, unknown>;
 
 describe('ルート表', () => {
-  it('ちょうど 7 経路である', () => {
-    expect(ROUTES).toHaveLength(7);
+  it('ちょうど 8 経路である', () => {
+    expect(ROUTES).toHaveLength(8);
   });
 
   it('経路の集合が固定されている', () => {
     expect(ROUTES.map((route) => `${route.method} ${route.path}`).sort()).toEqual([
+      'DELETE /api/posts',
       'GET /api/health',
       'GET /api/health/github-app',
       'GET /api/posts',
@@ -335,9 +337,10 @@ describe('経路の不一致', () => {
   it.each([
     ['GET', '/api/unknown'],
     ['POST', '/api/health'],
-    // DELETE はまだ経路が無い（Phase 5 で足す）。**ここが緑のままであることが、
-    // 削除をまだ実装していないことの証拠になる。**
-    ['DELETE', '/api/posts'],
+    // **DELETE は /api/posts にしか無い。** 記事の詳細取得と同じ形の
+    // /api/posts/detail に DELETE を生やしていないことの確認も兼ねる。
+    ['DELETE', '/api/posts/detail'],
+    ['DELETE', '/api/health'],
     ['POST', '/posts'],
     ['POST', '/api/posts/'],
     ['GET', '/'],
@@ -655,6 +658,9 @@ describe('公開後のデプロイ起動', () => {
       update: vi.fn(async () => {
         throw new Error('update must not be called on this path');
       }),
+      remove: vi.fn(async () => {
+        throw new Error('remove must not be called on this path');
+      }),
     };
     const deployDispatcher = { dispatch: vi.fn(async () => undefined) };
     await dispatch(postRequest(), { ...deps, publisher, deployDispatcher }).catch(() => undefined);
@@ -798,6 +804,9 @@ describe('スラッグの衝突', () => {
     update: vi.fn(async () => {
       throw new Error('update must not be called on the create path');
     }),
+    remove: vi.fn(async () => {
+      throw new Error('remove must not be called on the create path');
+    }),
   });
 
   it('**SlugConflictError は 409 になる**', async () => {
@@ -913,6 +922,9 @@ describe('overwrite フラグ', () => {
       publish: vi.fn(async () => ({ commitSha: 'abc', path: 'posts/2026/09/27/142621.md', replaced: true })),
       update: vi.fn(async () => {
         throw new Error('update must not be called on the create path');
+      }),
+      remove: vi.fn(async () => {
+        throw new Error('remove must not be called on the create path');
       }),
     };
     const response = await dispatch(post({ overwrite: true }), { ...deps, publisher });
