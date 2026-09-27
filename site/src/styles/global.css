@@ -404,14 +404,18 @@ article > ul:last-child:has(> li > a[href^="/tags/"]) {
 }
 
 /*
- * Inside the link so the whole chip is one target, dimmed so the tag name still
- * reads first. tabular-nums keeps the counts from jittering the chip widths.
+ * Inside the link so the whole chip is one target. tabular-nums keeps the counts
+ * from jittering the chip widths.
+ *
+ * No opacity here, and that is a correction rather than an omission: dimming it
+ * to 0.7 measured 2.94:1 against --surface on the light scheme, under AA. The
+ * count is information -- how many posts a tag has -- not a decorative sigil like
+ * the "#" prefix, so it has to stay legible. Size alone carries the hierarchy.
  */
 .tag-list__count {
   margin-inline-start: 0.5em;
   font-variant-numeric: tabular-nums;
   font-size: 0.8125rem;
-  opacity: 0.7;
 }
 
 article > ul:last-child:has(> li > a[href^="/tags/"]) > li,
