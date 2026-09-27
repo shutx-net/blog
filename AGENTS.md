@@ -21,6 +21,9 @@ npm run -w site build            # site/dist/ に静的サイトを出力
 npm run -w admin build
 npm run -w api build             # esbuild で Lambda をバンドル
 
+npm run lint                     # oxlint。**素の `oxlint` は warning があっても exit 0**
+                                 # なので、`--deny-warnings` 込みのこのスクリプトで呼ぶ
+
 npx -w infra cdk diff            # ★ deploy の前に必ず差分を見る
 npx -w infra cdk deploy <Stack>
 ```
@@ -128,9 +131,13 @@ npx -w infra cdk deploy <Stack>
 
 ### テスト
 
-- **テストは `os.tmpdir()` に書かない。** `api/test/support/scratch.ts` の `scratchDir()` を使う
-  （`scratch-isolation.test.ts` がガード）。`github-token.test.ts` が「token をディスクに残さない」を
-  `readdirSync(tmpdir())` の前後比較で見ているので、**別スイートが tmpdir を触ると落ちる**
+- **テストは `os.tmpdir()` に書かない。** `api/test/support/scratch.ts` の `scratchDir()` を使う。
+  `github-token.test.ts` が「token をディスクに残さない」を `readdirSync(tmpdir())` の
+  前後比較で見ているので、**別スイートが tmpdir を触ると落ちる**
+- 見張りは **`scratch-isolation.test.ts`（テキスト走査）と oxlint の 2 本立て。
+  どちらも相手の上位集合ではない** — 別名 import は oxlint だけが、動的 import と
+  `node:` 接頭辞なしはテキスト走査だけが捕まえる。**片方を消すと穴が開く**
+  （実測表は `.oxlintrc.json` のコメント）
 - **プロセスを跨いで見える場所を壊すテストを書かない。** 同じ形の事故が 3 回起きた
   （`api/dist` の共有 / 書きかけを `Code.fromAsset` の対象に置く / `os.tmpdir()`）。
   **失敗はファイルごと実行されずに終わるので、件数を見ないと緑に見える**
@@ -144,7 +151,11 @@ npx -w infra cdk deploy <Stack>
 ## コード
 
 - TypeScript。npm workspaces（`site` / `admin` / `api` / `infra`）
-- インデント 2 スペース
+- インデント 2 スペース。**これは機械検査されていない** — oxlint はリンタであって
+  フォーマッタではなく、`indent` ルール自体が存在しない。フォーマッタは入れていない
+- **機械検査できる規約は `.oxlintrc.json` に書く**（jsonc なので理由もそこに書ける）。
+  文章で書くだけの規約を増やさない。**ただし oxlint で表現できないものは多い** —
+  何が無理かは `DEVELOPERS.md`。**検査されていないものを「検査されている」と書かないこと**
 - Astro のコンテンツスキーマは `site/src/content.config.ts` に Zod で定義する。
   フロントマターの書き間違いをビルドで落とすため
 

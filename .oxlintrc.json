@@ -30,6 +30,115 @@
       "rules": {
         "no-unused-vars": "off"
       }
+    },
+    {
+      // **規約: テストは OS の一時ディレクトリに書かない。**
+      //
+      // `api/test/unit/github-token.test.ts` が「installation token をディスクに
+      // 残さない」を `readdirSync(tmpdir())` の前後スナップショットで確認している。
+      // 同時に走るどのプロセスであれ tmpdir にディレクトリを作れば、あの主張は落ちる。
+      // 置き場は `api/test/support/scratch.ts` の `scratchDir` に統一してある。
+      //
+      // **このルールは `scratch-isolation.test.ts` の代わりにはならない。** 実測:
+      //
+      //   形                                        テキスト走査   このルール
+      //   import { tmpdir } from 'node:os'            検出          検出
+      //   import { tmpdir as t } from 'node:os'       素通り        検出
+      //   import * as os → os.tmpdir()                検出          検出
+      //   import os from 'node:os' → os.tmpdir()      検出          素通り
+      //   (await import('node:os')).tmpdir()          検出          素通り
+      //   export { tmpdir } from 'node:os'            素通り        検出
+      //   import { tmpdir } from 'os'（接頭辞なし）   検出          素通り
+      //
+      // **どちらも相手の上位集合ではない。** 両方を並べて置く。
+      "files": ["**/test/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "node:os",
+                "importNames": ["tmpdir"],
+                "message": "テストの一時ファイルは api/test/support/scratch.ts の scratchDir() に置くこと。os.tmpdir() に書くと github-token.test.ts のスナップショット主張が同時実行で落ちる。"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // **規約 1 の唯一の例外。** ここが監視の主体で、tmpdir を参照しないと成立しない。
+      //
+      // 現状この file は動的 import（`await import('node:os')`）を使っており、
+      // 上のルールは静的 import しか見ないので**今日は発火しない**。
+      // それでもこの override を置くのは、将来ここが静的 import に書き換わった日に
+      // 「正しいファイルが赤くなる」のを防ぐため。**意図を書き残すのが目的。**
+      "files": ["api/test/unit/github-token.test.ts"],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    },
+    {
+      // **規約: ブラウザにも載るコードは node の組み込みに触らない。**
+      //
+      // `admin/` がここから直接 import する。node の組み込みを読んだ瞬間に
+      // admin のビルドが壊れる。これまでこの規約は**コメントにしか書かれておらず**、
+      // `media/limits.ts` にだけテストがあった（`api/src/posts/**` は無防備だった）。
+      //
+      // `patterns` は `paths` と違い**動的 import も捕まえる**（実測）。
+      // bare specifier（`from 'fs'`）も塞ぐため両方を列挙する。
+      //
+      // なお `media/limits.ts` の「import 文が 1 つも無い」は oxlint では表現できない
+      // （相対 import は正当なので patterns で禁じられない）。
+      // `media-limits.test.ts` は残す。
+      "files": ["api/src/posts/**/*.ts", "api/src/media/limits.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              "node:*",
+              "fs",
+              "os",
+              "path",
+              "crypto",
+              "url",
+              "buffer",
+              "process",
+              "child_process"
+            ]
+          }
+        ],
+        "no-restricted-globals": [
+          "error",
+          "process",
+          "__dirname",
+          "__filename",
+          "Buffer"
+        ]
+      }
+    },
+    {
+      // **規約: admin は素のネットワーク呼び出しをしない。**
+      //
+      // ここで押さえられるのは `XMLHttpRequest` だけ。**`fetch` は入れられない。**
+      // 実測で `no-restricted-globals` は**型位置の `typeof fetch` も違反として数える**。
+      // admin/src の 7 ファイルが注入 seam として `fetchImpl?: typeof fetch` を
+      // 使っており、これは `no-raw-fetch.test.ts` が推奨している正しい書き方だ。
+      // 7 ファイルを override で除外すると、ルールが実質 off になる。
+      //
+      // さらに `globalThis.fetch` / `window.fetch` / `new Request` / `sendBeacon` は
+      // メンバ参照なので `no-restricted-globals` では拾えない（実測）。
+      // **6 形のうち捕まえられるのは 2 形だけ。**
+      // `admin/test/unit/no-raw-fetch.test.ts` が本体で、これは補助にすぎない。
+      "files": ["admin/src/**/*.ts"],
+      "rules": {
+        "no-restricted-globals": [
+          "error",
+          "XMLHttpRequest"
+        ]
+      }
     }
   ]
 }
