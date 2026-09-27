@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AuthFailureReason, Authorizer } from '../../src/auth.ts';
 import { AUTH_FAILURE_REASONS, AUTH_FAILURE_RESPONSES, denyAllAuthorizer } from '../../src/auth.ts';
 import type { ApiRequest, ApiResponse } from '../../src/http.ts';
-import type { Deps, PublishInput } from '../../src/deps.ts';
+import type { DeleteInput, Deps, PublishInput, UpdateInput } from '../../src/deps.ts';
 import { DeployDispatchError } from '../../src/github/dispatch.ts';
 import { SlugConflictError } from '../../src/github/commit.ts';
+import { PostNotFoundError } from '../../src/github/reader.ts';
 import { ROUTES, dispatch } from '../../src/router.ts';
 import { KeyNotProvisionedError } from '../../src/secret.ts';
 
@@ -19,6 +20,8 @@ const spyDeps = (authorizer: Authorizer = denyAllAuthorizer) => {
   // publisher に何を渡したかを主張できない（overwrite の既定を見るのに要る）。
   const publisher = {
     publish: vi.fn(async (_input: PublishInput) => ({ commitSha: 'x', path: 'p', replaced: false })),
+    update: vi.fn(async (_input: UpdateInput) => ({ commitSha: 'u', path: 'p', replaced: true })),
+    remove: vi.fn(async (_input: DeleteInput) => ({ commitSha: 'd', path: 'p', replaced: true })),
   };
   const presigner = {
     presign: vi.fn(async () => ({
@@ -31,9 +34,23 @@ const spyDeps = (authorizer: Authorizer = denyAllAuthorizer) => {
   const secretReader = { readPrivateKey: vi.fn(async () => 'PEM') };
   const tokenProvider = { getToken: vi.fn(async () => 'ghs_token') };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const summary = {
+    slug: '2026/09/27/142621',
+    title: 't',
+    description: 'd',
+    pubDate: '2026-09-27T05:26:21.486Z',
+    draft: false,
+    tags: [],
+    sha: 'blob1',
+  };
+  const reader = {
+    list: vi.fn(async () => [summary]),
+    read: vi.fn(async (slug: string) => ({ ...summary, slug, body: 'b' })),
+  };
   const deps: Deps = {
     authorizer,
     publisher,
+    reader,
     presigner,
     secretReader,
     tokenProvider,
@@ -43,6 +60,9 @@ const spyDeps = (authorizer: Authorizer = denyAllAuthorizer) => {
   };
   const spies = [
     publisher.publish,
+    publisher.update,
+    reader.list,
+    reader.read,
     presigner.presign,
     secretReader.readPrivateKey,
     tokenProvider.getToken,
@@ -50,7 +70,16 @@ const spyDeps = (authorizer: Authorizer = denyAllAuthorizer) => {
   const expectNoCollaboratorCalls = (): void => {
     for (const spy of spies) expect(spy).toHaveBeenCalledTimes(0);
   };
-  return { deps, publisher, presigner, secretReader, tokenProvider, logger, expectNoCollaboratorCalls };
+  return {
+    deps,
+    publisher,
+    reader,
+    presigner,
+    secretReader,
+    tokenProvider,
+    logger,
+    expectNoCollaboratorCalls,
+  };
 };
 
 /** 常に許可する Authorizer。**本番には存在しない** — 拒否テストが空虚でないことの対照用。 */
@@ -75,20 +104,42 @@ const jsonPost = (path: string, body: unknown): ApiRequest =>
     rawBody: JSON.stringify(body),
   });
 
+/** 更新の最小ボディ。**targetSlug と sha が要る**（どちらも省略できない）。 */
+const jsonPut = (body: Record<string, unknown> = {}): ApiRequest =>
+  request({
+    method: 'PUT',
+    path: '/api/posts',
+    headers: { 'content-type': 'application/json' },
+    rawBody: JSON.stringify({
+      targetSlug: '2026/09/27/142621',
+      sha: 'blob1',
+      title: 't',
+      description: 'd',
+      body: 'b',
+      draft: false,
+      pubDate: '2026-09-27T05:26:21.486Z',
+      ...body,
+    }),
+  });
+
 const bodyOf = (response: ApiResponse): Record<string, unknown> =>
   JSON.parse(response.body) as Record<string, unknown>;
 
 describe('ルート表', () => {
-  it('ちょうど 4 経路である', () => {
-    expect(ROUTES).toHaveLength(4);
+  it('ちょうど 8 経路である', () => {
+    expect(ROUTES).toHaveLength(8);
   });
 
   it('経路の集合が固定されている', () => {
     expect(ROUTES.map((route) => `${route.method} ${route.path}`).sort()).toEqual([
+      'DELETE /api/posts',
       'GET /api/health',
       'GET /api/health/github-app',
+      'GET /api/posts',
+      'GET /api/posts/detail',
       'POST /api/media/presign',
       'POST /api/posts',
+      'PUT /api/posts',
     ]);
   });
 
@@ -132,6 +183,16 @@ describe('AUTH_MODE=deny-all のとき書き込み経路に到達できない', 
       jsonPost('/api/media/presign', { contentType: 'image/png', size: 100 }),
       deps,
     );
+    expect(response.statusCode).toBe(503);
+    expect(bodyOf(response)['error']).toBe('auth_not_configured');
+    expectNoCollaboratorCalls();
+  });
+
+  it('PUT /api/posts が 503 を返し、コラボレータを 1 つも呼ばない', async () => {
+    // **reader も呼ばれない。** 更新は読み取りを先に行う経路なので、認可が
+    // ディスパッチ前にあることを reader の呼び出し回数でも確かめられる。
+    const { deps, expectNoCollaboratorCalls } = spyDeps();
+    const response = await dispatch(jsonPut(), deps);
     expect(response.statusCode).toBe(503);
     expect(bodyOf(response)['error']).toBe('auth_not_configured');
     expectNoCollaboratorCalls();
@@ -191,6 +252,14 @@ describe('拒否テストが空虚でないことの対照（同じ入力を許�
     const { deps, presigner } = spyDeps(allowAuthorizer);
     await dispatch(jsonPost('/api/media/presign', { contentType: 'image/png', size: 100 }), deps);
     expect(presigner.presign).toHaveBeenCalledTimes(1);
+  });
+
+  it('許可すると PUT /api/posts が publisher.update を呼ぶ', async () => {
+    const { deps, publisher } = spyDeps(allowAuthorizer);
+    await dispatch(jsonPut(), deps);
+    expect(publisher.update).toHaveBeenCalledTimes(1);
+    // **publish ではない。** 更新が作成経路に落ちていないことを名指しで固定する。
+    expect(publisher.publish).toHaveBeenCalledTimes(0);
   });
 
   it('許可すると GET /api/health/github-app が tokenProvider を呼ぶ', async () => {
@@ -268,8 +337,10 @@ describe('経路の不一致', () => {
   it.each([
     ['GET', '/api/unknown'],
     ['POST', '/api/health'],
-    ['DELETE', '/api/posts'],
-    ['GET', '/api/posts'],
+    // **DELETE は /api/posts にしか無い。** 記事の詳細取得と同じ形の
+    // /api/posts/detail に DELETE を生やしていないことの確認も兼ねる。
+    ['DELETE', '/api/posts/detail'],
+    ['DELETE', '/api/health'],
     ['POST', '/posts'],
     ['POST', '/api/posts/'],
     ['GET', '/'],
@@ -584,6 +655,12 @@ describe('公開後のデプロイ起動', () => {
       publish: vi.fn(async () => {
         throw new Error('publish failed');
       }),
+      update: vi.fn(async () => {
+        throw new Error('update must not be called on this path');
+      }),
+      remove: vi.fn(async () => {
+        throw new Error('remove must not be called on this path');
+      }),
     };
     const deployDispatcher = { dispatch: vi.fn(async () => undefined) };
     await dispatch(postRequest(), { ...deps, publisher, deployDispatcher }).catch(() => undefined);
@@ -724,6 +801,12 @@ describe('スラッグの衝突', () => {
     publish: vi.fn(async () => {
       throw new SlugConflictError('2026/09/27/142621');
     }),
+    update: vi.fn(async () => {
+      throw new Error('update must not be called on the create path');
+    }),
+    remove: vi.fn(async () => {
+      throw new Error('remove must not be called on the create path');
+    }),
   });
 
   it('**SlugConflictError は 409 になる**', async () => {
@@ -837,9 +920,129 @@ describe('overwrite フラグ', () => {
     const { deps } = spyDeps(allowAuthorizer);
     const publisher = {
       publish: vi.fn(async () => ({ commitSha: 'abc', path: 'posts/2026/09/27/142621.md', replaced: true })),
+      update: vi.fn(async () => {
+        throw new Error('update must not be called on the create path');
+      }),
+      remove: vi.fn(async () => {
+        throw new Error('remove must not be called on the create path');
+      }),
     };
     const response = await dispatch(post({ overwrite: true }), { ...deps, publisher });
     expect(response.statusCode).toBe(201);
     expect(bodyOf(response)['replaced']).toBe(true);
+  });
+});
+
+/**
+ * 読み取り経路。
+ *
+ * **blog-content は private で下書きが入っている。** 認証を外すと下書きが公開される。
+ * 上の「GET /api/health 以外のすべてが requiresAuth: true」が表を全件走査しているので、
+ * 付け忘れはそこで落ちる。ここでは**拒否時にコラボレータを 1 つも呼ばない**ことと、
+ * 入力の検証・不在の写像を確かめる。
+ */
+describe('GET /api/posts（一覧）', () => {
+  const listRequest = (): ApiRequest => request({ method: 'GET', path: '/api/posts' });
+
+  it('認可されると reader.list の結果を返す', async () => {
+    const { deps, reader } = spyDeps(allowAuthorizer);
+    const response = await dispatch(listRequest(), deps);
+    expect(response.statusCode).toBe(200);
+    const body = bodyOf(response);
+    expect(body['count']).toBe(1);
+    expect((body['posts'] as unknown[])[0]).toMatchObject({ slug: '2026/09/27/142621', sha: 'blob1' });
+    expect(reader.list).toHaveBeenCalledTimes(1);
+  });
+
+  it('**認可されないと reader を 1 度も呼ばない**', async () => {
+    const { deps, expectNoCollaboratorCalls } = spyDeps();
+    const response = await dispatch(listRequest(), deps);
+    expect(response.statusCode).toBe(503);
+    expectNoCollaboratorCalls();
+  });
+
+  it('**下書きも返す**（管理画面は下書きを見たい）', async () => {
+    const { deps } = spyDeps(allowAuthorizer);
+    const reader = {
+      list: vi.fn(async () => [
+        { slug: '2026/09/27/142621', title: 'd', description: 'd', pubDate: '2026-09-27T05:26:21.486Z', draft: true, tags: [], sha: 's' },
+      ]),
+      read: vi.fn(async () => ({ slug: '2026/09/27/142621', title: 'd', description: 'd', pubDate: '2026-09-27T05:26:21.486Z', draft: true, tags: [], sha: 's', body: 'b' })),
+    };
+    const response = await dispatch(listRequest(), { ...deps, reader });
+    expect((bodyOf(response)['posts'] as Array<Record<string, unknown>>)[0]?.['draft']).toBe(true);
+  });
+
+  it('記事が 0 本でも 200 と空配列を返す', async () => {
+    const { deps } = spyDeps(allowAuthorizer);
+    const reader = { list: vi.fn(async () => []), read: vi.fn() } as never;
+    const response = await dispatch(listRequest(), { ...deps, reader });
+    expect(response.statusCode).toBe(200);
+    expect(bodyOf(response)).toEqual({ posts: [], count: 0 });
+  });
+
+  it('**本文を返さない**（一覧は body を含まない）', async () => {
+    const { deps } = spyDeps(allowAuthorizer);
+    const response = await dispatch(listRequest(), deps);
+    const posts = bodyOf(response)['posts'] as Array<Record<string, unknown>>;
+    expect(posts[0]).not.toHaveProperty('body');
+  });
+});
+
+describe('GET /api/posts/detail（取得）', () => {
+  const detailRequest = (query: Record<string, string>): ApiRequest =>
+    request({ method: 'GET', path: '/api/posts/detail', query });
+
+  it('slug を渡すと本文まで返す', async () => {
+    const { deps, reader } = spyDeps(allowAuthorizer);
+    const response = await dispatch(detailRequest({ slug: '2026/09/27/142621' }), deps);
+    expect(response.statusCode).toBe(200);
+    expect(bodyOf(response)).toMatchObject({ slug: '2026/09/27/142621', body: 'b', sha: 'blob1' });
+    expect(reader.read).toHaveBeenCalledWith('2026/09/27/142621');
+  });
+
+  it('**認可されないと reader を 1 度も呼ばない**', async () => {
+    const { deps, expectNoCollaboratorCalls } = spyDeps();
+    const response = await dispatch(detailRequest({ slug: '2026/09/27/142621' }), deps);
+    expect(response.statusCode).toBe(503);
+    expectNoCollaboratorCalls();
+  });
+
+  it('slug 未指定は 400 で、reader を呼ばない', async () => {
+    const { deps, reader } = spyDeps(allowAuthorizer);
+    const response = await dispatch(detailRequest({}), deps);
+    expect(response.statusCode).toBe(400);
+    expect(bodyOf(response)).toEqual({ error: 'invalid_post', field: 'slug' });
+    expect(reader.read).toHaveBeenCalledTimes(0);
+  });
+
+  it.each(['..', '../../etc/passwd', 'hello-world', '2026/9/8/54001', ''])(
+    '不正な slug %o は 400 で、reader を呼ばない',
+    async (slug) => {
+      const { deps, reader } = spyDeps(allowAuthorizer);
+      const response = await dispatch(detailRequest({ slug }), deps);
+      expect(response.statusCode).toBe(400);
+      expect(bodyOf(response)['field']).toBe('slug');
+      expect(reader.read).toHaveBeenCalledTimes(0);
+    },
+  );
+
+  it('**不在は 404 post_not_found**', async () => {
+    const { deps } = spyDeps(allowAuthorizer);
+    const reader = {
+      list: vi.fn(async () => []),
+      read: vi.fn(async () => {
+        throw new PostNotFoundError('2026/09/27/142621');
+      }),
+    } as never;
+    const response = await dispatch(detailRequest({ slug: '2026/09/27/142621' }), { ...deps, reader });
+    expect(response.statusCode).toBe(404);
+    expect(bodyOf(response)).toEqual({ error: 'post_not_found' });
+  });
+
+  it('**入力をエコーしない**（応答に slug を載せない）', async () => {
+    const { deps } = spyDeps(allowAuthorizer);
+    const response = await dispatch(detailRequest({ slug: 'hello-world' }), deps);
+    expect(response.body).not.toContain('hello-world');
   });
 });

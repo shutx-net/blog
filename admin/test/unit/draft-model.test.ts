@@ -9,6 +9,8 @@ import {
   parseTags,
   postRequestBody,
   publishPathLabel,
+  slugToWallClock,
+  updateRequestBody,
   validateDraft,
 } from '../../src/editor/model.ts';
 import type { DraftFields } from '../../src/editor/model.ts';
@@ -235,5 +237,51 @@ describe('postRequestBody', () => {
     const post = validateDraft(draft(), NOW);
     const remaining = Object.keys(postRequestBody(post));
     expect(remaining).toHaveLength(Object.keys(post).length - 1);
+  });
+});
+
+describe('slugToWallClock', () => {
+  it.each([
+    ['2026/09/27/142621', '2026-09-27T14:26:21'],
+    ['2026/01/01/000000', '2026-01-01T00:00:00'],
+    ['2026/12/31/235959', '2026-12-31T23:59:59'],
+  ])('%s -> %s', (slug, expected) => {
+    expect(slugToWallClock(slug)).toBe(expected);
+  });
+
+  it('**dateSlug の逆になっている**（往復して同じ slug に戻る）', () => {
+    // 逆関数であることを名指しで固定する。別々に書式化していると、
+    // いつか片方だけ直って表示と URL が食い違う。
+    const slug = '2026/09/27/142621';
+    expect(ADMIN_DATE_SLUG(`${slugToWallClock(slug)}+09:00`)).toBe(slug);
+  });
+
+  it.each(['hello-world', '2026/9/8/54001', '..', ''])('形が違う %o は投げる', (slug) => {
+    expect(() => slugToWallClock(slug)).toThrow();
+  });
+});
+
+describe('updateRequestBody', () => {
+  const post = validateDraft(draft({ pubDate: '2026-09-27T14:26:21' }), NOW);
+  const target = { slug: '2026/09/27/142621', pubDate: '2026-09-27T05:26:21.486Z', sha: 'blob-abc' };
+
+  it('**slug を含まず targetSlug と sha を含む**', () => {
+    const body = updateRequestBody(post, target);
+    expect(Object.keys(body)).not.toContain('slug');
+    expect(body.targetSlug).toBe(target.slug);
+    expect(body.sha).toBe(target.sha);
+  });
+
+  it('**pubDate はフォームの値ではなく target の値**（ms を落とさない）', () => {
+    // フォーム由来の値は ms を持てないので、そのまま送ると api の
+    // 「表記まで一致」検査に落ちる。
+    expect(post.pubDate).not.toBe(target.pubDate);
+    expect(updateRequestBody(post, target).pubDate).toBe(target.pubDate);
+  });
+
+  it('本文とタグは post 側の値が載る', () => {
+    const body = updateRequestBody(post, target);
+    expect(body.body).toBe(post.body);
+    expect(body.tags).toEqual(post.tags);
   });
 });

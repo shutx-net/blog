@@ -25,7 +25,11 @@ const fakeGitHub = (files: Map<string, string>) => {
 
       if (method === 'GET' && p.startsWith('/repos/o/r/contents/')) {
         const file = p.slice('/repos/o/r/contents/'.length);
-        return files.has(file) ? json({ type: 'file', path: file }) : json({ message: 'Not Found' }, 404);
+        // **sha を返す。** 本物の Contents API は必ず返し、更新経路はこの値を
+        // 楽観的並行制御に使う。省いた偽物は「本物なら通らない実装」を通してしまう。
+        return files.has(file)
+          ? json({ type: 'file', path: file, sha: `blob-${file}` })
+          : json({ message: 'Not Found' }, 404);
       }
       if (p === '/repos/o/r/git/ref/heads/main') return json({ object: { sha: 'base' } });
       if (p === '/repos/o/r/git/commits/base') return json({ tree: { sha: 'tree0' } });
@@ -54,6 +58,17 @@ const deps = (): Deps => ({
     postsPathPrefix: 'posts/',
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   }),
+  // このファイルは書き込み経路の再現なので、読み取りは呼ばれないことを型で満たすだけ。
+  // **呼ばれたら落ちるようにしておく**（黙って空の一覧を返すと、将来ここに
+  // 読み取りが混ざったときに気づけない）。
+  reader: {
+    list: async () => {
+      throw new Error('reader.list must not be called on the write path');
+    },
+    read: async () => {
+      throw new Error('reader.read must not be called on the write path');
+    },
+  },
   presigner: { presign: async () => ({ url: '', key: '', expiresIn: 0, requiredHeaders: {} }) },
   secretReader: { readPrivateKey: async () => 'PEM' },
   tokenProvider: { getToken: async () => 't' },

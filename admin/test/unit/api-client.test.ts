@@ -45,9 +45,19 @@ const headersOf = (captured: Captured): Record<string, string> => {
   return out;
 };
 
+/**
+ * ボディを運ぶメソッド。**`method === 'POST'` で決め打ちにしない。**
+ *
+ * PUT を足したときに、content-type の主張が POST だけに絞られたままだと
+ * **新しい書き込み経路が検査されずに通る**（415 で落ちるのは本番で気づく）。
+ * 集合として持てば、動詞が増えたときにここを直す必要があることが型と
+ * 突き合わせの両方から見える。
+ */
+const BODY_METHODS: readonly string[] = ['POST', 'PUT'];
+
 /** 経路ごとの最小のボディ。bodyKind: 'json' の経路だけ中身が要る。 */
 const bodyFor = (operation: ApiOperation): Record<string, unknown> | undefined =>
-  operation.method === 'POST' ? { slug: 'x', nested: { 日本語: '🎉\r\n' } } : undefined;
+  BODY_METHODS.includes(operation.method) ? { slug: 'x', nested: { 日本語: '🎉\r\n' } } : undefined;
 
 const invoke = async (
   operation: ApiOperation,
@@ -109,7 +119,7 @@ describe('x-amz-content-sha256 を構造的に外せない', () => {
     expect(fetchSpy.calls[0]?.url).toBe(`https://example.invalid${operation.path}`);
   });
 
-  it.each(API_OPERATIONS.filter((operation) => operation.method === 'POST'))(
+  it.each(API_OPERATIONS.filter((operation) => BODY_METHODS.includes(operation.method)))(
     '$method $path が content-type: application/json を明示する',
     async (operation) => {
       // fetch は Uint8Array の body に Content-Type を付けない。無いと API が
@@ -119,6 +129,10 @@ describe('x-amz-content-sha256 を構造的に外せない', () => {
       expect(headersOf(fetchSpy.calls[0]!)['content-type']).toBe('application/json');
     },
   );
+
+  it('ボディを運ぶ経路が 1 つ以上ある（上の it.each が空集合で緑にならない）', () => {
+    expect(API_OPERATIONS.filter((o) => BODY_METHODS.includes(o.method)).length).toBeGreaterThan(1);
+  });
 
   it('GET には空ペイロードの定数が付く（body の有無で分岐しない）', async () => {
     const fetchSpy = spyFetch(() => jsonResponse(200, {}));
@@ -132,6 +146,52 @@ describe('x-amz-content-sha256 を構造的に外せない', () => {
     const fetchSpy = spyFetch(() => jsonResponse(200, {}));
     await invoke({ method: 'GET', path: '/api/health' }, fetchSpy.impl);
     expect(fetchSpy.calls[0]?.init.body).toBeUndefined();
+  });
+});
+
+/**
+ * クエリ文字列。
+ *
+ * 記事のスラッグは `2026/09/27/142621` でスラッシュを含むので、パスに埋めると
+ * `(method, path)` の完全一致で引いている api のルート表を作り直すことになる。
+ * **だからクエリで渡す。** ここはその組み立てだけを見る。
+ */
+describe('クエリ文字列', () => {
+  const callWith = async (query?: Record<string, string>): Promise<string> => {
+    const fetchSpy = spyFetch(() => jsonResponse(200, {}));
+    await createApiClient({
+      origin: 'https://example.invalid',
+      auth: fakeAuth(),
+      fetchImpl: fetchSpy.impl,
+    }).call({ method: 'GET', path: '/api/posts/detail' }, undefined, query);
+    return fetchSpy.calls[0]?.url ?? '';
+  };
+
+  it('渡すと ? 付きの URL になる', async () => {
+    expect(await callWith({ slug: '2026/09/27/142621' })).toBe(
+      'https://example.invalid/api/posts/detail?slug=2026%2F09%2F27%2F142621',
+    );
+  });
+
+  it('**スラッシュが percent-encode される**（パスに化けない）', async () => {
+    // エンコードを忘れると `/api/posts/detail?slug=2026/09/27/142621` になる。
+    // 動いてしまうが、パスとクエリの境界が曖昧なままになる。
+    expect(await callWith({ slug: '2026/09/27/142621' })).toContain('slug=2026%2F09%2F27%2F142621');
+  });
+
+  it('**未指定なら ? を付けない**', async () => {
+    expect(await callWith()).toBe('https://example.invalid/api/posts/detail');
+  });
+
+  it('**空オブジェクトでも ? を付けない**', async () => {
+    // `?` だけが付いた URL は、表どおりの URL を主張している上の全経路テストを壊す。
+    expect(await callWith({})).toBe('https://example.invalid/api/posts/detail');
+  });
+
+  it('複数の値を組み立てられる（Phase 5 の削除が slug と sha を送る）', async () => {
+    const url = await callWith({ slug: '2026/09/27/142621', sha: 'abc123' });
+    expect(url).toContain('slug=2026%2F09%2F27%2F142621');
+    expect(url).toContain('sha=abc123');
   });
 
   it('非 ASCII と CRLF を含む body でもバイト列とハッシュが一致する', async () => {

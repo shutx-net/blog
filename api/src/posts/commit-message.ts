@@ -49,10 +49,17 @@ export const foldSubjectTitle = (title: string): string => {
   return `${points.slice(0, budget - [...ELLIPSIS].length).join('')}${ELLIPSIS}`;
 };
 
-/** 作成時と更新時の 1 行目。**どちらが使われるかは publisher が決める。** */
+/** 作成・更新・削除の 1 行目。**どれが使われるかは publisher と router が決める。** */
 export interface CommitMessages {
   createMessage: string;
   replaceMessage: string;
+  /**
+   * 削除。**title を読めるのは削除の前だけ**なので、ここで組んでおく。
+   *
+   * 消えた記事の中身は履歴を辿れば読めるが、1 行目に title が無いと
+   * `git log --oneline` から「何が消えたか」が分からない。
+   */
+  deleteMessage: string;
 }
 
 /**
@@ -65,5 +72,6 @@ export const commitMessages = (title: string): CommitMessages => {
   return {
     createMessage: `${PREFIX}記事「${subject}」を追加`,
     replaceMessage: `${PREFIX}記事「${subject}」を更新`,
+    deleteMessage: `${PREFIX}記事「${subject}」を削除`,
   };
 };

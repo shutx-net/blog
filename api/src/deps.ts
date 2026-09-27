@@ -50,8 +50,91 @@ export interface PublishResponse extends PublishResult {
   deployTriggered?: boolean;
 }
 
+/**
+ * 既存記事の差し替え。**新規作成には使わない。**
+ *
+ * `PublishInput` と分けているのは、**`sha` を省略できない形にするため。**
+ * 1 つの型に `sha?: string` として混ぜると、作成経路が省略するのに倣って
+ * 更新経路でも省略できてしまい、楽観的並行制御を外して呼べる経路ができる。
+ */
+export interface UpdateInput {
+  /**
+   * 差し替える記事のスラッグ。**pubDate から導出し直した値ではない。**
+   *
+   * front matter の pubDate がファイル名と食い違う記事（`blog-content` を手で
+   * 編集すれば作れる）を編集したとき、導出値を使うと**別のパスに書いて
+   * 新しい記事を作ってしまう**。読んだときのパスをそのまま使う。
+   */
+  slug: string;
+  markdown: string;
+  /** コミットメッセージ。更新は常に差し替えなので 1 本だけ受ける。 */
+  message: string;
+  /**
+   * 呼び出し側が読んだときの blob sha。**省略不可。**
+   *
+   * 一致しなければ `StalePostError` になる。読んでから書くまでの間に
+   * 別の経路が同じ記事を変えていたら、その変更を踏み潰さずに落とす。
+   */
+  sha: string;
+}
+
+/**
+ * 既存記事の削除。**これが唯一の破壊的操作。**
+ *
+ * `UpdateInput` と同じ理由で `sha` を必須にしている。削除は取り消せないので、
+ * 「読んだときと同じものを消している」ことを確かめずに実行させない。
+ */
+export interface DeleteInput {
+  /** 消す記事のスラッグ。**`UpdateInput.slug` と同じく、読んだときのパス。** */
+  slug: string;
+  /** コミットメッセージ。削除は 1 種類なので 1 本だけ受ける。 */
+  message: string;
+  /** 呼び出し側が読んだときの blob sha。**省略不可。** */
+  sha: string;
+}
+
 export interface PostPublisher {
   publish(input: PublishInput): Promise<PublishResult>;
+  update(input: UpdateInput): Promise<PublishResult>;
+  remove(input: DeleteInput): Promise<PublishResult>;
+}
+
+/**
+ * 一覧に出す 1 記事。**body を含まない。**
+ *
+ * 一覧は記事数ぶんの blob 取得になるので、本文まで返すと転送量が記事の長さに比例する。
+ * 編集のために本文が要るのは 1 本だけなので、そこは `PostDetail` が担う。
+ */
+export interface PostSummary {
+  /** `DATE_SLUG_PATTERN` に合致する日付パス。ファイル名から復元した値。 */
+  slug: string;
+  title: string;
+  description: string;
+  pubDate: string;
+  draft: boolean;
+  tags: string[];
+  /**
+   * blob の sha。**楽観的並行制御のトークン。**
+   *
+   * 更新・削除のときに「読んだときと同じ中身か」を確かめるために使う。
+   * commit の sha ではなく blob の sha なので、他の記事が変わっても無効にならない。
+   */
+  sha: string;
+}
+
+export interface PostDetail extends PostSummary {
+  body: string;
+}
+
+/**
+ * 記事を読む。**書き込みは一切しない。**
+ *
+ * publisher と別の interface にしているのは、認可されないときに
+ * 「どちらも呼ばれない」ことを個別に主張できるようにするため。
+ */
+export interface PostReader {
+  list(): Promise<PostSummary[]>;
+  read(slug: string): Promise<PostDetail>;
 }
 
 export interface PresignInput {
@@ -113,6 +196,13 @@ export interface Logger {
 export interface Deps {
   authorizer: Authorizer;
   publisher: PostPublisher;
+  /**
+   * 記事の読み取り。**必須にしている。**
+   *
+   * オプショナルにすると、新しい呼び出し側が組み立てを忘れても型が通り、
+   * 一覧が「常に空」で静かに動く経路ができる。
+   */
+  reader: PostReader;
   presigner: MediaPresigner;
   secretReader: SecretReader;
   tokenProvider: InstallationTokenProvider;

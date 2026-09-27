@@ -1,4 +1,12 @@
-import type { InstallationTokenProvider, Logger, PostPublisher, PublishInput, PublishResult } from '../deps.ts';
+import type {
+  DeleteInput,
+  InstallationTokenProvider,
+  Logger,
+  PostPublisher,
+  PublishInput,
+  PublishResult,
+  UpdateInput,
+} from '../deps.ts';
 import { DATE_SLUG_PATTERN } from '../posts/slug.ts';
 import { GITHUB_API_BASE, GITHUB_API_VERSION } from './token.ts';
 
@@ -64,6 +72,25 @@ export class SlugConflictError extends Error {
   }
 }
 
+/**
+ * 読んだときと中身が変わっていた（あるいは消えていた）ときに投げる。
+ *
+ * **ルータで 409 になる。** 呼び出し側が送ってきた blob sha が、コミットの base に
+ * 固定して引いた現在の sha と一致しないという意味。**リトライしてはいけない** —
+ * 同じ sha で再送しても一致しないし、sha を取り直して再送するのは
+ * 「他人の変更を読まずに踏み潰す」ことになる。読み直すのが唯一の正しい対応。
+ *
+ * 記事が消えていた場合も同じ。存在しない blob の sha は一致しえないので、
+ * 「変わった」と「消えた」を別の例外に分けていない — **利用者の対応が同じ**
+ * （読み直す）なら、区別は情報を増やさずに分岐を増やすだけ。
+ */
+export class StalePostError extends Error {
+  constructor() {
+    super('the post changed since it was read; re-read it before saving');
+    this.name = 'StalePostError';
+  }
+}
+
 export interface PostPublisherDeps {
   tokenProvider: InstallationTokenProvider;
   owner: string;
@@ -83,8 +110,10 @@ export interface PostPublisherDeps {
  * 日付パス（`2026/09/08/054001`）はスラッシュを含むが封じ込めは弱まっていない。
  * `DATE_SLUG_PATTERN` は **strict allowlist**（文字クラスは `[0-9]` だけ、桁数も階層も固定）
  * で `..` も `\` も表現できない。**スラッシュを許したことと traversal を許したことは別である。**
+ *
+ * **export しているのは reader.ts が同じ検査を使うため。** 写しを作ると片方だけ緩む。
  */
-const pathForSlug = (prefix: string, slug: string): string => {
+export const pathForSlug = (prefix: string, slug: string): string => {
   if (!DATE_SLUG_PATTERN.test(slug)) {
     throw new Error(`slug must match ${DATE_SLUG_PATTERN.source}`);
   }
@@ -122,10 +151,19 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
     if (!response.ok) throw new Error(`GitHub ${what} failed with status ${response.status}`);
   };
 
-  const publish = async (input: PublishInput): Promise<PublishResult> => {
+  /**
+   * **コミットの base を決め、同じ base で対象の現況を読む。**
+   *
+   * `publish` と `update` が**同じ手順を通ることがこの関数の存在理由**である。
+   * 写しを 2 本持つと、片方だけ `?ref` をブランチ名に戻したり、片方だけ
+   * 存在確認を飛ばしたりする形で静かに緩む。
+   */
+  const locate = async (
+    slug: string,
+  ): Promise<{ token: string; baseCommitSha: string; path: string; existingSha: string | undefined }> => {
     // **GitHub を呼ぶ前に検証する。** 検証で落ちる入力で 1 本でもリクエストが飛ぶと、
     // 失敗が「途中まで書けた」状態になりうる。
-    const path = pathForSlug(deps.postsPathPrefix, input.slug);
+    const path = pathForSlug(deps.postsPathPrefix, slug);
     const token = await deps.tokenProvider.getToken();
 
     // 1. 参照の取得は **単数形** git/ref/heads/main（docs の operation path）。
@@ -146,7 +184,7 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
     //
     //    **?ref に base commit の sha を渡すのが TOCTOU 対策の要。** ブランチ名で問い合わせ
     //    ると「確認した木」と「コミットの親にする木」がずれうる。同じ sha に固定したうえで
-    //    6 の PATCH を force なしにしてあるので、確認とコミットの間に main が進めば ref 更新
+    //    ref の PATCH を force なしにしてあるので、確認とコミットの間に main が進めば ref 更新
     //    が 422 で落ちる。**古い読みに基づいて上書きする窓が無い。**
     const lookupResponse = await request(
       'GET',
@@ -158,8 +196,36 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
       // 解釈すると、権限が落ちた日に既存記事を黙って置き換える方向に倒れる。
       throw new Error(`GitHub content lookup failed with status ${lookupResponse.status}`);
     }
-    const replaced = lookupResponse.status === 200;
-    if (replaced && !input.overwrite) throw new SlugConflictError(input.slug);
+    if (lookupResponse.status === 404) {
+      return { token, baseCommitSha, path, existingSha: undefined };
+    }
+
+    // **sha を読む。** 更新の楽観的並行制御はこの値との一致で行う。
+    const existingSha = ((await lookupResponse.json()) as { sha?: string }).sha;
+    if (typeof existingSha !== 'string') throw new Error('GitHub content response has no sha');
+    return { token, baseCommitSha, path, existingSha };
+  };
+
+  /**
+   * blob -> tree -> commit -> ref を 1 コミットで通す。
+   *
+   * **`locate` が決めた base をそのまま受け取るのが要点。** ここで base を
+   * 取り直すと、存在確認と ref 更新の前提がずれて TOCTOU の穴が開く。
+   */
+  const writeCommit = async (args: {
+    token: string;
+    baseCommitSha: string;
+    path: string;
+    /**
+     * tree に何を載せるか。**書き込みと削除で分岐するのはここだけ。**
+     *
+     * 削除のために別の関数を置くと、`base_tree` を渡す行と `parents` を渡す行が
+     * 2 箇所に増える。どちらも**落とすとリポジトリが壊れる**行なので、写しを作らない。
+     */
+    change: { kind: 'write'; markdown: string } | { kind: 'delete' };
+    message: string;
+  }): Promise<string> => {
+    const { token, baseCommitSha, path } = args;
 
     // 3. 親コミットから **tree の sha** を取る。commit の sha ではない。
     const commitResponse = await request('GET', `${repoPath}/git/commits/${baseCommitSha}`, token);
@@ -168,13 +234,21 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
     if (typeof baseTreeSha !== 'string') throw new Error('GitHub commit response has no tree.sha');
 
     // 4. blob。base64 で送る — YAML front matter と本文に何が来ても安全に運べる。
-    const blobResponse = await request('POST', `${repoPath}/git/blobs`, token, {
-      content: Buffer.from(input.markdown, 'utf8').toString('base64'),
-      encoding: 'base64',
-    });
-    assertOk(blobResponse, 'blob creation');
-    const blobSha = ((await blobResponse.json()) as { sha?: string }).sha;
-    if (typeof blobSha !== 'string') throw new Error('GitHub blob response has no sha');
+    //
+    //    **削除では blob を作らない。** docs (Create a tree): "If the value is null
+    //    then the file will be deleted." — 消すだけなら中身は要らないので、
+    //    無駄な書き込みリクエストを出さない。
+    let blobSha: string | null = null;
+    if (args.change.kind === 'write') {
+      const blobResponse = await request('POST', `${repoPath}/git/blobs`, token, {
+        content: Buffer.from(args.change.markdown, 'utf8').toString('base64'),
+        encoding: 'base64',
+      });
+      assertOk(blobResponse, 'blob creation');
+      const created = ((await blobResponse.json()) as { sha?: string }).sha;
+      if (typeof created !== 'string') throw new Error('GitHub blob response has no sha');
+      blobSha = created;
+    }
 
     // 5. tree。**base_tree を必ず渡す。**
     //    docs: "If not provided, GitHub will create a new Git tree object from only the
@@ -185,6 +259,8 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
       base_tree: baseTreeSha,
       // sha と content を同時に入れない（docs: "Using both tree.sha and content will
       // return an error"）。blob は上で作ってあるので sha だけを指す。
+      // **削除は `sha: null`。** docs: "Returns an error if you try to delete a file
+      // that does not exist." なので存在確認が要るが、それは `locate` が済ませている。
       tree: [{ path, mode: FILE_MODE, type: 'blob', sha: blobSha }],
     });
     assertOk(treeResponse, 'tree creation');
@@ -192,12 +268,8 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
     if (typeof treeSha !== 'string') throw new Error('GitHub tree response has no sha');
 
     // 6. commit。parents を省くと root commit になり履歴が切れる。
-    //
-    //    **メッセージは「実際に何をしたか」で選ぶ。** overwrite が true でも記事が
-    //    実在しなければ作成なので、createMessage を使う（409 を承認する間に誰かが
-    //    記事を消した場合。「更新」と書かれたコミットが作成に付くと履歴が嘘をつく）。
     const newCommitResponse = await request('POST', `${repoPath}/git/commits`, token, {
-      message: replaced ? input.replaceMessage : input.createMessage,
+      message: args.message,
       tree: treeSha,
       parents: [baseCommitSha],
     });
@@ -221,9 +293,82 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
     }
     assertOk(updateResponse, 'ref update');
 
+    return commitSha;
+  };
+
+  const publish = async (input: PublishInput): Promise<PublishResult> => {
+    const { token, baseCommitSha, path, existingSha } = await locate(input.slug);
+    const replaced = existingSha !== undefined;
+    if (replaced && !input.overwrite) throw new SlugConflictError(input.slug);
+
+    // **メッセージは「実際に何をしたか」で選ぶ。** overwrite が true でも記事が
+    // 実在しなければ作成なので、createMessage を使う（409 を承認する間に誰かが
+    // 記事を消した場合。「更新」と書かれたコミットが作成に付くと履歴が嘘をつく）。
+    const commitSha = await writeCommit({
+      token,
+      baseCommitSha,
+      path,
+      change: { kind: 'write', markdown: input.markdown },
+      message: replaced ? input.replaceMessage : input.createMessage,
+    });
+
     deps.logger.info('committed post', { path, commitSha, replaced });
     return { commitSha, path, replaced };
   };
 
-  return { publish };
+  const update = async (input: UpdateInput): Promise<PublishResult> => {
+    const { token, baseCommitSha, path, existingSha } = await locate(input.slug);
+
+    // **消えていた場合も一致しない側に倒す。** 存在しない blob の sha は一致しえない
+    // ので、`existingSha === undefined` は「読んだものが今は無い」＝ stale である。
+    if (existingSha !== input.sha) throw new StalePostError();
+
+    const commitSha = await writeCommit({
+      token,
+      baseCommitSha,
+      path,
+      change: { kind: 'write', markdown: input.markdown },
+      message: input.message,
+    });
+
+    deps.logger.info('updated post', { path, commitSha });
+    // **replaced は常に true。** 上で存在を確かめているので、作成になる経路が無い。
+    return { commitSha, path, replaced: true };
+  };
+
+  /**
+   * 記事を 1 コミットで削除する。
+   *
+   * **`update` と同じ `locate` / `writeCommit` を通る。** 削除だけ別の手順にすると、
+   * `?ref` を base sha に固定する行や `base_tree` を渡す行が写しになり、
+   * いつか片方だけ緩む。**落とすと壊れ方が最も大きいのが削除経路**なので、
+   * 共有する側に倒している。
+   *
+   * **床の判定はここではしない。** 「公開記事が 0 本になるか」はリポジトリ全体を
+   * 見る必要があり、publisher は 1 記事しか知らない。router が `wouldStarveSite` で
+   * 判定してから呼ぶ。
+   */
+  const remove = async (input: DeleteInput): Promise<PublishResult> => {
+    const { token, baseCommitSha, path, existingSha } = await locate(input.slug);
+
+    // **消えていた場合も一致しない側に倒す**（`update` と同じ理由）。
+    // docs も存在しないファイルの削除はエラーになると書いているので、
+    // ここで落としておかないと GitHub 側の 422 として返ることになる。
+    if (existingSha !== input.sha) throw new StalePostError();
+
+    const commitSha = await writeCommit({
+      token,
+      baseCommitSha,
+      path,
+      change: { kind: 'delete' },
+      message: input.message,
+    });
+
+    deps.logger.info('deleted post', { path, commitSha });
+    // **replaced は true。** 「既にあったものに手を入れた」という意味で、
+    // 呼び出し側が作成と区別できる形を揃えている。
+    return { commitSha, path, replaced: true };
+  };
+
+  return { publish, update, remove };
 };

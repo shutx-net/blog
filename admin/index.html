@@ -23,6 +23,21 @@
         <button id="signout" type="button" hidden>サインアウト</button>
       </div>
 
+      <!--
+        既存記事の一覧。**読み込みは明示的な操作**（ログインと同じ方針）。
+        起動時に自動で取らないのは、開いただけで API を呼ばないため、そして
+        `blog-content` への直接コミットで増えた記事を任意のタイミングで拾えるため。
+        **インライン <script> と on*= を書かないこと** — CSP を成立させる invariant。
+      -->
+      <section id="post-list">
+        <h2>既存の記事</h2>
+        <div class="post-list__bar">
+          <button id="post-list-reload" type="button">更新</button>
+        </div>
+        <p id="post-list-status" class="hint" role="status"></p>
+        <ul id="post-list-items" class="post-list"></ul>
+      </section>
+
       <form id="post-form" autocomplete="off">
         <div class="field">
           <label for="title">title</label>
@@ -73,6 +88,12 @@
         <p id="status" class="status" role="status"></p>
 
         <button id="submit" type="submit">公開する</button>
+        <!--
+          編集モードから抜けるボタン。**hidden で始める** — 新規投稿のときに
+          出ていると「何から戻るのか」が分からない。押すと保存済みの下書きが
+          戻る（編集中はストアを触らないので書きかけが生きている）。
+        -->
+        <button id="new-post" type="button" hidden>新規に戻る</button>
       </form>
 
       <section class="preview-pane">

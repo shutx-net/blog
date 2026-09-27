@@ -104,6 +104,53 @@ export const postRequestBody = (post: ValidatedPost): Omit<ValidatedPost, 'slug'
   return rest;
 };
 
+/** 編集の対象。一覧と詳細から受け取った値をそのまま持つ。 */
+export interface EditTarget {
+  /** 読んだときのパスから復元したスラッグ。**書き戻す先はこれ。** */
+  slug: string;
+  /** front matter の値**そのまま**。api は表記まで含めた一致を要求する。 */
+  pubDate: string;
+  /** 読んだときの blob sha。楽観的並行制御のトークン。 */
+  sha: string;
+}
+
+/** `PUT /api/posts` に送るボディ。 */
+export type UpdateBody = Omit<ValidatedPost, 'slug'> & { targetSlug: string; sha: string };
+
+/**
+ * `PUT /api/posts` に送るボディ。
+ *
+ * **`pubDate` はフォームの値ではなく `target` の値を使う。** `<input type="datetime-local">`
+ * は ms を持てないので、既存の `2026-09-27T05:26:21.486Z` を往復させると 486ms が落ちる。
+ * api は**表記まで含めた一致**を要求する（そうしないと編集のたびに front matter が
+ * 書き換わる）ので、往復した値を送ると必ず 400 になる。
+ *
+ * **`slug` は落とす。** 導出値なので、送ると api が 400 にする（`postRequestBody` と同じ）。
+ * 落とすのを型でも縛っているので、api が要求する形に戻ったらここが型エラーになる。
+ */
+export const updateRequestBody = (post: ValidatedPost, target: EditTarget): UpdateBody => {
+  const { slug: _slug, ...rest } = post;
+  return { ...rest, pubDate: target.pubDate, targetSlug: target.slug, sha: target.sha };
+};
+
+/**
+ * slug を `<input type="datetime-local">` の値に戻す。
+ *
+ * **新しい時刻計算を足さない。** slug は JST の壁時計をそのまま並べたものなので、
+ * 区切りを入れ替えるだけで戻る。`pubDate` から書式化すると `jstWallClockToInstant` の
+ * 逆関数を持つことになり、いつか片方だけずれる（`post-list.ts` の `dateLabel` も
+ * 同じ理由で slug から切り出している）。
+ *
+ * **front matter の pubDate が slug と食い違う記事**（`blog-content` を手で編集すれば
+ * 作れる）では、ここに出るのは **URL 側の日時**である。送信するのは pubDate の実値なので
+ * 記事は壊れない。表示が URL に揃っているほうが、編集中に見て意味がある。
+ */
+export const slugToWallClock = (slug: string): string => {
+  if (!DATE_SLUG_PATTERN.test(slug)) throw new Error('slug must be a dated path');
+  const [year, month, day, time] = slug.split('/') as [string, string, string, string];
+  return `${year}-${month}-${day}T${time.slice(0, 2)}:${time.slice(2, 4)}:${time.slice(4, 6)}`;
+};
+
 /**
  * 公開先の URL を表す文。**送信前に「どこに出るか」を見せるためにある。**
  *
