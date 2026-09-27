@@ -1,5 +1,5 @@
 import { DATE_SLUG_PATTERN, dateSlug, jstWallClockToInstant } from '@blog/api/src/posts/slug.ts';
-import { SLUG_PATTERN, TAG_PATTERN, validatePost } from '@blog/api/src/posts/validate.ts';
+import { TAG_PATTERN, validatePost } from '@blog/api/src/posts/validate.ts';
 import type { ValidatedPost } from '@blog/api/src/posts/validate.ts';
 
 import { RELATIVE_IMAGE_WARNING, relativeImagePaths } from '../preview/images.ts';
@@ -16,7 +16,7 @@ import { RELATIVE_IMAGE_WARNING, relativeImagePaths } from '../preview/images.ts
  * node builtin を 22 件引き込み、**ビルドは成功するのに実行時に投げる proxy** が混ざる
  * （実測）。突き合わせは test/contract/post-schema.test.ts（node 環境）の仕事。
  */
-export { DATE_SLUG_PATTERN, SLUG_PATTERN, TAG_PATTERN, dateSlug, jstWallClockToInstant };
+export { DATE_SLUG_PATTERN, TAG_PATTERN, dateSlug, jstWallClockToInstant };
 export type { ValidatedPost };
 
 /**

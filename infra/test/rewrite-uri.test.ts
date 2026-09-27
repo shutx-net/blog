@@ -38,8 +38,9 @@ const REWRITTEN = [
   { input: '/about', expected: '/about/index.html' },
   { input: '/about/', expected: '/about/index.html' },
   { input: '/', expected: '/index.html' },
-  { input: '/posts/hello-world', expected: '/posts/hello-world/index.html' },
-  { input: '/posts/hello-world/', expected: '/posts/hello-world/index.html' },
+  // 日付パスは 4 階層。**CloudFront Function は深さを見ない**ことの確認でもある。
+  { input: '/posts/2026/09/27/142621', expected: '/posts/2026/09/27/142621/index.html' },
+  { input: '/posts/2026/09/27/142621/', expected: '/posts/2026/09/27/142621/index.html' },
 ];
 
 const UNCHANGED = ['/assets/app.css', '/favicon.ico', '/robots.txt', '/index.html'];

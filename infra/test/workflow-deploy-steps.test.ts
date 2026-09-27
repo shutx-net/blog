@@ -7,7 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { App } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest';
 
 import { scratchDir } from '../../api/test/support/scratch.ts';
 import { parse } from 'yaml';
-import { POST_SLUG_PATTERN } from '../../api/src/posts/slug.ts';
+import { DATE_SLUG_PATTERN } from '../../api/src/posts/slug.ts';
 import { CicdStack } from '../lib/cicd-stack.ts';
 import { SiteStack } from '../lib/site-stack.ts';
 
@@ -791,15 +791,36 @@ describe('ガードを実際に走らせる', () => {
   });
 
   it('.md 以外のファイルは記事として数えない', () => {
-    // README や画像で下限を満たしてしまうと、ガードが記事の有無を見ていないことになる。
+    // 画像やテキストで下限を満たしてしまうと、ガードが記事の有無を見ていないことになる。
     withTempDir((dir) => {
       const posts = join(dir, 'site/src/content/posts');
       mkdirSync(posts, { recursive: true });
       for (let i = 0; i < declaredMinimum() + 2; i += 1) {
         writeFileSync(join(posts, `not-a-post-${i}.txt`), 'x');
       }
-      writeFileSync(join(posts, 'README.md'), '# readme\n');
       expect(runGuardScript(postsGuardScript(), dir).status).not.toBe(0);
+    });
+  });
+
+  it('**README.md だけでは本数ガードを抜けるが、形のガードが止める**', () => {
+    // 下限が 1 になったので、`.md` を 1 つ数える本数ガードは README でも満たされる
+    // （下限 3 の時代は README 1 つでは足りなかった）。**層で守っている**ことを固定する:
+    // 移送ステップは posts/ の中身しか持ってこないので README はそもそも来ないし、
+    // 来たとしてもスラッグが `README` になって日付パスの形に合わない。
+    withTempDir((dir) => {
+      const posts = join(dir, POSTS_DIR);
+      mkdirSync(posts, { recursive: true });
+      writeFileSync(join(posts, 'README.md'), '# readme\n');
+
+      expect(
+        runGuardScript(postsGuardScript(), dir).status,
+        '本数ガードは README を記事として数える（下限 1 なので通る）',
+      ).toBe(0);
+
+      mkdirSync(join(dir, DIST_POSTS), { recursive: true });
+      const shape = runGuardScript(slugGuardScript(), dir);
+      expect(shape.status, 'README が形のガードを素通りした').not.toBe(0);
+      expect(shape.output).toContain('post slugs must be');
     });
   });
 
@@ -859,24 +880,39 @@ const makeContentCheckout = (dir: string, slugs: readonly string[]): void => {
   writeFileSync(join(root, 'README.md'), '# blog-content\n\nno frontmatter here.\n');
   mkdirSync(join(root, '.git'), { recursive: true });
   writeFileSync(join(root, '.git/HEAD'), 'ref: refs/heads/main\n');
-  for (const slug of slugs) writePost(join(posts, `${slug}.md`));
+  for (const slug of slugs) {
+    const file = join(posts, `${slug}.md`);
+    mkdirSync(join(file, '..'), { recursive: true });
+    writePost(file);
+  }
 };
+
+/**
+ * 移送の検査に使う記事スラッグ。**日付パスなので記事ディレクトリの直下は年になる。**
+ * 移送が見るのは「posts/ の中身をそのまま持ってくる」ことだけで、スラッグの形は見ない。
+ */
+const CHECKOUT_SLUGS = ['2026/09/01/120000', '2026/09/02/120000', '2026/09/03/120000'] as const;
 
 /** 記事ディレクトリ直下のエントリ名。 */
 const entriesInPostsDir = (dir: string): string[] =>
   readdirSync(join(dir, POSTS_DIR)).sort();
 
+/** 記事ディレクトリ配下の .md を、ディレクトリからの相対パスで列挙する。 */
+const postFilesInPostsDir = (dir: string): string[] => {
+  const root = join(dir, POSTS_DIR);
+  return readdirSync(root, { recursive: true, encoding: 'utf8' })
+    .filter((entry) => entry.endsWith('.md'))
+    .map((entry) => entry.split(sep).join('/'))
+    .sort();
+};
+
 describe('content checkout の形を再現して移送を走らせる', () => {
   it('記事だけが記事ディレクトリの直下に並ぶ', () => {
     withTempDir((dir) => {
-      makeContentCheckout(dir, ['hello-world', 'second-post', 'third-post']);
+      makeContentCheckout(dir, CHECKOUT_SLUGS);
       const result = runGuardScript(moveScript(), dir);
       expect(result.status, `移送が失敗した: ${result.output}`).toBe(0);
-      expect(entriesInPostsDir(dir)).toEqual([
-        'hello-world.md',
-        'second-post.md',
-        'third-post.md',
-      ]);
+      expect(postFilesInPostsDir(dir)).toEqual(CHECKOUT_SLUGS.map((slug) => `${slug}.md`));
     });
   });
 
@@ -884,7 +920,7 @@ describe('content checkout の形を再現して移送を走らせる', () => {
     // これが run 34019234594 を落とした直接の原因。フロントマターが無いので
     // スキーマ検証で落ちる。
     withTempDir((dir) => {
-      makeContentCheckout(dir, ['hello-world', 'second-post', 'third-post']);
+      makeContentCheckout(dir, CHECKOUT_SLUGS);
       expect(runGuardScript(moveScript(), dir).status).toBe(0);
       expect(entriesInPostsDir(dir)).not.toContain('README.md');
     });
@@ -895,7 +931,7 @@ describe('content checkout の形を再現して移送を走らせる', () => {
     // 見つかるが、entry.id が `posts/hello-world` になり
     // `/posts/posts/hello-world/` として publish される。RSS の guid が変わる。
     withTempDir((dir) => {
-      makeContentCheckout(dir, ['hello-world', 'second-post', 'third-post']);
+      makeContentCheckout(dir, CHECKOUT_SLUGS);
       expect(runGuardScript(moveScript(), dir).status).toBe(0);
       expect(entriesInPostsDir(dir), 'posts/ が入れ子のまま残っている').not.toContain('posts');
       expect(existsSync(join(dir, POSTS_DIR, 'posts')), '入れ子のディレクトリ').toBe(false);
@@ -904,7 +940,7 @@ describe('content checkout の形を再現して移送を走らせる', () => {
 
   it('.git を記事ディレクトリに残さない', () => {
     withTempDir((dir) => {
-      makeContentCheckout(dir, ['hello-world', 'second-post', 'third-post']);
+      makeContentCheckout(dir, CHECKOUT_SLUGS);
       expect(runGuardScript(moveScript(), dir).status).toBe(0);
       expect(existsSync(join(dir, POSTS_DIR, '.git'))).toBe(false);
     });
@@ -914,7 +950,7 @@ describe('content checkout の形を再現して移送を走らせる', () => {
     // 2 つのステップが噛み合っていることを、順番に走らせて確かめる。
     // 片方だけ正しくても意味がない。
     withTempDir((dir) => {
-      makeContentCheckout(dir, ['hello-world', 'second-post', 'third-post']);
+      makeContentCheckout(dir, CHECKOUT_SLUGS);
       expect(runGuardScript(moveScript(), dir).status).toBe(0);
       const guard = runGuardScript(postsGuardScript(), dir);
       expect(guard.status, `移送後にガードが落ちた: ${guard.output}`).toBe(0);
@@ -934,7 +970,7 @@ describe('content checkout の形を再現して移送を走らせる', () => {
       const root = join(dir, CONTENT_CHECKOUT_PATH);
       mkdirSync(root, { recursive: true });
       writeFileSync(join(root, 'README.md'), '# blog-content\n');
-      writePost(join(root, 'hello-world.md'));
+      writePost(join(root, '2026-09-01.md'));
       const result = runGuardScript(moveScript(), dir);
       expect(result.status, 'posts/ が無いのに通っている').not.toBe(0);
       expect(result.output).toContain('::error::');
@@ -945,7 +981,7 @@ describe('content checkout の形を再現して移送を走らせる', () => {
     // 同じ runner を使い回す形（self-hosted や再実行）で、古い内容が残ったまま
     // 移送が失敗すると、前回の記事でサイトが publish される。
     withTempDir((dir) => {
-      makeContentCheckout(dir, ['hello-world', 'second-post', 'third-post']);
+      makeContentCheckout(dir, CHECKOUT_SLUGS);
       const stale = join(dir, POSTS_DIR);
       mkdirSync(stale, { recursive: true });
       writePost(join(stale, 'stale-post.md'));
@@ -956,14 +992,33 @@ describe('content checkout の形を再現して移送を走らせる', () => {
 });
 
 describe('publish されるスラッグ集合の照合を実際に走らせる', () => {
-  /** content 側に公開記事を n 本、dist 側にも同じものを置く。 */
+  /**
+   * content 側に置く公開記事のスラッグ。**日付パスだけが正当**なのでその形で作る。
+   *
+   * 本数は下限以上かつ 2 本以上。下限（現在 1）に揃えると `slice(1)` や `slice(0, -1)` で
+   * 作る「1 本足りない」「中身が違う」のケースが空集合に潰れて、集合の比較を主張できない。
+   */
   const publishedSlugs = (): string[] =>
-    Array.from({ length: declaredMinimum() }, (_unused, i) => `post-${i}`);
+    Array.from(
+      { length: Math.max(2, declaredMinimum()) },
+      (_unused, i) => `2026/09/${String(i + 1).padStart(2, '0')}/120000`,
+    );
 
   const seedContent = (dir: string, slugs: readonly string[]): void => {
-    const posts = join(dir, POSTS_DIR);
-    mkdirSync(posts, { recursive: true });
-    for (const slug of slugs) writePost(join(posts, `${slug}.md`));
+    for (const slug of slugs) {
+      const file = join(dir, POSTS_DIR, `${slug}.md`);
+      mkdirSync(join(file, '..'), { recursive: true });
+      writePost(file);
+    }
+  };
+
+  /** 下書きも日付パスで置く。形で落ちると leak の主張が「形の主張」に化ける。 */
+  const DRAFT_SLUG = '2026/11/11/111111';
+
+  const seedDraft = (dir: string, slug: string): void => {
+    const file = join(dir, POSTS_DIR, `${slug}.md`);
+    mkdirSync(join(file, '..'), { recursive: true });
+    writePost(file, { draft: true });
   };
 
   it('content と dist が一致していれば通る', () => {
@@ -1013,9 +1068,11 @@ describe('publish されるスラッグ集合の照合を実際に走らせる',
     withTempDir((dir) => {
       const slugs = publishedSlugs();
       // 事故と同じ形: 記事ディレクトリの下に posts/ があり、その中に .md がある。
-      const nested = join(dir, POSTS_DIR, 'posts');
-      mkdirSync(nested, { recursive: true });
-      for (const slug of slugs) writePost(join(nested, `${slug}.md`));
+      for (const slug of slugs) {
+        const file = join(dir, POSTS_DIR, 'posts', `${slug}.md`);
+        mkdirSync(join(file, '..'), { recursive: true });
+        writePost(file);
+      }
       // astro はこれを id `posts/<slug>` として publish する。
       for (const slug of slugs) writeDistPost(dir, `posts/${slug}`);
       const result = runGuardScript(slugGuardScript(), dir);
@@ -1032,9 +1089,11 @@ describe('publish されるスラッグ集合の照合を実際に走らせる',
     // 平坦性の主張が expected 側にも効いていることを固定する。
     withTempDir((dir) => {
       const slugs = publishedSlugs();
-      const nested = join(dir, POSTS_DIR, 'posts');
-      mkdirSync(nested, { recursive: true });
-      for (const slug of slugs) writePost(join(nested, `${slug}.md`));
+      for (const slug of slugs) {
+        const file = join(dir, POSTS_DIR, 'posts', `${slug}.md`);
+        mkdirSync(join(file, '..'), { recursive: true });
+        writePost(file);
+      }
       for (const slug of slugs) writeDistPost(dir, slug);
       expect(runGuardScript(slugGuardScript(), dir).status).not.toBe(0);
     });
@@ -1050,7 +1109,7 @@ describe('publish されるスラッグ集合の照合を実際に走らせる',
       const slugs = publishedSlugs();
       seedContent(dir, slugs);
       for (const slug of slugs.slice(0, -1)) writeDistPost(dir, slug);
-      writeDistPost(dir, 'renamed-post');
+      writeDistPost(dir, '2026/12/31/235959');
       const result = runGuardScript(slugGuardScript(), dir);
       expect(result.status, '件数だけ合っていて中身が違う').not.toBe(0);
       expect(result.output).toContain('::error::');
@@ -1062,7 +1121,7 @@ describe('publish されるスラッグ集合の照合を実際に走らせる',
       const slugs = publishedSlugs();
       seedContent(dir, slugs);
       for (const slug of slugs) writeDistPost(dir, slug);
-      writeDistPost(dir, 'not-in-the-content-repo');
+      writeDistPost(dir, '2026/12/31/235959');
       expect(runGuardScript(slugGuardScript(), dir).status).not.toBe(0);
     });
   });
@@ -1072,7 +1131,7 @@ describe('publish されるスラッグ集合の照合を実際に走らせる',
     withTempDir((dir) => {
       const slugs = publishedSlugs();
       seedContent(dir, slugs);
-      writePost(join(dir, POSTS_DIR, 'a-draft.md'), { draft: true });
+      seedDraft(dir, DRAFT_SLUG);
       for (const slug of slugs) writeDistPost(dir, slug);
       const result = runGuardScript(slugGuardScript(), dir);
       expect(result.status, `draft のせいで落ちた: ${result.output}`).toBe(0);
@@ -1083,9 +1142,9 @@ describe('publish されるスラッグ集合の照合を実際に走らせる',
     withTempDir((dir) => {
       const slugs = publishedSlugs();
       seedContent(dir, slugs);
-      writePost(join(dir, POSTS_DIR, 'a-draft.md'), { draft: true });
+      seedDraft(dir, DRAFT_SLUG);
       for (const slug of slugs) writeDistPost(dir, slug);
-      writeDistPost(dir, 'a-draft');
+      writeDistPost(dir, DRAFT_SLUG);
       const result = runGuardScript(slugGuardScript(), dir);
       expect(result.status, 'draft が publish されようとしている').not.toBe(0);
       expect(result.output).toContain('::error::');
@@ -1107,7 +1166,7 @@ describe('publish されるスラッグ集合の照合を実際に走らせる',
  * ガードが宣言しているスラッグの形（POSIX ERE）を読む。
  *
  * **テストに正規表現を二重に書かない。** ガード自身が持っている値を読み、
- * `api/src/posts/slug.ts` の `POST_SLUG_PATTERN` と突き合わせる。
+ * `api/src/posts/slug.ts` の `DATE_SLUG_PATTERN` と突き合わせる。
  */
 const declaredSlugShape = (): string => {
   const match = /\bslug_shape='([^']+)'/.exec(slugGuardScript());
@@ -1154,13 +1213,14 @@ describe('日付パスのスラッグ', () => {
     });
   });
 
-  it('平坦スラッグと日付パスが混在していても通る', () => {
-    // **移行後の実際の姿。** 既存の記事は平坦のまま（URL を変えると RSS の guid が
-    // 変わり、購読者に全記事が再配信される。取り消せない）、新しい記事だけ日付パスになる。
+  it('**平坦スラッグが 1 本でも混ざれば落ちる**', () => {
+    // 旧仕様の撤廃はここで固定している。平坦の許容が戻ると、日付パスの記事に
+    // 混ざった 1 本が素通りする。
     withTempDir((dir) => {
-      seedBoth(dir, ['hello-world', 'second-post', 'third-post', ...DATE_SLUGS]);
+      seedBoth(dir, ['hello-world', ...DATE_SLUGS]);
       const result = runGuardScript(slugGuardScript(), dir);
-      expect(result.status, `混在が弾かれた: ${result.output}`).toBe(0);
+      expect(result.status, '平坦スラッグが素通りした').not.toBe(0);
+      expect(result.output).toContain('::error::');
     });
   });
 
@@ -1205,8 +1265,9 @@ describe('日付パスのスラッグ', () => {
       const result = runGuardScript(slugGuardScript(), dir);
       expect(result.status, '両方空なのに通っている').not.toBe(0);
       expect(result.output, '下限のエラーで落ちること').toContain('expected at least');
-      expect(result.output, '形のエラーで誤診していないこと').not.toContain('slug_shape');
-      expect(result.output).not.toContain('neither');
+      // **ガードのエラー文そのものを名指しする。** 'slug_shape' はシェル変数名で
+      // 出力に現れないので、それを not.toContain しても何も主張していなかった。
+      expect(result.output, '形のエラーで誤診していないこと').not.toContain('post slugs must be');
     });
   });
 
@@ -1225,7 +1286,7 @@ describe('日付パスのスラッグ', () => {
       expect(result.status, '不正な形なのに通っている').not.toBe(0);
 
       const lines = result.output.split('\n');
-      const header = lines.findIndex((line) => line.includes('but these are neither'));
+      const header = lines.findIndex((line) => line.includes('post slugs must be'));
       expect(header, '形のエラーで落ちていること').toBeGreaterThan(-1);
       const advisory = lines.findIndex((line) => line.includes('was probably checked out'));
       expect(advisory, '助言の行があること').toBeGreaterThan(header);
@@ -1236,7 +1297,7 @@ describe('日付パスのスラッグ', () => {
   });
 });
 
-describe('ガードの ERE と POST_SLUG_PATTERN が同じ集合を受理する', () => {
+describe('ガードの ERE と DATE_SLUG_PATTERN が同じ集合を受理する', () => {
   // **新しい乖離源。** `deploy.yml` のシェルは POSIX ERE なので `(?:` が使えず、
   // `api/src/posts/slug.ts` の正規表現をそのまま貼れない。同じ意味の別表現を
   // 2 箇所に持つことになる。
@@ -1299,12 +1360,12 @@ describe('ガードの ERE と POST_SLUG_PATTERN が同じ集合を受理する'
 
     const byGrep = acceptedByGrep(shape, inputs);
     const disagreements = inputs.filter(
-      (input) => POST_SLUG_PATTERN.test(input) !== byGrep.has(input),
+      (input) => DATE_SLUG_PATTERN.test(input) !== byGrep.has(input),
     );
 
     expect(
       disagreements,
-      `ERE と POST_SLUG_PATTERN の判定が食い違う入力: ${JSON.stringify(disagreements.slice(0, 20))}`,
+      `ERE と DATE_SLUG_PATTERN の判定が食い違う入力: ${JSON.stringify(disagreements.slice(0, 20))}`,
     ).toEqual([]);
     // 母集団が空でも「食い違いゼロ」は成立してしまう。実際に判定していることを固定する。
     expect(inputs.length, '入力集合が十分に大きいこと').toBeGreaterThan(1000);
@@ -1318,10 +1379,13 @@ describe('ガードの ERE と POST_SLUG_PATTERN が同じ集合を受理する'
     const shape = declaredSlugShape();
     const accepted = acceptedByGrep(shape, namedCases());
 
-    for (const slug of ['hello-world', 'second-post', '2026/09/08/054001']) {
+    for (const slug of ['2026/09/08/054001']) {
       expect(accepted.has(slug), `${slug} は通さなければならない`).toBe(true);
     }
     for (const slug of [
+      // **撤廃した平坦スラッグ。** 許容が戻れば、ここで落ちる。
+      'hello-world',
+      'second-post',
       'posts/hello-world',
       'posts/2026/09/08/054001',
       '..',

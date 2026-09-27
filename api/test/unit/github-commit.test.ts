@@ -98,10 +98,10 @@ const input = (
     overwrite: boolean;
   }> = {},
 ) => ({
-  slug: 'hello-world',
+  slug: '2026/09/08/054001',
   markdown: '---\ntitle: "テスト"\n---\n\n本文\n',
-  createMessage: 'feat(site): 記事 hello-world を追加',
-  replaceMessage: 'feat(site): 記事 hello-world を更新',
+  createMessage: 'feat(site): 記事「テスト」を追加',
+  replaceMessage: 'feat(site): 記事「テスト」を更新',
   overwrite: false,
   ...overrides,
 });
@@ -139,7 +139,7 @@ describe('呼び出し列', () => {
       // **base を先に決め、その base に対して存在を確かめてから書き始める。**
       // blob より前に確認するので、409 のときリポジトリに何も残らない。
       ['GET', '/repos/shutx-net/blog/git/ref/heads/main'],
-      ['GET', '/repos/shutx-net/blog/contents/site/src/content/posts/hello-world.md'],
+      ['GET', '/repos/shutx-net/blog/contents/site/src/content/posts/2026/09/08/054001.md'],
       ['GET', `/repos/shutx-net/blog/git/commits/${BASE_COMMIT_SHA}`],
       ['POST', '/repos/shutx-net/blog/git/blobs'],
       ['POST', '/repos/shutx-net/blog/git/trees'],
@@ -164,7 +164,7 @@ describe('呼び出し列', () => {
     const result = await publisher().publish(input());
     expect(result).toEqual({
       commitSha: NEW_COMMIT_SHA,
-      path: 'site/src/content/posts/hello-world.md',
+      path: 'site/src/content/posts/2026/09/08/054001.md',
       replaced: false,
     });
   });
@@ -253,7 +253,7 @@ describe('tree の作成', () => {
     const tree = (await treeBody())['tree'] as Array<Record<string, unknown>>;
     expect(tree).toHaveLength(1);
     expect(tree[0]).toEqual({
-      path: 'site/src/content/posts/hello-world.md',
+      path: 'site/src/content/posts/2026/09/08/054001.md',
       mode: '100644',
       type: 'blob',
       sha: BLOB_SHA,
@@ -284,7 +284,7 @@ describe('commit の作成', () => {
 
   it('{ message, tree, parents } で、parents が親コミット 1 件である', async () => {
     expect(await commitBody()).toEqual({
-      message: 'feat(site): 記事 hello-world を追加',
+      message: 'feat(site): 記事「テスト」を追加',
       tree: NEW_TREE_SHA,
       parents: [BASE_COMMIT_SHA],
     });
@@ -361,7 +361,7 @@ describe('パスの封じ込め', () => {
     const { calls } = installFetch();
     await publisher(logger(), 'posts/').publish(input());
     const tree = (findCall(calls, 'POST', TREE_PATH).body?.['tree'] as Array<Record<string, unknown>>) ?? [];
-    expect(tree[0]?.['path']).toBe('posts/hello-world.md');
+    expect(tree[0]?.['path']).toBe('posts/2026/09/08/054001.md');
   });
 
   it('接頭辞を変えても slug の検証は効く', async () => {
@@ -380,18 +380,21 @@ describe('パスの封じ込め', () => {
     },
   );
 
-  it('正常な slug から作られるパスが posts ディレクトリの直下に収まる', async () => {
+  it('正常な slug から作られるパスが接頭辞の下に収まる', async () => {
     const { calls } = installFetch();
-    await publisher().publish(input({ slug: 'node-24-notes' }));
+    await publisher().publish(input({ slug: '2026/09/08/054001' }));
     const tree = (findCall(calls, 'POST', TREE_PATH).body?.['tree'] as Array<Record<string, unknown>>) ?? [];
     const path = String(tree[0]?.['path']);
-    expect(path).toBe('site/src/content/posts/node-24-notes.md');
+    expect(path).toBe('site/src/content/posts/2026/09/08/054001.md');
     expect(path.startsWith(SITE_POSTS_PATH_PREFIX)).toBe(true);
-    expect(path.slice(SITE_POSTS_PATH_PREFIX.length)).not.toContain('/');
+    // **スラッシュの有無では封じ込めを主張できない。** 日付パスは 4 階層あるので、
+    // 「接頭辞より後にスラッシュが無い」は使えない。代わりに正規化しても接頭辞の
+    // 内側に留まることを見る。
+    const normalized = new URL(path, 'file:///').pathname;
+    expect(normalized).toBe(`/${SITE_POSTS_PATH_PREFIX}2026/09/08/054001.md`);
   });
 
   it('**日付パスの slug が posts の下の階層に収まる**', async () => {
-    // 投稿日時から導出した slug。Phase 3 でこれが既定になる。
     const { calls } = installFetch();
     await publisher(logger(), 'posts/').publish(input({ slug: '2026/09/08/054001' }));
     const tree = (findCall(calls, 'POST', TREE_PATH).body?.['tree'] as Array<Record<string, unknown>>) ?? [];
@@ -448,7 +451,7 @@ describe('既存スラッグの上書き', () => {
     // PATCH が 422 になるので、古い読みに基づいて踏み潰す窓が無い。
     const { calls } = installFetch();
     await publisher().publish(input());
-    const lookup = findCall(calls, 'GET', '/repos/shutx-net/blog/contents/site/src/content/posts/hello-world.md');
+    const lookup = findCall(calls, 'GET', '/repos/shutx-net/blog/contents/site/src/content/posts/2026/09/08/054001.md');
     expect(lookup.search).toBe(`?ref=${BASE_COMMIT_SHA}`);
   });
 
@@ -458,7 +461,7 @@ describe('既存スラッグの上書き', () => {
     const at = (method: string, path: string): number =>
       calls.findIndex((c) => c.method === method && c.path === path);
     const ref = at('GET', '/repos/shutx-net/blog/git/ref/heads/main');
-    const lookup = at('GET', '/repos/shutx-net/blog/contents/site/src/content/posts/hello-world.md');
+    const lookup = at('GET', '/repos/shutx-net/blog/contents/site/src/content/posts/2026/09/08/054001.md');
     const blob = at('POST', BLOB_PATH);
     expect(ref).toBeGreaterThanOrEqual(0);
     expect(lookup).toBeGreaterThan(ref);
@@ -470,7 +473,7 @@ describe('既存スラッグの上書き', () => {
     const result = await publisher().publish(input({ overwrite: true }));
     expect(result).toEqual({
       commitSha: NEW_COMMIT_SHA,
-      path: 'site/src/content/posts/hello-world.md',
+      path: 'site/src/content/posts/2026/09/08/054001.md',
       replaced: true,
     });
   });
@@ -479,7 +482,7 @@ describe('既存スラッグの上書き', () => {
     const { calls } = installFetch(existingResponder);
     await publisher().publish(input({ overwrite: true }));
     expect(findCall(calls, 'POST', COMMIT_PATH).body?.['message']).toBe(
-      'feat(site): 記事 hello-world を更新',
+      'feat(site): 記事「テスト」を更新',
     );
   });
 
@@ -489,7 +492,7 @@ describe('既存スラッグの上書き', () => {
     const { calls } = installFetch();
     const result = await publisher().publish(input({ overwrite: true }));
     expect(findCall(calls, 'POST', COMMIT_PATH).body?.['message']).toBe(
-      'feat(site): 記事 hello-world を追加',
+      'feat(site): 記事「テスト」を追加',
     );
     expect(result.replaced).toBe(false);
   });
@@ -518,7 +521,7 @@ describe('既存スラッグの上書き', () => {
   it('接頭辞を変えても存在確認のパスが追随する', async () => {
     const { calls } = installFetch();
     await publisher(logger(), 'posts/').publish(input());
-    expect(calls.some((c) => c.path === '/repos/shutx-net/blog/contents/posts/hello-world.md')).toBe(true);
+    expect(calls.some((c) => c.path === '/repos/shutx-net/blog/contents/posts/2026/09/08/054001.md')).toBe(true);
   });
 
   it('SlugConflictError の message にトークンもレスポンス本文も出ない', async () => {

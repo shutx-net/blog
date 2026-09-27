@@ -1,23 +1,6 @@
 import { dateSlug, hasExplicitOffset } from './slug.ts';
 
 /**
- * 移行前から使ってきた平坦スラッグの形。**入力の検査には使わない** — slug は入力ではなく
- * `pubDate` からの導出になった。
- *
- * 残してあるのは、移行前に公開した記事がこの形に従っており **その URL を変えられない**から
- * （変えると RSS の `<guid>` が変わり、購読者に全記事が再配信される。取り消せない）。
- * `slug.ts` の `FLAT_SLUG_PATTERN` と同一で、`POST_SLUG_PATTERN` の片側になっている。
- *
- * ドットを許さない理由も引き続き有効: `infra/functions/rewrite-uri.js` は「最後のスラッシュ
- * より後にドットがあれば静的ファイル」というヒューリスティックなので、
- * `/posts/node-24.19-notes` には `/index.html` が付かず S3 が 403 を返す。日付パスに
- * ドットが入らないのは `DATE_SLUG_PATTERN` が保証している。
- *
- * **site / admin の契約テストがこの定数を参照している。** 消さないこと。
- */
-export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-/**
  * タグの許容形。**site/src/content.config.ts の regex と 1 文字も違わないこと。**
  *
  * タグはディレクトリ名になるので、空白や非 ASCII が入ると
