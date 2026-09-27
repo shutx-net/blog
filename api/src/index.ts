@@ -5,6 +5,7 @@ import type { Deps, Logger } from './deps.ts';
 import { createHandler } from './event.ts';
 import { createPostPublisher } from './github/commit.ts';
 import { createDeployDispatcher } from './github/dispatch.ts';
+import { createPostReader } from './github/reader.ts';
 import { createTokenProvider } from './github/token.ts';
 import { createMediaPresigner } from './media/presign.ts';
 import { dispatch } from './router.ts';
@@ -90,6 +91,16 @@ const deployDispatcher =
 const deps: Deps = {
   authorizer: createAuthorizer(config.auth, { logger }),
   publisher: createPostPublisher({
+    tokenProvider: contentTokenProvider,
+    owner: config.githubOwner,
+    repo: config.githubContentRepo,
+    postsPathPrefix: config.postsPathPrefix,
+    logger,
+  }),
+  // **記事用トークンをそのまま使う。** contents:write は read を含むので、
+  // 読み取り専用のトークンを別に鋳造しても権限は狭くならず、
+  // installation token の交換が 1 往復増えるだけになる。
+  reader: createPostReader({
     tokenProvider: contentTokenProvider,
     owner: config.githubOwner,
     repo: config.githubContentRepo,

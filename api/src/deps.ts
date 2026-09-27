@@ -54,6 +54,44 @@ export interface PostPublisher {
   publish(input: PublishInput): Promise<PublishResult>;
 }
 
+/**
+ * 一覧に出す 1 記事。**body を含まない。**
+ *
+ * 一覧は記事数ぶんの blob 取得になるので、本文まで返すと転送量が記事の長さに比例する。
+ * 編集のために本文が要るのは 1 本だけなので、そこは `PostDetail` が担う。
+ */
+export interface PostSummary {
+  /** `DATE_SLUG_PATTERN` に合致する日付パス。ファイル名から復元した値。 */
+  slug: string;
+  title: string;
+  description: string;
+  pubDate: string;
+  draft: boolean;
+  tags: string[];
+  /**
+   * blob の sha。**楽観的並行制御のトークン。**
+   *
+   * 更新・削除のときに「読んだときと同じ中身か」を確かめるために使う。
+   * commit の sha ではなく blob の sha なので、他の記事が変わっても無効にならない。
+   */
+  sha: string;
+}
+
+export interface PostDetail extends PostSummary {
+  body: string;
+}
+
+/**
+ * 記事を読む。**書き込みは一切しない。**
+ *
+ * publisher と別の interface にしているのは、認可されないときに
+ * 「どちらも呼ばれない」ことを個別に主張できるようにするため。
+ */
+export interface PostReader {
+  list(): Promise<PostSummary[]>;
+  read(slug: string): Promise<PostDetail>;
+}
+
 export interface PresignInput {
   contentType: string;
   size: number;
@@ -113,6 +151,13 @@ export interface Logger {
 export interface Deps {
   authorizer: Authorizer;
   publisher: PostPublisher;
+  /**
+   * 記事の読み取り。**必須にしている。**
+   *
+   * オプショナルにすると、新しい呼び出し側が組み立てを忘れても型が通り、
+   * 一覧が「常に空」で静かに動く経路ができる。
+   */
+  reader: PostReader;
   presigner: MediaPresigner;
   secretReader: SecretReader;
   tokenProvider: InstallationTokenProvider;

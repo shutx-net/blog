@@ -54,6 +54,17 @@ const deps = (): Deps => ({
     postsPathPrefix: 'posts/',
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   }),
+  // このファイルは書き込み経路の再現なので、読み取りは呼ばれないことを型で満たすだけ。
+  // **呼ばれたら落ちるようにしておく**（黙って空の一覧を返すと、将来ここに
+  // 読み取りが混ざったときに気づけない）。
+  reader: {
+    list: async () => {
+      throw new Error('reader.list must not be called on the write path');
+    },
+    read: async () => {
+      throw new Error('reader.read must not be called on the write path');
+    },
+  },
   presigner: { presign: async () => ({ url: '', key: '', expiresIn: 0, requiredHeaders: {} }) },
   secretReader: { readPrivateKey: async () => 'PEM' },
   tokenProvider: { getToken: async () => 't' },

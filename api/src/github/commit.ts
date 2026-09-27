@@ -83,8 +83,10 @@ export interface PostPublisherDeps {
  * 日付パス（`2026/09/08/054001`）はスラッシュを含むが封じ込めは弱まっていない。
  * `DATE_SLUG_PATTERN` は **strict allowlist**（文字クラスは `[0-9]` だけ、桁数も階層も固定）
  * で `..` も `\` も表現できない。**スラッシュを許したことと traversal を許したことは別である。**
+ *
+ * **export しているのは reader.ts が同じ検査を使うため。** 写しを作ると片方だけ緩む。
  */
-const pathForSlug = (prefix: string, slug: string): string => {
+export const pathForSlug = (prefix: string, slug: string): string => {
   if (!DATE_SLUG_PATTERN.test(slug)) {
     throw new Error(`slug must match ${DATE_SLUG_PATTERN.source}`);
   }

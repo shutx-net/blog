@@ -133,6 +133,52 @@ describe('x-amz-content-sha256 を構造的に外せない', () => {
     await invoke({ method: 'GET', path: '/api/health' }, fetchSpy.impl);
     expect(fetchSpy.calls[0]?.init.body).toBeUndefined();
   });
+});
+
+/**
+ * クエリ文字列。
+ *
+ * 記事のスラッグは `2026/09/27/142621` でスラッシュを含むので、パスに埋めると
+ * `(method, path)` の完全一致で引いている api のルート表を作り直すことになる。
+ * **だからクエリで渡す。** ここはその組み立てだけを見る。
+ */
+describe('クエリ文字列', () => {
+  const callWith = async (query?: Record<string, string>): Promise<string> => {
+    const fetchSpy = spyFetch(() => jsonResponse(200, {}));
+    await createApiClient({
+      origin: 'https://example.invalid',
+      auth: fakeAuth(),
+      fetchImpl: fetchSpy.impl,
+    }).call({ method: 'GET', path: '/api/posts/detail' }, undefined, query);
+    return fetchSpy.calls[0]?.url ?? '';
+  };
+
+  it('渡すと ? 付きの URL になる', async () => {
+    expect(await callWith({ slug: '2026/09/27/142621' })).toBe(
+      'https://example.invalid/api/posts/detail?slug=2026%2F09%2F27%2F142621',
+    );
+  });
+
+  it('**スラッシュが percent-encode される**（パスに化けない）', async () => {
+    // エンコードを忘れると `/api/posts/detail?slug=2026/09/27/142621` になる。
+    // 動いてしまうが、パスとクエリの境界が曖昧なままになる。
+    expect(await callWith({ slug: '2026/09/27/142621' })).toContain('slug=2026%2F09%2F27%2F142621');
+  });
+
+  it('**未指定なら ? を付けない**', async () => {
+    expect(await callWith()).toBe('https://example.invalid/api/posts/detail');
+  });
+
+  it('**空オブジェクトでも ? を付けない**', async () => {
+    // `?` だけが付いた URL は、表どおりの URL を主張している上の全経路テストを壊す。
+    expect(await callWith({})).toBe('https://example.invalid/api/posts/detail');
+  });
+
+  it('複数の値を組み立てられる（Phase 5 の削除が slug と sha を送る）', async () => {
+    const url = await callWith({ slug: '2026/09/27/142621', sha: 'abc123' });
+    expect(url).toContain('slug=2026%2F09%2F27%2F142621');
+    expect(url).toContain('sha=abc123');
+  });
 
   it('非 ASCII と CRLF を含む body でもバイト列とハッシュが一致する', async () => {
     const fetchSpy = spyFetch(() => jsonResponse(201, {}));

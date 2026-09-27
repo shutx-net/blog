@@ -21,6 +21,8 @@ export interface ApiOperation {
 export const API_OPERATIONS: readonly ApiOperation[] = [
   { method: 'GET', path: '/api/health' },
   { method: 'GET', path: '/api/health/github-app' },
+  { method: 'GET', path: '/api/posts' },
+  { method: 'GET', path: '/api/posts/detail' },
   { method: 'POST', path: '/api/posts' },
   { method: 'POST', path: '/api/media/presign' },
 ];
@@ -60,8 +62,22 @@ export interface ApiClientDeps {
 }
 
 export interface ApiClient {
-  call(operation: ApiOperation, body?: unknown): Promise<unknown>;
+  call(operation: ApiOperation, body?: unknown, query?: Record<string, string>): Promise<unknown>;
 }
+
+/**
+ * クエリ文字列を組み立てる。**空なら `?` を付けない。**
+ *
+ * 付けてしまうと、クエリを取らない経路の URL が `/api/posts?` に変わる。
+ * test/unit/api-client.test.ts が「URL が表どおり」を全経路で主張しているので、
+ * そこが落ちる。落ちること自体は正しい検知なので、主張を緩めずに形を保つ。
+ */
+const withQuery = (path: string, query: Record<string, string> | undefined): string => {
+  if (query === undefined) return path;
+  const params = new URLSearchParams(query);
+  const search = params.toString();
+  return search.length === 0 ? path : `${path}?${search}`;
+};
 
 /**
  * **API に触る唯一の入口。**
@@ -75,7 +91,11 @@ export const createApiClient = (deps: ApiClientDeps): ApiClient => {
   const origin = deps.origin ?? '';
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch.bind(globalThis);
 
-  const call = async (operation: ApiOperation, body?: unknown): Promise<unknown> => {
+  const call = async (
+    operation: ApiOperation,
+    body?: unknown,
+    query?: Record<string, string>,
+  ): Promise<unknown> => {
     // **バイト列は 1 度だけ作る。** 同じ列をハッシュし、同じ列を fetch に渡す。
     // 文字列を渡して別途ハッシュする形にすると、いつか片方だけ変わる。
     const bytes = body === undefined ? undefined : utf8Bytes(JSON.stringify(body));
@@ -101,7 +121,7 @@ export const createApiClient = (deps: ApiClientDeps): ApiClient => {
       'x-amz-content-sha256': bytes === undefined ? EMPTY_PAYLOAD_SHA256 : await sha256Hex(bytes),
     };
 
-    const response = await fetchImpl(`${origin}${operation.path}`, {
+    const response = await fetchImpl(`${origin}${withQuery(operation.path, query)}`, {
       method: operation.method,
       headers,
       credentials: deps.auth.credentials,

@@ -4,6 +4,8 @@ import type { ApiRequest, ApiResponse } from './http.ts';
 import { InvalidJsonBodyError, errorResponse, isJsonContentType, jsonResponse, parseJsonObject } from './http.ts';
 import { SlugConflictError } from './github/commit.ts';
 import { DeployDispatchError } from './github/dispatch.ts';
+import { PostNotFoundError } from './github/reader.ts';
+import { DATE_SLUG_PATTERN } from './posts/slug.ts';
 import { commitMessages } from './posts/commit-message.ts';
 import { renderMarkdown } from './posts/frontmatter.ts';
 import { PostValidationError, validateOverwrite, validatePost } from './posts/validate.ts';
@@ -133,6 +135,53 @@ const createPost = async ({ body, deps }: RouteContext): Promise<ApiResponse> =>
   return jsonResponse(201, { ...result, deployTriggered: true } satisfies PublishResponse);
 };
 
+/**
+ * 記事の一覧。**下書きも返す。**
+ *
+ * 管理画面は下書きを編集したいので、公開側の `isPublished` フィルタとは立場が違う。
+ * だから**この経路は認証が外せない** — blog-content は private で、ここが素通しに
+ * なると下書きが誰にでも読める。`ROUTES` の全件走査がそれを主張している。
+ *
+ * **本文は返さない。** 一覧は記事数ぶんの blob 取得になるので、本文まで載せると
+ * 転送量が記事の長さの合計に比例する。編集で本文が要るのは 1 本だけ。
+ */
+const listPosts = async ({ deps }: RouteContext): Promise<ApiResponse> => {
+  const posts = await deps.reader.list();
+  return jsonResponse(200, { posts, count: posts.length });
+};
+
+/**
+ * 記事 1 本の取得。**スラッグはクエリで受ける。**
+ *
+ * パスパラメータにしない理由: スラッグは `2026/09/27/142621` でスラッシュを含むので、
+ * `/api/posts/:slug` にすると `(method, path)` の完全一致で引いているルート表の
+ * 照合機構を作り直すことになる。クエリは `githubAppHealth` が既に使っている経路で、
+ * `event.ts` が `rawQueryString` を展開済み。
+ */
+const getPost = async ({ request, deps }: RouteContext): Promise<ApiResponse> => {
+  const slug = request.query['slug'];
+  // **reader を呼ぶ前に形を確かめる。** 呼んでから弾くと、不正な入力でも
+  // installation token の交換と GitHub への往復が起きる。
+  if (slug === undefined || !DATE_SLUG_PATTERN.test(slug)) {
+    // **入力値はエコーしない**（どのフィールドが悪いかだけ返す規律）。
+    return jsonResponse(400, { error: 'invalid_post', field: 'slug' });
+  }
+
+  try {
+    return jsonResponse(200, await deps.reader.read(slug));
+  } catch (error) {
+    if (error instanceof PostNotFoundError) {
+      // **404 を使ってよい。** auth.ts が 403/404 を禁じているのは *認可失敗* の
+      // 写像であって、リソースの不在は別。ただし CloudFront の CustomErrorResponses が
+      // origin の 404 を HTML に差し替えるので、admin にはこの JSON が届かず
+      // NON_JSON_RESPONSE として見える（client.ts が既にその扱いを持っている）。
+      deps.logger.warn('post not found', { slug: error.slug });
+      return jsonResponse(404, { error: 'post_not_found' });
+    }
+    throw error;
+  }
+};
+
 const presignMedia = async ({ body, deps }: RouteContext): Promise<ApiResponse> => {
   const filename = body['filename'];
   try {
@@ -166,6 +215,14 @@ export const ROUTES: readonly Route[] = [
     requiresAuth: true,
     bodyKind: 'none',
     handle: githubAppHealth,
+  },
+  { method: 'GET', path: '/api/posts', requiresAuth: true, bodyKind: 'none', handle: listPosts },
+  {
+    method: 'GET',
+    path: '/api/posts/detail',
+    requiresAuth: true,
+    bodyKind: 'none',
+    handle: getPost,
   },
   { method: 'POST', path: '/api/posts', requiresAuth: true, bodyKind: 'json', handle: createPost },
   {
