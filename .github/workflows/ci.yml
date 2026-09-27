@@ -26,6 +26,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # **oxlint は root に 1 本。** 4 ワークスペースを 1 パスで走査するので、
+  # ワークスペース別のジョブには割らない。
+  #
+  # `npm run lint` は `oxlint --deny-warnings`。**フラグを外すと warning があっても
+  # exit 0 になり、このジョブは緑のまま素通りする**（api/test/unit/toolchain.test.ts が
+  # フラグの存在を固定している）。
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
   # `cdk synth` を独立のステップにはしない。infra/package.json の pretest が
   # 全スタックに対して `cdk synth > /dev/null` を実行しており、それは
   # test/toolchain.test.ts が機械的に固定している。重ねて書くと同じ合成を 2 回やるだけ。

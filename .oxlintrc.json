@@ -1,0 +1,35 @@
+{
+  // oxlint の設定。**jsonc なのでコメントが書ける** — 例外を許すときは必ず理由を残すこと。
+  //
+  // **oxlint はリンタであってフォーマッタではない。** `indent` ルールは存在しない
+  // （実測: `Rule 'indent' not found in plugin 'eslint'`）。AGENTS.md の
+  // 「インデント 2 スペース」はここでは検査されない。
+  //
+  // **ルール名の typo は無言で通らない** — `Rule 'xxx' not found in plugin` で exit 1 になる
+  // （実測済み）。設定ミスが緑のまま素通りする経路は ignore パターンだけ。
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+
+  // 既定と同じだが**明示する**。将来 oxlint が既定を変えたときに、検査範囲が
+  // 黙って広がったり狭まったりしないようにする。実測でルール 96 件。
+  "categories": {
+    "correctness": "warn"
+  },
+
+  "rules": {
+    // **コメント内の U+2028 / U+2029 を許す。** api/src/posts/commit-message.ts が
+    // 「この文字を畳む」という仕様をコメントで説明するために実文字を書いている。
+    // ルールごと切るとコード中の混入を見逃すので、コメントだけ対象外にする。
+    "no-irregular-whitespace": ["warn", { "skipComments": true }]
+  },
+
+  "overrides": [
+    {
+      // **CloudFront Functions のエントリポイント。** 実行環境が `handler` という
+      // 名前で呼ぶので、どこからも import されないのが正しい。消してはならない。
+      "files": ["infra/functions/rewrite-uri.js"],
+      "rules": {
+        "no-unused-vars": "off"
+      }
+    }
+  ]
+}

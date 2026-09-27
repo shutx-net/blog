@@ -84,7 +84,7 @@ describe('チェックサムのクエリが焼き込まれない', () => {
     // 実測: 既定の S3Client は x-amz-checksum-crc32=AAAAAA==（空ボディの CRC32）を
     // 署名済みクエリに焼き込む。ブラウザが実ボディを PUT した瞬間に不一致で失敗する。
     const query = await queryOf();
-    for (const key of [...query.keys()]) {
+    for (const key of query.keys()) {
       expect(key.toLowerCase(), `${key} が署名済みクエリに入っている`).not.toMatch(
         /^x-amz-checksum-/,
       );

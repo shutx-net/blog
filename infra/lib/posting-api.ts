@@ -16,15 +16,14 @@ import { API_BUNDLE_DIR, API_BUNDLE_FILENAME, buildApiBundle } from '../../api/b
  * 定数として出しているのは、テスト用の seam（`PostingApiProps.bundleDir`）を
  * 足した結果、既定が黙って別の場所に変わる余地ができたから。既定が本物であることを
  * posting-api.test.ts が名指しで固定する。
+ *
+ * cdk synth がどこから実行されるか分からないので cwd 基準の相対パスにしない。
+ * "type": "module" なので __dirname は存在しない（site-stack.ts と同じ理由）。
+ *
+ * **パスも生成器も api 側の定義を実物で import する。** infra が別に組み立てると、
+ * 「テストが検証したバンドル」と「本番に載るバンドル」がずれる余地が生まれる。
  */
 export const DEFAULT_API_BUNDLE_DIR = API_BUNDLE_DIR;
-
-// cdk synth がどこから実行されるか分からないので cwd 基準の相対パスにしない。
-// "type": "module" なので __dirname は存在しない（site-stack.ts と同じ理由）。
-//
-// **パスも生成器も api 側の定義を実物で import する。** infra が別に組み立てると、
-// 「テストが検証したバンドル」と「本番に載るバンドル」がずれる余地が生まれる。
-const API_BUNDLE_PATH = API_BUNDLE_DIR;
 
 /**
  * メディアのキー接頭辞。
