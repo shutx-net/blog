@@ -12,7 +12,7 @@ Cognito の **ID トークン（有効 60 分）** と **refresh トークン（
 
 | 経路 | できること |
 | --- | --- |
-| `POST /api/posts` | public な GitHub リポジトリへのコミット |
+| `POST /api/posts` | private な記事リポジトリ `shutx-net/blog-content` へのコミット |
 | `POST /api/media/presign` | メディアバケットへの presigned PUT |
 
 ### 盗まれた ID トークンで 60 分間にできること
@@ -26,7 +26,8 @@ Cognito の **ID トークン（有効 60 分）** と **refresh トークン（
 - 他ユーザへの昇格（単一著者プールで `cognito:username` の完全一致。`selfSignUpEnabled: false`）
 - 投稿の隠蔽（Git がすべて記録し、revert できる）
 
-**被害は公開・可視・可逆である。** これが「保持方式の選択に過剰な代償を払わない」判断の土台になる。
+**被害は可視・可逆である**（記事リポジトリは private だが、投稿はコミットとして残り、
+公開サイトに出るので気づける）。これが「保持方式の選択に過剰な代償を払わない」判断の土台になる。
 
 ## 攻撃者 A: admin オリジンでの XSS（**主敵。仮想の話ではない**）
 
