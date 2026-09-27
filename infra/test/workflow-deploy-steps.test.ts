@@ -16,6 +16,7 @@ import { describe, expect, it } from 'vitest';
 import { scratchDir } from '../../api/test/support/scratch.ts';
 import { parse } from 'yaml';
 import { DATE_SLUG_PATTERN } from '../../api/src/posts/slug.ts';
+import { PUBLISHABLE_MINIMUM } from '../../api/src/posts/publishable-floor.ts';
 import { CicdStack } from '../lib/cicd-stack.ts';
 import { SiteStack } from '../lib/site-stack.ts';
 
@@ -1419,5 +1420,57 @@ describe('デプロイジョブの設定', () => {
     const timeout = deployJob?.['timeout-minutes'];
     expect(typeof timeout).toBe('number');
     expect(timeout as number).toBeGreaterThan(WAITER_MAX_MINUTES + BUILD_ALLOWANCE_MINUTES);
+  });
+});
+
+/**
+ * **`PUBLISHABLE_MINIMUM` が `deploy.yml` のガードと同じ意味であることの固定。**
+ *
+ * api 側の床（削除・更新を拒否する条件）とワークフローのガードが食い違うと、
+ * **「API は許すのにデプロイが止まる」**という最も分かりにくい壊れ方になる。
+ * 数字の一致だけでなく、**ガードが draft を除いて数えていること**まで実行して確かめる
+ * — ここが「総数」だと思い込んだまま API を書くと、公開 1 本 + draft 3 本の状態で
+ * その公開 1 本を消せてしまう。
+ */
+describe('api の床と deploy.yml のガードの一致', () => {
+  it('**PUBLISHABLE_MINIMUM がガードの下限と一致する**', () => {
+    expect(PUBLISHABLE_MINIMUM).toBe(declaredMinimum());
+  });
+
+  it('下限を宣言しているガードが 3 つあり、値が揃っている', () => {
+    const minimums = guardsWithMinimum().map((guard) => guard.minimum);
+    expect(minimums).toHaveLength(3);
+    expect(new Set(minimums).size, `揃っていない: ${minimums.join(', ')}`).toBe(1);
+  });
+
+  it('**draft だけのとき、本数ガードは通りスラッグ照合は落ちる**（拘束するのは公開可能数）', () => {
+    withTempDir((dir) => {
+      // draft 1 本だけ。**総数は下限を満たすが公開は 0 本。**
+      const slug = '2026/12/31/235959';
+      const file = join(dir, 'site/src/content/posts', `${slug}.md`);
+      mkdirSync(join(file, '..'), { recursive: true });
+      writePost(file, { draft: true });
+      mkdirSync(join(dir, 'site/dist/posts'), { recursive: true });
+
+      const posts = runGuardScript(postsGuardScript(), dir);
+      expect(posts.status, `本数ガードが落ちた: ${posts.output}`).toBe(0);
+
+      const slugs = runGuardScript(slugGuardScript(), dir);
+      expect(slugs.status, `スラッグ照合が通ってしまった: ${slugs.output}`).not.toBe(0);
+      expect(slugs.output).toContain('publishable post');
+    });
+  });
+
+  it('公開が 1 本あればスラッグ照合も通る（上のテストが常に落ちるわけではない）', () => {
+    withTempDir((dir) => {
+      const slug = '2026/12/31/235959';
+      const file = join(dir, 'site/src/content/posts', `${slug}.md`);
+      mkdirSync(join(file, '..'), { recursive: true });
+      writePost(file);
+      writeDistPost(dir, slug);
+
+      const result = runGuardScript(slugGuardScript(), dir);
+      expect(result.status, `公開 1 本で落ちた: ${result.output}`).toBe(0);
+    });
   });
 });
