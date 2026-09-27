@@ -1,13 +1,11 @@
 /**
  * メディアアップロードのポリシー定数。
  *
- * **依存ゼロにしてあるのは、ブラウザ（admin/）から import させるため。**
- * presign.ts は @aws-sdk/client-s3 と node:crypto を読むのでブラウザに載せられない。
- * 定数を同居させると admin 側が値を複製することになり、複製はいずれずれる。
- * validate.ts / frontmatter.ts が既に同じ形になっている。
- *
- * **このファイルに import を足さないこと。** 足した瞬間にブラウザから読めなくなる
- * 可能性が生まれる。test/unit/media-limits.test.ts が import 文ゼロを固定している。
+ * **このファイルに import を足さないこと。** ブラウザ（admin/）から import させるための
+ * 依存ゼロで、`test/unit/media-limits.test.ts` が import 文ゼロを固定している。
+ * presign.ts は @aws-sdk/client-s3 と node:crypto を読むのでブラウザに載せられず、定数を
+ * 同居させると admin 側が値を複製することになる。複製はいずれずれる。
+ * validate.ts / frontmatter.ts が既に同じ形。
  */
 /**
  * メディアのキー接頭辞。

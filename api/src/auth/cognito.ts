@@ -33,22 +33,18 @@ export interface CognitoAuthorizerOptions {
 }
 
 /**
- * **JWKS が取れなかった系だけを `unavailable`（503）に振り分ける。**
- * それ以外の例外は全部 `invalid-token`（401）に倒す（fail-closed）。
+ * JWKS が取れなかった系だけを `unavailable`（503）に振り分け、それ以外の例外は全部
+ * `invalid-token`（401）に倒す（fail-closed）。
  *
- * 分岐を 1 段に留めているのは意図的である。ライブラリの例外型は版によって変わりうるし、
- * 実測で「iss 不一致」が JwtInvalidIssuerError ではなく
- * `ParameterValidationError: issuer not configured` になるなど直感に反する
- * （単一プールでも issuer 設定が 2 つあるため）。
+ * 分岐を 1 段に留めるのは意図的。ライブラリの例外型は版によって変わりうるし、実測で
+ * 「iss 不一致」が JwtInvalidIssuerError ではなく `ParameterValidationError: issuer not
+ * configured` になるなど直感に反する（単一プールでも issuer 設定が 2 つあるため）。
  *
- * **`error.name` で分岐してはいけない。** 実測: aws-jwt-verify 5.2.1 の例外クラスは
- * `this.name` を **1 箇所も設定していない**ので、`FetchError` でも `.name` は `'Error'` の
- * ままである。名前で分岐すると **JWKS 取得失敗が 1 件残らず invalid-token（401）になり、
- * サーバ側の障害を「資格情報を出し直せ」と誤って伝える。**
- *
- * **`constructor.name` でも分岐してはいけない。** Lambda のバンドルは esbuild の
- * `--minify` を通るのでクラス名は 1〜2 文字に潰れる。テスト（非 minify）では通り、
- * **本番だけが壊れる**という最悪の失敗の仕方になる。
+ * **`error.name` で分岐してはいけない。** aws-jwt-verify 5.2.1 の例外クラスは `this.name` を
+ * 1 箇所も設定しておらず、`FetchError` でも `.name` は `'Error'` のまま（実測）。名前で分岐
+ * すると JWKS 取得失敗が 1 件残らず 401 になり、サーバ側の障害を「資格情報を出し直せ」と
+ * 誤って伝える。**`constructor.name` でも分岐してはいけない** — バンドルは esbuild の
+ * `--minify` を通るのでクラス名が潰れ、テスト（非 minify）では通って**本番だけが壊れる**。
  *
  * `instanceof` はクラスの同一性で判定するので minify を通しても壊れない。
  * `NonRetryableFetchError` は `FetchError` を継承しているのでこの表に要らない。
@@ -61,19 +57,16 @@ const isJwksUnavailable = (error: unknown): boolean =>
   error instanceof JwkValidationError;
 
 /**
- * 本物の verifier を作る。
- *
- * **`tokenUse: 'id'` は省略できない** — 省略すると ParameterValidationError で落ちる
- * 仕様なので、書き忘れが黙って通ることはない（良い設計）。
+ * 本物の verifier を作る。`tokenUse: 'id'` は省略すると ParameterValidationError で落ちる
+ * 仕様なので、書き忘れが黙って通ることはない。
  *
  * **`hydrate()` は呼ばない。** 理由 2 つ。
  * (1) 実測で単一プールでも issuer 設定が 2 つあり（multi-Region replication 対応の
  *     `issuer-cognito-idp.<region>.amazonaws.com` を含む）、hydrate() は両方に取りに行く。
- *     非レプリケーション構成では 200 が返らない可能性があり、Promise.allSettled で
- *     握り潰されるとはいえ response timeout までコールドスタートが伸びうる。
- * (2) hydrate() がモジュールスコープで throw すると Lambda の初期化が落ち、
- *     CloudFront には 502 が返る。**JWKS の一時的な取得失敗で API 全体が 502 になるより、
- *     その 1 リクエストだけ 503 になるほうが良い。**
+ *     非レプリケーション構成では 200 が返らず、Promise.allSettled で握り潰されるとはいえ
+ *     response timeout までコールドスタートが伸びうる。
+ * (2) モジュールスコープで throw すると Lambda の初期化が落ち CloudFront には 502 が返る。
+ *     **一時的な JWKS 取得失敗で API 全体が 502 になるより、その 1 リクエストだけ 503 が良い。**
  * 代わりに遅延取得に任せる。verify() は kid がキャッシュに有ればフェッチしない。
  */
 const createRealVerifier = (userPoolId: string, clientId: string): TokenVerifier =>
@@ -83,13 +76,13 @@ const createRealVerifier = (userPoolId: string, clientId: string): TokenVerifier
  * Cognito の ID トークンを検証する Authorizer。
  *
  * iss / aud / token_use / exp / 署名（pool の JWKS）はライブラリが見る。
- * **cognito:username が設定値と完全一致するかは自分たちで見る** — ライブラリは
- * 「このプールの、このアプリクライアントの、有効な ID トークン」までしか保証しない。
- * 単一著者プールの核心はその先にある。
+ * **cognito:username が設定値と完全一致するかは自分たちで見る** — ライブラリは「このプールの、
+ * このアプリクライアントの、有効な ID トークン」までしか保証せず、単一著者プールの核心は
+ * その先にある。
  *
- * **verifier はモジュールスコープで 1 度だけ作ること**（index.ts がそうしている）。
- * JWKS キャッシュも KeyObject キャッシュも verifier インスタンスに乗っているので、
- * ハンドラ内で作ると毎リクエスト JWKS を取りに行く。
+ * **verifier はモジュールスコープで 1 度だけ作ること**（index.ts がそうしている）。JWKS も
+ * KeyObject のキャッシュも verifier インスタンスに乗っているので、ハンドラ内で作ると
+ * 毎リクエスト JWKS を取りに行く。
  */
 export const createCognitoAuthorizer = ({
   userPoolId,
