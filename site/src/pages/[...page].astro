@@ -6,9 +6,11 @@ import Layout from "../layouts/Layout.astro";
 import {
   POSTS_PER_PAGE,
   byPubDateDesc,
+  formatPubDate,
   isPublished,
   withTrailingSlash,
 } from "../lib/posts.ts";
+import { SITE_DESCRIPTION, SITE_NAME } from "../lib/site-meta.ts";
 
 // Replaces the old index.astro rather than sitting beside it. Keeping both makes
 // astro warn `Could not render '' from route '/[...page]' as it conflicts with
@@ -24,13 +26,47 @@ export const getStaticPaths = (async ({ paginate }) => {
 const { page } = Astro.props;
 ---
 
-<Layout title="blog" description="shutx-net の個人ブログ。">
-  <h1>blog</h1>
+<Layout title={SITE_NAME} description={SITE_DESCRIPTION}>
+  <h1>{SITE_NAME}</h1>
   <ul class="post-list">
     {
       page.data.map((post) => (
-        <li>
-          <a href={`/posts/${post.id}/`}>{post.data.title}</a>
+        <li class="post-list__item">
+          {
+            /* The date leads the entry for the same reason it leads the post page:
+               it reads as a kicker above the title rather than a stray line under
+               it. datetime carries the machine-readable form; the visible text is
+               the JST date a Japanese reader expects. */
+          }
+          <p class="post-list__meta">
+            <time datetime={post.data.pubDate.toISOString()}>
+              {formatPubDate(post.data.pubDate)}
+            </time>
+          </p>
+          <a class="post-list__title" href={`/posts/${post.id}/`}>
+            {post.data.title}
+          </a>
+          {
+            /* description is required by postSchema. Printing it here is what makes
+               that requirement pay for itself -- before this the field was written
+               for every post and shown nowhere. */
+          }
+          <p class="post-list__summary">{post.data.description}</p>
+          {
+            /* Same chip styling as the post page, reached by class here because
+               this list is free to carry one. The post page's own tag list cannot
+               (the parity proof pins that element), so global.css declares the
+               chip look once for both selectors. */
+            post.data.tags.length > 0 && (
+              <ul class="tag-list">
+                {post.data.tags.map((tag) => (
+                  <li>
+                    <a href={`/tags/${tag}/`}>{tag}</a>
+                  </li>
+                ))}
+              </ul>
+            )
+          }
         </li>
       ))
     }
@@ -41,19 +77,31 @@ const { page } = Astro.props;
        while the emitted files are /2/index.html and the sitemap's loc values do
        carry one -- withTrailingSlash keeps both naming the same URL. Astro's
        paginate `format` option is not usable for this: it turns page 1's "/"
-       into "//". */
-    (page.url.prev || page.url.next) && (
-      <nav>
-        {page.url.prev && (
-          <a rel="prev" href={withTrailingSlash(page.url.prev)}>
-            前のページ
-          </a>
-        )}
-        {page.url.next && (
-          <a rel="next" href={withTrailingSlash(page.url.next)}>
-            次のページ
-          </a>
-        )}
+       into "//".
+
+       The whole nav is dropped on a single-page site: "1 / 1" with no links is
+       furniture that tells the reader nothing. */
+    page.lastPage > 1 && (
+      <nav class="pager" aria-label="ページ送り">
+        {/* Rendered in all three cases so the position stays centred whether or
+            not a link sits beside it -- an empty span holds the column. */}
+        <span class="pager__edge">
+          {page.url.prev && (
+            <a rel="prev" href={withTrailingSlash(page.url.prev)}>
+              前のページ
+            </a>
+          )}
+        </span>
+        <span class="pager__position">
+          {page.currentPage} / {page.lastPage}
+        </span>
+        <span class="pager__edge pager__edge--next">
+          {page.url.next && (
+            <a rel="next" href={withTrailingSlash(page.url.next)}>
+              次のページ
+            </a>
+          )}
+        </span>
       </nav>
     )
   }

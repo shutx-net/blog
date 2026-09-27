@@ -108,6 +108,70 @@ describe("shared layout", () => {
   });
 });
 
+describe("social card metadata", () => {
+  // Before this, pasting a URL anywhere produced a bare link: no title, no
+  // description. Both values already existed on every page as <title> and the
+  // meta description; only the og:/twitter: names were missing.
+  it.each([
+    ["index.html", ""],
+    ["posts/2026/08/01/090000/index.html", "posts/2026/08/01/090000/"],
+    ["tags/astro/index.html", "tags/astro/"],
+  ])("gives %s an og:url equal to its canonical", (file, path) => {
+    const html = readDist(file);
+
+    expect(html).toContain(`<meta property="og:url" content="${site}${path}">`);
+    // The two must not be allowed to drift: a card pointing somewhere else than
+    // the canonical URL splits the page's identity across the two consumers.
+    expect(html).toContain(`<link rel="canonical" href="${site}${path}">`);
+  });
+
+  it("carries the page title and description", () => {
+    const html = readDist("posts/2026/08/01/090000/index.html");
+
+    expect(html).toContain('<meta property="og:title" content="Hello world">');
+    expect(html).toContain(
+      '<meta property="og:description" content="The first post on this blog, kept deliberately small.">',
+    );
+  });
+
+  it("names the site", () => {
+    expect(readDist("index.html")).toContain('<meta property="og:site_name" content="blog">');
+  });
+
+  // summary rather than summary_large_image: there is no og:image, and asking for
+  // the large variant without one yields a card with a blank slab.
+  it("asks for the card variant that needs no image", () => {
+    expect(readDist("index.html")).toContain('<meta name="twitter:card" content="summary">');
+  });
+
+  // og:image is deliberately absent -- generating one needs a dependency or a
+  // static asset, and neither is in scope. Pinned so its absence stays a decision
+  // rather than something nobody noticed.
+  it("claims no image", () => {
+    expect(readDist("index.html")).not.toContain("og:image");
+  });
+
+  it("marks a post as an article and everything else as a website", () => {
+    expect(readDist("posts/2026/08/01/090000/index.html")).toContain(
+      '<meta property="og:type" content="article">',
+    );
+    expect(readDist("index.html")).toContain('<meta property="og:type" content="website">');
+    expect(readDist("tags/astro/index.html")).toContain(
+      '<meta property="og:type" content="website">',
+    );
+  });
+
+  // A 404 is served for every URL that does not exist, so there is nothing to
+  // share and nothing to name canonical. The OG block follows the canonical link
+  // rather than being emitted half-formed.
+  it("emits no card for the 404 page", () => {
+    const html = readDist("404.html");
+
+    expect(html).not.toContain("og:");
+    expect(html).not.toContain("twitter:");
+  });
+});
+
 describe("tag pages", () => {
   it.each(["astro", "nix"])("generates dist/tags/%s/index.html", (tag) => {
     expect(existsSync(join(distDir, "tags", tag, "index.html"))).toBe(true);
@@ -126,6 +190,52 @@ describe("tag pages", () => {
   // getStaticPaths leaves a trace right here.
   it("generates no page for a tag only a draft carries", () => {
     expect(existsSync(join(distDir, "tags", "draft-only", "index.html"))).toBe(false);
+  });
+});
+
+describe("tag index", () => {
+  const index = (): string => readDist("tags/index.html");
+
+  it("is generated at dist/tags/index.html", () => {
+    expect(existsSync(join(distDir, "tags", "index.html"))).toBe(true);
+  });
+
+  it("links to every tag a published post carries", () => {
+    const html = index();
+
+    expect(html).toContain('href="/tags/astro/"');
+    expect(html).toContain('href="/tags/nix/"');
+    expect(html).toContain('href="/tags/aws/"');
+  });
+
+  // astro: hello-world + second-post. nix: second-post + third-post. aws: one.
+  // The draft also carries astro, so a count of 3 would mean the filter is gone.
+  it("counts only the published posts", () => {
+    expect(index()).toMatch(/astro[\s\S]{0,120}?2/);
+  });
+
+  // The whole point of filtering before collecting. `draft-only` belongs to no
+  // published post, so its presence here would tell a reader that an unpublished
+  // post exists -- and the site-wide scan in "draft leakage" below catches it too,
+  // but this names the page.
+  it("omits a tag only a draft carries", () => {
+    expect(index()).not.toContain("draft-only");
+  });
+
+  it("offers a way back to the listing", () => {
+    expect(index()).toContain('href="/"');
+  });
+});
+
+describe("tag page furniture", () => {
+  // The post page has had a back link since it was styled; the tag page was the
+  // one dead end left in the site.
+  it("offers a way back to the listing", () => {
+    expect(readDist("tags/astro/index.html")).toContain('<nav class="post__back"><a href="/">');
+  });
+
+  it("links to the tag index", () => {
+    expect(readDist("tags/astro/index.html")).toContain('href="/tags/"');
   });
 });
 
@@ -162,6 +272,19 @@ describe("pagination", () => {
   // ...and back to "/" rather than "//".
   it("links back to the root without doubling the slash", () => {
     expect(readDist("2/index.html")).toContain('rel="prev" href="/"');
+  });
+
+  // Prev/next alone do not say where the reader is. expectedPages is derived from
+  // the fixtures, so this keeps saying the truth when a post is added.
+  it("says which page of how many the reader is on", () => {
+    expect(readDist("index.html")).toContain(`1 / ${expectedPages}`);
+    expect(readDist("2/index.html")).toContain(`2 / ${expectedPages}`);
+  });
+
+  // The position is for the reader, and the reader is told it by the surrounding
+  // prose -- "1 / 2" on its own is not a sentence a screen reader can place.
+  it("labels the position for assistive technology", () => {
+    expect(readDist("index.html")).toContain('aria-label="ページ送り"');
   });
 
   it("splits the posts across the pages", () => {

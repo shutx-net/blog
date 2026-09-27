@@ -1,0 +1,46 @@
+---
+import { getCollection } from "astro:content";
+
+import Layout from "../../layouts/Layout.astro";
+import { countByTag, isPublished } from "../../lib/posts.ts";
+
+// isPublished is applied HERE, before countByTag, and the order is the whole
+// point of this page.
+//
+// Tag names come from the posts themselves. Counting first and filtering later --
+// or filtering only in the markup -- would put a tag carried solely by a draft
+// into this index, which tells any reader that an unpublished post exists. The
+// name alone leaks it; no link needs to be followed. tags/[tag].astro carries the
+// same note for the same reason, and test/build/pages.test.ts pins it from the
+// dist/ side with the `draft-only` fixture tag.
+const posts = await getCollection("posts", isPublished);
+const tags = countByTag(posts);
+---
+
+<Layout title="タグ" description="記事に付けられているタグの一覧。">
+  <h1>タグ</h1>
+  {
+    /* Reachable only by URL until now: the post page and the listing both link
+       into /tags/<name>/, but nothing told the reader which tags exist. */
+    tags.length > 0 ? (
+      <ul class="tag-list tag-list--index">
+        {tags.map(({ tag, count }) => (
+          <li>
+            <a href={`/tags/${tag}/`}>
+              {tag}
+              {/* The count is inside the link so the whole chip stays one target,
+                  and it is a separate element so CSS can dim it without dimming
+                  the name. */}
+              <span class="tag-list__count">{count}</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    ) : (
+      <p>まだタグの付いた記事がありません。</p>
+    )
+  }
+  <nav class="post__back">
+    <a href="/">記事一覧へ戻る</a>
+  </nav>
+</Layout>

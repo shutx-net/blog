@@ -1,4 +1,6 @@
 ---
+import { SITE_NAME } from "../lib/site-meta.ts";
+
 // Everything that belongs in <head> on every page. Kept separate from Layout so
 // the per-page metadata decisions live in one readable place.
 interface Props {
@@ -15,6 +17,14 @@ const { title, description, noindex = false } = Astro.props;
 // Skipped entirely when noindex is set -- a 404 is served for every URL that does
 // not exist, so naming one of them canonical would be a lie.
 const canonical = noindex ? undefined : new URL(Astro.url.pathname, Astro.site);
+
+// Derived here rather than threaded through Layout as a prop, deliberately: the
+// post page's template is the one file in the site that must not gain anything
+// (admin/test/parity/published-html.test.ts byte-compares the inner HTML of its
+// <article>), and every other page would have to pass a value it does not care
+// about. The routing structure this reads is the same one `canonical` above
+// already depends on, and test/build/pages.test.ts pins both outcomes from dist/.
+const ogType = Astro.url.pathname.startsWith("/posts/") ? "article" : "website";
 ---
 
 <meta charset="utf-8" />
@@ -23,9 +33,31 @@ const canonical = noindex ? undefined : new URL(Astro.url.pathname, Astro.site);
 <meta name="description" content={description} />
 {noindex && <meta name="robots" content="noindex" />}
 {canonical && <link rel="canonical" href={canonical} />}
+{
+  /*
+   * Tied to `canonical`, not emitted unconditionally. og:url has to name the same
+   * URL as the canonical link or the page has two identities, and on a noindex
+   * page there is no URL worth naming -- a 404 is returned for every address that
+   * does not exist, so a card for one of them is meaningless.
+   *
+   * No og:image. Generating one needs either a dependency or a static asset, and
+   * neither is in scope; twitter:card is therefore `summary` rather than
+   * `summary_large_image`, which would render a blank slab without one.
+   */
+  canonical && (
+    <>
+      <meta property="og:type" content={ogType} />
+      <meta property="og:url" content={canonical} />
+      <meta property="og:site_name" content={SITE_NAME} />
+      <meta property="og:title" content={title} />
+      <meta property="og:description" content={description} />
+      <meta name="twitter:card" content="summary" />
+    </>
+  )
+}
 <link
   rel="alternate"
   type="application/rss+xml"
-  title="blog"
+  title={SITE_NAME}
   href={new URL("rss.xml", Astro.site)}
 />

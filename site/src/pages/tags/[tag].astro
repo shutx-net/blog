@@ -3,7 +3,7 @@ import type { GetStaticPaths } from "astro";
 import { getCollection } from "astro:content";
 
 import Layout from "../../layouts/Layout.astro";
-import { byPubDateDesc, collectTags, isPublished } from "../../lib/posts.ts";
+import { byPubDateDesc, collectTags, formatPubDate, isPublished } from "../../lib/posts.ts";
 
 export const getStaticPaths = (async () => {
   // isPublished belongs here, not merely in the markup below. Tag names are taken
@@ -23,13 +23,36 @@ const { posts } = Astro.props;
 
 <Layout title={`タグ: ${tag}`} description={`${tag} タグの付いた記事の一覧。`}>
   <h1>タグ: {tag}</h1>
+  {
+    /* Same entry shape as the main listing, minus the chips: every post here
+       carries the tag the page is about, so repeating it on each row would be
+       noise. */
+  }
   <ul class="post-list">
     {
       posts.map((post) => (
-        <li>
-          <a href={`/posts/${post.id}/`}>{post.data.title}</a>
+        <li class="post-list__item">
+          <p class="post-list__meta">
+            <time datetime={post.data.pubDate.toISOString()}>
+              {formatPubDate(post.data.pubDate)}
+            </time>
+          </p>
+          <a class="post-list__title" href={`/posts/${post.id}/`}>
+            {post.data.title}
+          </a>
+          <p class="post-list__summary">{post.data.description}</p>
         </li>
       ))
     }
   </ul>
+  {
+    /* This page used to be a dead end -- the post page has had a back link since
+       it was styled, and only the browser's own button led out of here. Both
+       destinations are offered because a reader who arrived from a post's chip
+       wants the listing, and one who arrived from the index wants the index. */
+  }
+  <nav class="post__back">
+    <a href="/">記事一覧へ戻る</a>
+    <a href="/tags/">タグ一覧へ</a>
+  </nav>
 </Layout>

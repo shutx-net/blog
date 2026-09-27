@@ -3,6 +3,7 @@ import rss from "@astrojs/rss";
 import { getCollection } from "astro:content";
 
 import { byPubDateDesc, isPublished } from "../lib/posts.ts";
+import { SITE_DESCRIPTION, SITE_NAME } from "../lib/site-meta.ts";
 
 // The feed is the least forgiving consumer of astro's `site`: <guid
 // isPermaLink="true"> is a permanent, subscriber-side identity for each item, so
@@ -17,8 +18,8 @@ export async function GET(context: APIContext): Promise<Response> {
   const posts = (await getCollection("posts", isPublished)).sort(byPubDateDesc);
 
   return rss({
-    title: "blog",
-    description: "shutx-net の個人ブログ。",
+    title: SITE_NAME,
+    description: SITE_DESCRIPTION,
     site: context.site!,
     items: posts.map((post) => ({
       title: post.data.title,

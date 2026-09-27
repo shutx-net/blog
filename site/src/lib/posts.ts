@@ -38,6 +38,33 @@ export const byPubDateDesc = (a: PostEntry, b: PostEntry): number =>
 export const collectTags = (posts: readonly PostEntry[]): string[] =>
   [...new Set(posts.flatMap((post) => post.data.tags))].sort();
 
+/** One tag and the number of given posts carrying it. */
+export type TagCount = { tag: string; count: number };
+
+/**
+ * Tags with their post counts, most used first.
+ *
+ * Counts whatever it is handed -- it does NOT filter drafts. The caller must
+ * apply isPublished first, and the reason is not cosmetic: a tag carried only by
+ * a draft would otherwise appear in the index, which tells a reader that an
+ * unpublished post exists. The tag pages' getStaticPaths has the same rule
+ * written down for the same reason.
+ *
+ * Ties break alphabetically rather than by insertion order, so two builds of the
+ * same commit cannot order the index differently -- dist/ is compared byte for
+ * byte when the deploy pipeline changes.
+ */
+export const countByTag = (posts: readonly PostEntry[]): TagCount[] => {
+  const counts = new Map<string, number>();
+  for (const tag of posts.flatMap((post) => post.data.tags)) {
+    counts.set(tag, (counts.get(tag) ?? 0) + 1);
+  }
+
+  return [...counts]
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+};
+
 /**
  * Japan has been on a fixed +09:00 with no DST since 1951, so the offset can be
  * a constant rather than a timezone database lookup.
