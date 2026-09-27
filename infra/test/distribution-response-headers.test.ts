@@ -298,23 +298,34 @@ describe('**CSP の中身（ディレクティブ名で厳密に引く）**', ()
     expect(directive('script-src')).not.toContain("'unsafe-inline'");
   });
 
-  it("**`style-src-attr` を設定しない。** 対称に見えるが、足すと shiki が色を失う", () => {
+  it("**`style-src-attr` に 'unsafe-inline' が要る。** 外すと shiki が色を失う", () => {
     // `script-src-attr 'none'` と並べると「style 側も閉じるべき」に見える。**閉じてはいけない。**
     //
     // shiki はコードフェンスを `style="color:#F97583"` のような **属性**で色付けする
-    // （実測: ts のフェンス 1 本で `style=` 属性 8 個、`<style>` ブロック 0 個）。
-    // `style-src-attr` を設定すると `style=` 属性はそちらに支配され、
-    // `style-src` の `'unsafe-inline'` は**届かなくなる**。設定しないことで
-    // `style-src` にフォールバックし、属性が許可される。
+    // （実測: コードフェンス 2 本の記事 1 件で `style=` 属性 29 個、`<style>` ブロック 0 個）。
+    // CSP3 では `style-src-attr` を明示すると `style` 属性はそちらに支配され、
+    // `style-src` には**フォールバックしない**。だから値付きで `'unsafe-inline'` を入れる。
+    //
+    // **以前はこの it が「設定しない」を主張していた。** 当時は `style-src` 側に
+    // `'unsafe-inline'` があり、`style-src-attr` を**空で**足すと属性が拒否されたので、
+    // 設定しないことでフォールバックさせるのが正解だった。**理屈は同じで、結論だけが
+    // 反転している** — `style-src` から `'unsafe-inline'` を外した以上、フォールバック先が
+    // 属性を許さなくなったため、`style-src-attr` に明示するしかない。
     //
     // **バイト一致テストはこれを捕まえない。** 公開済み記事にコードフェンスがまだ無いので
     // `site/dist` の `style=` 属性は 0 個であり、`published-html.test.ts` は素通りする。
     // admin/test/parity/corpus.test.ts と同じ穴で、こちらは CSP 側の対になる。
     expect(
-      directives().has('style-src-attr'),
-      "style-src-attr を足すと shiki のシンタックスハイライトが無色になる。" +
+      directive('style-src-attr'),
+      "style-src-attr から 'unsafe-inline' を外すと shiki のシンタックスハイライトが無色になる。" +
         "script-src-attr 'none' との非対称は意図的である",
-    ).toBe(false);
+    ).toEqual(["'unsafe-inline'"]);
+  });
+
+  it("**`style-src` に `unsafe-inline` が無い**（`<style>` ブロックの注入を禁じる）", () => {
+    // site/dist はもうインライン <style> を持たない（外部 /_astro/Layout.*.css）。
+    // 0 件であることは admin/test/build/output.test.ts が見張る。
+    expect(directive('style-src')).not.toContain("'unsafe-inline'");
   });
 
   it("`script-src-attr` は 'none' のまま（インラインイベントハンドラを止める本体）", () => {
@@ -322,11 +333,14 @@ describe('**CSP の中身（ディレクティブ名で厳密に引く）**', ()
     expect(directive('script-src-attr')).toEqual(["'none'"]);
   });
 
-  it('**素朴な検査では誤検出することの確認**（style-src 側に unsafe-inline がある）', () => {
+  it('**素朴な検査では誤検出することの確認**（style-src-attr 側に unsafe-inline がある）', () => {
     // not.toContain("'unsafe-inline'") を CSP 全体に掛けると落ちる。
     // ディレクティブ名で引く必要があることを、テスト自身が示しておく。
+    //
+    // `'unsafe-inline'` は消えていない。`style-src` から `style-src-attr` に移っただけで、
+    // **全体文字列を見る検査は今も誤検出する。**
     expect(cspText()).toContain("'unsafe-inline'");
-    expect(directive('style-src')).toContain("'unsafe-inline'");
+    expect(directive('style-src-attr')).toContain("'unsafe-inline'");
   });
 
   it('**script-src に `unsafe-eval` が無い**（wasm-unsafe-eval とは別物）', () => {
@@ -393,6 +407,7 @@ describe('**CSP の中身（ディレクティブ名で厳密に引く）**', ()
         'script-src',
         'script-src-attr',
         'style-src',
+        'style-src-attr',
       ].sort(),
     );
   });

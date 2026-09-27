@@ -986,6 +986,52 @@ PEM ファイルはこのリポジトリの中に置かないこと（`.gitignor
 
 6. GitHub 側で古い鍵を削除
 
+### CSP の `style-src`（issue #34 の結論）
+
+配信している値は `style-src 'self'` と `style-src-attr 'unsafe-inline'` の 2 本立て。
+組み立ては `infra/lib/response-headers.ts` の `buildCsp` ただ 1 つ。
+
+以前は `style-src 'self' 'unsafe-inline'` で、**外せない理由が 2 つあった。**
+
+1. **インライン `<style>`** — `site/astro.config.mjs` が `build.inlineStylesheets: "always"` を
+   指定しており、HTML が全件インライン `<style>` を持っていた。設定を外して既定の `"auto"` に
+   戻すと、`global.css` は 10600 バイトで vite の 4KB 閾値を超えるので必ず外部
+   `/_astro/Layout.*.css` になる（実測: インライン `<style>` 0/5、`<link>` 1 本）。
+   同一オリジンなので `'self'` で足りる
+2. **shiki の `style="color:#..."` 属性** — コードフェンスの色付けは属性で行われる
+   （実測: コードフェンス 2 本の記事 1 件で `style=` 属性 **29 個**、`<style>` ブロック 0 個）。
+   **CSP3 では `style-src-attr` を明示すると属性はそちらに支配され `style-src` に
+   フォールバックしない**ので、`style-src-attr 'unsafe-inline'` で許すしかない
+
+#### shiki を class 出力にする案を採らなかった理由
+
+`@shikijs/transformers` の `transformerStyleToClass` を使えば属性そのものを無くせる。採らない。
+
+- **未インストールで新規依存になる**（`node_modules/@shikijs` には core / engine-* / langs /
+  primitive / themes / types / vscode-textmate しか無い）
+- **markdown の出力が変わるので `admin/test/parity/published-html.test.ts` のバイト一致が壊れる。**
+  `AGENTS.md` のとおり、プレビュー側と `site/astro.config.mjs` を同じコミットで揃える必要がある
+- `themes` / `defaultColor: false` は CSS 変数を**属性の中に**吐くので、属性は消えない
+
+#### 得られた強化は限定的である
+
+できるようになったのは **`<style>` ブロックの注入を禁じること**だけで、`style` 属性は許したまま。
+インラインスタイルはスクリプトを実行しないので、`script-src` の厳格さとは重みが違う。
+**多層防御の 1 枚**として理解すること。
+
+#### ブラウザでの確認が必須
+
+**CSP 違反はブラウザのコンソールにしか出ない。** `curl` はヘッダしか見ないので、スタイルが
+飛んでいてもステータス 200 で通る。過去に `script-src-attr 'none'` の確認で同じ形を踏んでいる。
+
+`cdk deploy` の後に、DevTools の Console を開いたまま次を見ること。
+
+1. `/`・記事ページ・`/admin/` で **CSP 違反が 1 件も出ない**こと、見た目が崩れていないこと
+2. **コードフェンスを含む記事**でシンタックスハイライトの色が付くこと。
+   **本番の記事にコードフェンスが無い間、2 は既存ページでは検証できない** —
+   `style=` 属性が 0 個なので `style-src-attr` を壊しても無症状で通り、
+   **色が飛ぶのは記事を書いた日になる**
+
 ## ツールチェーンの更新
 
 ```sh
