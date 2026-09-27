@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { POST_SLUG_PATTERN, dateSlug } from '../../src/posts/slug.ts';
 import { PostValidationError, SLUG_PATTERN, TAG_PATTERN, validatePost } from '../../src/posts/validate.ts';
 
 const NOW_MS = Date.UTC(2026, 7, 30, 12, 34, 56);
 
 const valid = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
-  slug: 'hello-world',
   title: 'こんにちは',
   description: '最初の記事',
   body: '本文です。\n',
@@ -23,49 +23,68 @@ const expectRejected = (raw: Record<string, unknown>, field?: string): PostValid
   return thrown as PostValidationError;
 };
 
-describe('slug', () => {
-  it('**ドットを含むと落ちる**', () => {
-    // infra/functions/rewrite-uri.js の URI 書き換えは「最後のスラッシュより後に
-    // ドットがあれば静的ファイル」というヒューリスティックなので、
-    // /posts/node-24.19-notes には /index.html が付かず 403 になる。
-    // これまで人間の規律でしか守られていなかったものを、ここで機械化する。
-    expectRejected(valid({ slug: 'node-24.19-notes' }), 'slug');
-    expectRejected(valid({ slug: 'a.b' }), 'slug');
-    expectRejected(valid({ slug: 'x.' }), 'slug');
-    expectRejected(valid({ slug: '.x' }), 'slug');
+describe('slug は入力ではなく pubDate から導出される', () => {
+  it('入力に slug が無くても通り、pubDate の JST 日付パスになる', () => {
+    // 20:40:01Z は JST では翌日 05:40:01。
+    const post = validatePost(valid({ pubDate: '2026-09-07T20:40:01.277Z' }), NOW_MS);
+    expect(post.slug).toBe('2026/09/08/054001');
+  });
+
+  it('pubDate 省略時は注入したクロックから導出される', () => {
+    // NOW_MS = 2026-08-30T12:34:56Z -> JST 21:34:56 同日。
+    const post = validatePost(valid(), NOW_MS);
+    expect(post.slug).toBe('2026/08/30/213456');
+    expect(post.slug).toBe(dateSlug(new Date(NOW_MS).toISOString()));
   });
 
   it.each([
-    '../etc/passwd',
-    'a/b',
-    'UPPER',
-    'Mixed-Case',
-    '',
-    'a..b',
-    '-leading',
-    'trailing-',
-    'two--hyphens',
-    'ja日本語',
-    'with space',
-    'under_score',
-    'a'.repeat(201),
-  ])('%o は落ちる', (slug) => {
-    expectRejected(valid({ slug }), 'slug');
+    ['JST 0 時ちょうど', '2026-09-07T15:00:00.000Z', '2026/09/08/000000'],
+    ['その 1ms 前', '2026-09-07T14:59:59.999Z', '2026/09/07/235959'],
+    ['年またぎ', '2026-12-31T15:00:00.000Z', '2027/01/01/000000'],
+  ])('境界値: %s', (_label, pubDate, expected) => {
+    expect(validatePost(valid({ pubDate }), NOW_MS).slug).toBe(expected);
   });
 
-  it.each(['a', 'hello', 'hello-world', 'node-24-notes', 'a1-b2-c3'])('%o は通る', (slug) => {
-    expect(validatePost(valid({ slug }), NOW_MS).slug).toBe(slug);
-  });
-
-  it('slug が文字列でないとき落ちる', () => {
-    for (const slug of [undefined, null, 42, {}, ['a']]) {
-      expectRejected(valid({ slug }), 'slug');
+  it('導出された slug は POST_SLUG_PATTERN を満たす', () => {
+    for (const pubDate of [
+      '2026-09-07T20:40:01.277Z',
+      '2026-09-07T15:00:00.000Z',
+      '2026-12-31T15:00:00.000Z',
+      '2020-01-01T00:00:00.000Z',
+    ]) {
+      expect(POST_SLUG_PATTERN.test(validatePost(valid({ pubDate }), NOW_MS).slug)).toBe(true);
     }
   });
 
-  it('SLUG_PATTERN がドットを許さない', () => {
+  it('**クライアントが slug を送ってきたら 400**', () => {
+    // 黙って無視すると、呼び出し側の思い違い（「この slug で公開されるつもりだった」）が
+    // 無言で通り、意図しない URL に記事が出る。**捨てるより拒否する。**
+    expectRejected(valid({ slug: 'hello-world' }), 'slug');
+  });
+
+  it.each([['日付パスそのもの', '2026/09/08/054001'], ['空文字', ''], ['null', null], ['数値', 42]])(
+    'slug が %s でも 400（値によらず「送ってはいけない」）',
+    (_label, slug) => {
+      expectRejected(valid({ slug }), 'slug');
+    },
+  );
+
+  it('`slug: undefined` は「送っていない」として通る（JSON には現れない形）', () => {
+    expect(validatePost(valid({ slug: undefined }), NOW_MS).slug).toBe('2026/08/30/213456');
+  });
+
+  it('pubDate が壊れているときは pubDate で落ち、slug 導出に進まない', () => {
+    // 導出順序の主張。slug を先に作ろうとすると dateSlug が素の Error を投げ、
+    // PostValidationError ではなくなって 400 にならない（500 になる）。
+    expectRejected(valid({ pubDate: 'not a date' }), 'pubDate');
+  });
+
+  it('SLUG_PATTERN は既存の平坦スラッグの形として残っている', () => {
+    // 入力の検査には使わなくなったが、移行前の 8 本が従う形の定数として
+    // site / admin の契約テストが参照している。
+    expect(SLUG_PATTERN.test('hello-world')).toBe(true);
     expect(SLUG_PATTERN.test('a.b')).toBe(false);
-    expect(SLUG_PATTERN.test('ab')).toBe(true);
+    expect(SLUG_PATTERN.test('2026/09/08/054001')).toBe(false);
   });
 });
 
@@ -164,12 +183,13 @@ describe('例外', () => {
   it('メッセージに入力値をそのまま含めない', () => {
     // 誤って本文に貼られた資格情報がエラー応答やログに出る事故を防ぐ。
     const secret = 'ghp_SECRET_IN_TITLE_0123456789';
-    const error = expectRejected(valid({ slug: secret }));
+    const error = expectRejected(valid({ title: ' ', description: secret }), 'title');
     expect(`${error.message}\n${error.stack ?? ''}`).not.toContain(secret);
   });
 
   it('どのフィールドが悪いかは分かる', () => {
     expect(expectRejected(valid({ slug: 'A' })).field).toBe('slug');
     expect(expectRejected(valid({ tags: ['A'] })).field).toBe('tags');
+    expect(expectRejected(valid({ pubDate: 'x' })).field).toBe('pubDate');
   });
 });
