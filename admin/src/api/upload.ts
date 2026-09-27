@@ -8,16 +8,16 @@ import type { ApiClient, ApiOperation } from './client.ts';
 /**
  * 画像のアップロード。**S3 を直接叩く 2 本目にして最後の fetch。**
  *
- * 上限・許可 content type・キー接頭辞は `@blog/api/src/media/limits.ts` の
- * **実物を import している**。あのファイルは依存ゼロで（`presign.ts` が
- * `@aws-sdk/*` と `node:crypto` を読むのに対して）ブラウザ向けバンドルに
- * そのまま入るので、admin 側に定数のコピーは 1 つも無い。
+ * 上限・許可 content type・キー接頭辞は `@blog/api/src/media/limits.ts` の**実物を
+ * import している**。あのファイルは依存ゼロで（`presign.ts` が `@aws-sdk/*` と
+ * `node:crypto` を読むのに対して）ブラウザ向けバンドルにそのまま入るので、admin 側に
+ * 定数のコピーは 1 つも無い。
  *
- * **メディアバケットにはまだ CORS 設定が無い。** presigned PUT は
- * `<bucket>.s3.ap-northeast-1.amazonaws.com` へ**別オリジン**に飛ぶので、
- * preflight が通らず実アップロードは infra の変更が入るまで動かない
- * （計画の hand-off 3）。**このファイルのテストが全部緑でもアップロードは
- * 動かない** — fetch を注入しているので CORS の欠落に影響されないため。
+ * presigned PUT は `<bucket>.s3.ap-northeast-1.amazonaws.com` へ**別オリジン**に飛ぶので
+ * CORS が要る。`infra/lib/media-bucket.ts` が配信オリジンだけを `AllowedOrigins` に置いて
+ * おり、**`localhost` は入っていないので dev サーバからのアップロードは動かない。**
+ * **このファイルのテストは注入した関数を呼ぶだけなので CORS の欠落に影響されない** —
+ * 設定が壊れても全部緑のままで、実アップロードの確認は手動（DEVELOPERS.md）。
  */
 
 /** api/src/router.ts の presign 経路。API_OPERATIONS と同じ形。 */

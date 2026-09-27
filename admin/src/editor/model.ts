@@ -7,15 +7,14 @@ import { RELATIVE_IMAGE_WARNING, relativeImagePaths } from '../preview/images.ts
 /**
  * **規則を書き写さない。** api の実物をそのまま再 export する。
  *
- * `api/src/posts/validate.ts` は依存ゼロの純粋 TypeScript なので、ブラウザ向けの
- * バンドルにそのまま入る（実測: frontmatter.ts と合わせて 6 modules / 2.48 kB /
- * 警告 0）。**これは Lambda が実際に走らせるコードそのもの**なので、
- * 「admin の検証が api とずれる」という状態が原理的に作れない。
+ * `api/src/posts/validate.ts` は依存ゼロの純粋 TypeScript なのでブラウザ向けのバンドルに
+ * そのまま入る（実測: frontmatter.ts と合わせて 6 modules / 2.48 kB / 警告 0）。
+ * **これは Lambda が実際に走らせるコードそのもの**なので、「admin の検証が api とずれる」
+ * という状態が原理的に作れない。
  *
- * site の `postSchema` はブラウザから触らない — `content.config.ts` は
- * `astro/loaders` 経由で node builtin を 22 件引き込み、**ビルドは成功するのに
- * 実行時に投げる proxy** が混ざる（実測）。突き合わせは
- * test/contract/post-schema.test.ts（node 環境）の仕事にしてある。
+ * site の `postSchema` はブラウザから触らない — `content.config.ts` は `astro/loaders` 経由で
+ * node builtin を 22 件引き込み、**ビルドは成功するのに実行時に投げる proxy** が混ざる
+ * （実測）。突き合わせは test/contract/post-schema.test.ts（node 環境）の仕事。
  */
 export { DATE_SLUG_PATTERN, SLUG_PATTERN, TAG_PATTERN, dateSlug, jstWallClockToInstant };
 export type { ValidatedPost };
@@ -66,14 +65,13 @@ export const parseTags = (raw: string): string[] => [
 /**
  * フォームの値を api の `validatePost` が受ける形に組み立てて投げる。
  *
- * **`pubDate` が空文字なら key ごと落とす。** api 側が「未指定なら now」を
- * 実装しているので、空文字を渡すと `Date.parse('')` が NaN になって
- * `PostValidationError('pubDate')` で落ちてしまう。
+ * **`pubDate` が空文字なら key ごと落とす。** api 側が「未指定なら now」を実装しているので、
+ * 空文字を渡すと `Date.parse('')` が NaN になって `PostValidationError('pubDate')` で落ちる。
  *
  * **`pubDate` は JST の瞬間に変換して渡す。** `<input type="datetime-local">` が返すのは
- * オフセットの無い壁時計時刻で、そのまま渡すと解釈が**ホストの TZ 依存**になる
- * （api 側は今それを 400 で拒む）。著者が入力した時刻は JST の壁時計時刻を意味する、
- * という利用者の決定に従って `+09:00` を付ける。
+ * オフセットの無い壁時計時刻で、そのまま渡すと解釈が**ホストの TZ 依存**になる（api 側は
+ * 今それを 400 で拒む）。著者が入力した時刻は JST の壁時計時刻を意味する、という利用者の
+ * 決定に従って `+09:00` を付ける。
  *
  * @param nowMs 注入するクロック。`Date.now()` をここで読まない。
  * @throws {PostValidationError} api の実物の例外。`field` がそのまま UI に出る。
