@@ -141,8 +141,11 @@ describe('削除の確認', () => {
     await loadList(root, fetchSpy.calls);
 
     click(root, '.post-list__delete');
+    // **「削除しなかった」を待つのが要点。** 「空でない」を待つと、削除に
+    // 進んでしまう実装でも `削除中…` が即座に入って待ちが満たされ、
+    // fetch が飛ぶ前に回数を数えてしまう（実際にその形で変異を取りこぼした）。
     await vi.waitFor(() => {
-      expect(listStatus(root)).not.toBe('');
+      expect(listStatus(root)).toBe('削除しなかった');
     });
     // **一覧の 1 本だけ。** DELETE が増えていない。
     expect(fetchSpy.calls).toHaveLength(1);
@@ -159,7 +162,7 @@ describe('削除の確認', () => {
       await loadList(root, fetchSpy.calls);
       click(root, '.post-list__delete');
       await vi.waitFor(() => {
-        expect(listStatus(root)).not.toBe('');
+        expect(listStatus(root)).toBe('削除しなかった');
       });
       expect(fetchSpy.calls).toHaveLength(1);
     } finally {
