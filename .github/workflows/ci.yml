@@ -63,6 +63,7 @@ jobs:
           node-version: 24.19.0
           cache: npm
       - run: npm ci
+      - run: npm run -w site typecheck
       - run: npm run -w site test
 
   infra:

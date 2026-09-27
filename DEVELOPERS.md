@@ -433,6 +433,7 @@ npm run -w site build            # site/dist/ に出力
 npm run -w site preview          # ビルド結果をローカル配信
 npm run -w site test             # unit + build 検証
 npm run -w site test:unit        # unit のみ（速い）
+npm run -w site typecheck        # astro sync + tsc（sync が要る理由は下記）
 
 npm run -w api build             # api/build.ts が api/dist/index.mjs にバンドル
 npm run -w api test              # pretest で build も走る（build 成果物を読むテストがある）
@@ -453,27 +454,40 @@ npx -w infra cdk diff            # deploy の前に必ず（要 AWS 認証情報
 そのまま通り、赤くなったのは「ピン文字列を読んでいるテスト」1 件だけ**だった。
 このとき型検査が通るかどうかは、まだ 1 度も確かめられていない状態である。
 
-**型を見ているのは `tsc --noEmit` の 3 本だけ。**
+**型を見ているのは `tsc --noEmit` の 4 本だけ。**
 
 ```sh
-npm run -w api typecheck && npm run -w infra typecheck && npm run -w admin typecheck
+npm run -w api typecheck && npm run -w infra typecheck \
+  && npm run -w admin typecheck && npm run -w site typecheck
 ```
 
-`.github/workflows/ci.yml` は api / infra / admin の 3 ジョブでこれを
+`.github/workflows/ci.yml` は 4 ジョブすべてでこれを
 **test とは別のステップ**として回している。**テストジョブに畳み込まないこと。**
 畳み込むと「型検査が走らなかったのに緑」という経路ができる。
 
 その 3 本が本当に型を見ていることは、変異で確かめてある（`erasableSyntaxOnly` を破ると
 TS1294、`skipLibCheck` を api から外すと 124 件）。詳細は各 `toolchain.test.ts` のコメント。
 
-**`site/` はこの 3 本に入っていない。** `typescript` を devDependency に持たず
-`typecheck` スクリプトも無いので、`tsc` は一度も走っていない
-（`astro/tsconfigs/strict` を extends しているだけ）。
+### `site` の typecheck だけ `astro sync` が前に付く
 
-**この穴は理論上のものではない。** `npx tsc --noEmit -p site/tsconfig.json` を実際に走らせると
-`site/test/` の複数ファイルでエラーが出る（`possibly undefined` 系）。手を入れる前に
-**まず自分で走らせて現状の件数を数え、自分の変更で増えていないことを確認すること** —
-CI は検査しないので、増やしても誰も気づかない。
+```
+"typecheck": "astro sync && tsc --noEmit"
+```
+
+他 3 つは `tsc --noEmit` だけなので**文字列が揃わない。揃えようとして `astro sync` を
+外さないこと。** `site/.astro/types.d.ts` は `.gitignore` 済みで、**無い状態で `tsc` を
+走らせると `astro:content` が解決できず、テストではなく `site/src/pages/rss.xml.ts` に
+エラーが出る。** CI は `npm ci` しかしないので、**これは CI でだけ落ちる形**になる
+（手元では前のビルドが残した `.astro/` に助けられて気づけない）。
+記事が 0 本でも `astro sync` は成功するので、CI の条件でも通る。
+
+`astro check`（`.astro` ファイル自体の型検査）は**これとは別物**で、まだ入れていない。
+ここで走るのは `.ts` の検査だけ。
+
+なお以前この穴は開いていて、`site/test/` に `possibly undefined` 系のエラーが溜まっていた。
+CI が検査していなかったので誰も気づかなかった（issue #36）。同じことを繰り返さないために、
+**`tsc` を走らせる手順を増やすときは `infra/test/workflow-ci.test.ts` の `TYPECHECKED` にも
+足すこと** — ci.yml からステップが消えても、他のどのテストも赤くならない。
 
 ## oxlint
 
@@ -595,7 +609,7 @@ RSS の `<guid isPermaLink="true">` が記事の恒久 ID であり、ドメイ�
 
 | ファイル | いつ走るか | すること |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | pull request | `npm run -w site test` / `npm run -w infra typecheck` / `npm run -w infra test`。**AWS には一切触らない** |
+| `.github/workflows/ci.yml` | pull request | 4 ワークスペースの `typecheck` と `test`、および `npm run lint`。**AWS には一切触らない** |
 | `.github/workflows/deploy.yml` | `main` への push（`site/**` などに変更があったとき）と `workflow_dispatch` | Astro をビルドし、OIDC でロールを assume して `aws s3 sync --delete`、CloudFront を無効化して完了まで待つ |
 
 ### 一度だけ入れる変数

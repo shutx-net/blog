@@ -7,6 +7,7 @@
     "build": "astro build",
     "preview": "astro preview",
     "sync": "astro sync",
+    "typecheck": "astro sync && tsc --noEmit",
     "test": "POSTS_DIR=./test/fixtures/posts vitest run",
     "test:unit": "POSTS_DIR=./test/fixtures/posts vitest run --project unit",
     "test:watch": "POSTS_DIR=./test/fixtures/posts vitest --project unit"

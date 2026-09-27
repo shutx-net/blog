@@ -34,6 +34,14 @@ describe("getRssString", () => {
   // the build outright while @astrojs/sitemap merely warns and emits nothing at
   // exit code 0. The feed is what makes a missing `site` impossible to miss.
   it("fails when site is missing", async () => {
-    await expect(getRssString({ ...feed, site: undefined })).rejects.toThrow(/site/);
+    // **型を意図的に破っている。** `site` は `string | URL` で `undefined` を受け付けない
+    // ので、型のまま書くとこのケースは書けない。だが検証したいのは**型が止められない
+    // 経路**のほう — astro.config.mjs が `site` を落とせば、実行時に `undefined` が
+    // ここへ来る。キャストは引数 1 個に閉じ込め、feed 本体の型は保つ。
+    const withoutSite = { ...feed, site: undefined } as unknown as Parameters<
+      typeof getRssString
+    >[0];
+
+    await expect(getRssString(withoutSite)).rejects.toThrow(/site/);
   });
 });

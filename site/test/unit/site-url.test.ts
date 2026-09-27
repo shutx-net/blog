@@ -1,3 +1,4 @@
+import type { AstroIntegration } from "astro";
 import { describe, expect, it } from "vitest";
 
 import config from "../../astro.config.mjs";
@@ -65,7 +66,13 @@ describe("astro config", () => {
   // the build layer. Worth pinning here because losing the sitemap integration is
   // silent: it warns and emits nothing, at exit code 0.
   it("registers the sitemap integration", () => {
-    const names = (config.integrations ?? []).flat().map((integration) => integration.name);
+    // 要素型に `false | null | undefined` が混じるのは、astro が条件付きの登録
+    // （`cond && sitemap()`）を許すため。**絞るのが正しい** — `!` で黙らせると、
+    // 登録が `false` に落ちた日にこのテストが例外で死んで原因を名指ししなくなる。
+    const names = (config.integrations ?? [])
+      .flat()
+      .filter((integration): integration is AstroIntegration => typeof integration === "object" && integration !== null)
+      .map((integration) => integration.name);
 
     expect(names).toContain("@astrojs/sitemap");
   });

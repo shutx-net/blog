@@ -178,6 +178,8 @@ describe('ci.yml が回すコマンド', () => {
   it('infra ジョブが typecheck を test より先に実行する', () => {
     // tsc --noEmit は数秒で終わり、型エラーのメッセージは vitest 経由より読みやすい。
     // 失敗を早く安く出すため、順序そのものを固定する。
+    // **下の TYPECHECKED のループと重複している。** infra だけを名指しで見ていた経緯が
+    // 残っているだけなので、消さずに置いてある。
     const text = runTextOf(jobsOf(ci())['infra']);
     const typecheckAt = text.indexOf('npm run -w infra typecheck');
     const testAt = text.indexOf('npm run -w infra test');
@@ -346,15 +348,15 @@ describe('ci.yml の権限とピン', () => {
 });
 
 describe('ci.yml — 型検査が本当に走ること（TypeScript 7 移行で重みが増した）', () => {
-  /** `typecheck` スクリプトを持つワークスペース。site は tsc を走らせない。 */
-  const TYPECHECKED = ['api', 'infra', 'admin'];
+  /** `typecheck` スクリプトを持つワークスペース。**4 つすべてが走らせる。** */
+  const TYPECHECKED = ['api', 'infra', 'admin', 'site'];
 
-  it('**api / infra / admin の 3 ジョブが typecheck を test より先に実行する**', () => {
+  it('**4 ジョブすべてが typecheck を test より先に実行する**', () => {
     // **infra だけは前から見ていたが、api と admin は見ていなかった。**
     // Vitest は esbuild で型を剥がすので、**テストは型が壊れていても緑になる。**
-    // つまり `tsc --noEmit` の 3 本がこのリポジトリで型を見ている唯一の場所であり、
+    // つまり `tsc --noEmit` の 4 本がこのリポジトリで型を見ている唯一の場所であり、
     // ci.yml からステップが 1 つ消えても**他のどのテストも赤くならない。**
-    // 消えたことを検出できるのはここだけなので、3 つとも名指しで固定する。
+    // 消えたことを検出できるのはここだけなので、4 つとも名指しで固定する。
     const jobs = jobsOf(ci());
     for (const name of TYPECHECKED) {
       const text = runTextOf(jobs[name]);
