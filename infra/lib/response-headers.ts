@@ -24,10 +24,12 @@
  * 二重化している。`<script>alert(2)</script>` は `innerHTML` 経由では HTML 仕様上実行されない。
  *
  * 残るのは `<meta http-equiv="refresh">` によるリダイレクト（CSP に該当ディレクティブが無い）、
- * プレビュー枠内の表示なりすまし、CSS による情報抜き出し（`style-src 'unsafe-inline'` を
- * 許す以上ゼロにはできない）。いずれもスクリプト実行を伴わないので、守っている資産である
+ * プレビュー枠内の表示なりすまし、CSS による情報抜き出し（`style-src-attr 'unsafe-inline'` を
+ * 許す以上ゼロにはできない。`<style>` ブロックは `style-src 'self'` が禁じるので、
+ * 経路は `style` 属性だけに狭まった）。いずれもスクリプト実行を伴わないので、守っている資産である
  * トークンには届かない。送出口は `img-src 'self'` と `connect-src` の限定で塞がっており、
- * `'unsafe-inline'` は外部 URL を許可しないので `@import url(https://evil/...)` も弾かれる。
+ * `'unsafe-inline'` は外部 URL を許可しないので `@import url(https://evil/...)` も弾かれる
+ * （そもそも `@import` は属性には書けない）。
  *
  * # `<meta http-equiv>` では配らない
  *
@@ -129,10 +131,26 @@ export const MEDIA_CACHE_CONTROL = 'public, max-age=31536000, immutable';
  * `'wasm-unsafe-eval'` は WebAssembly だけを許し JS の `eval()` は許さないので XSS 防御は
  * 損なわれない。`'unsafe-eval'` と取り違えないこと。
  *
- * **`style-src 'unsafe-inline'` は外せない。** site/dist の HTML は全件がインライン
- * `<style>` を持ち（`inlineStylesheets: "always"`）、shiki はトークンごとに
- * `style="color:#..."` 属性を吐く。厳格な `style-src 'self'` は両方を壊す。インライン
- * スタイルはスクリプトを実行しないので、`script-src` の厳格さと引き換えにはならない。
+ * # `style-src` は `'self'` だけ。`'unsafe-inline'` は `style-src-attr` にだけ残す
+ *
+ * 以前は `style-src 'self' 'unsafe-inline'` だった。理由は 2 つあり、片方ずつ解いた。
+ *
+ *   1. site/dist の HTML が全件インライン `<style>` を持っていた
+ *      （`inlineStylesheets: "always"`）。設定を外して外部
+ *      `/_astro/Layout.*.css` にしたので、同一オリジンの `'self'` で足りる。
+ *   2. shiki はトークンごとに `style="color:#..."` **属性**を吐く（実測: コードフェンス
+ *      2 本の記事 1 件で `style=` 属性 29 個、`<style>` ブロック 0 個）。
+ *
+ * **CSP3 では `style-src-attr` を明示すると `style` 属性はそちらに支配され、`style-src` に
+ * フォールバックしない。** だから 2 は `style-src-attr 'unsafe-inline'` で許すしかない。
+ * 逆に `style-src-attr` を**空や `'none'` で**足すと属性が拒否され、コードフェンスの色が飛ぶ。
+ *
+ * **得られた強化は限定的である。** できるようになったのは `<style>` ブロックの注入を禁じる
+ * ことだけで、`style` 属性は許したままだ。インラインスタイルはスクリプトを実行しないので、
+ * `script-src` の厳格さと引き換えにはならない。
+ *
+ * **本番の記事にコードフェンスが無い間、2 の効き目は検証できない。** `style=` 属性が 0 個
+ * なので、`style-src-attr` を壊しても既存ページは無症状で通る。色が飛ぶのは記事を書いた日だ。
  */
 export const buildCsp = (origins: CspOrigins): string =>
   [
@@ -147,7 +165,10 @@ export const buildCsp = (origins: CspOrigins): string =>
     // admin は blob: も data: も使っていない。
     "img-src 'self'",
     "font-src 'self'",
-    "style-src 'self' 'unsafe-inline'",
+    "style-src 'self'",
+    // shiki の `style="color:#..."` 属性のため。`'none'` にすると色が飛ぶ。
+    // `script-src-attr 'none'` との非対称は意図的（上の JSDoc）。
+    "style-src-attr 'unsafe-inline'",
     "script-src 'self' 'wasm-unsafe-eval'",
     "script-src-attr 'none'",
     `connect-src 'self' ${origins.cognitoOrigin} ${origins.mediaOrigin}`,

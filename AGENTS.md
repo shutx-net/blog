@@ -93,6 +93,9 @@ npx -w infra cdk deploy <Stack>
   `/about/index.html` に解決されない（`DefaultRootObject` が効くのはルートだけ）
 - CDK CLI は nix ではなく npm の devDependency。`aws-cdk` と `aws-cdk-lib` のバージョンをずらさないため、
   必ず `npx -w infra cdk` で呼ぶ
+- **CSP の `style-src-attr` から `'unsafe-inline'` を外さない。** shiki はコードフェンスを
+  `style="color:#..."` **属性**で色付けするので、外すと色が飛ぶ。`script-src-attr 'none'` との
+  非対称は意図的。**本番の記事にコードフェンスが無い間は無症状で通る**ので、テストだけが見張り
 
 ### Cache-Control
 

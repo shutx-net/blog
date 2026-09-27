@@ -21,24 +21,22 @@ export default defineConfig({
   // decide. The defaults emit sitemap-index.xml plus sitemap-0.xml and drop the
   // status pages (404, 500).
   integrations: [sitemap()],
-  // The default is "auto", which inlines a stylesheet only while it stays under
-  // vite's 4KB assetsInlineLimit. global.css crossed that line when the site was
-  // actually designed, and silently became an external <link> -- which took the
-  // last inline <style> out of dist/ and tripped the assertion in
-  // admin/test/build/output.test.ts that exists to notice exactly that.
+  // No `build.inlineStylesheets` on purpose: the default "auto" inlines a
+  // stylesheet only while it stays under vite's 4KB assetsInlineLimit, and
+  // global.css is 10600 bytes, so it always becomes an external
+  // /_astro/Layout.*.css (measured: inline <style> 0/5, one <link>).
   //
-  // Pinned rather than left to drift back and forth across a byte threshold. It
-  // also stands on its own for a site this size: ~1.5KB gzipped per page, no
-  // render-blocking request, and the HTML is re-fetched on every deploy anyway
-  // so there is little cross-page caching to lose.
+  // It was pinned to "always" for one release, when designing the post page
+  // pushed global.css past the threshold and the stylesheet silently went
+  // external -- taking the last inline <style> out of dist/ and tripping the
+  // assertion in admin/test/build/output.test.ts. Pinning kept the CSP out of a
+  // restyle. Dropping 'unsafe-inline' from style-src is the reason the pin is
+  // gone now, and both moved in the same commit.
   //
-  // NOTE: with no inline <style> the CSP could drop 'unsafe-inline' from
-  // style-src. That is a real tightening worth doing, but it has to change
-  // infra/lib/response-headers.ts and the assertion above in the same commit --
-  // not be a side effect of a restyle.
-  build: {
-    inlineStylesheets: "always",
-  },
+  // Same-origin CSS is covered by style-src 'self', so nothing here may put a
+  // <style> block back: the CSP would block it and the page would lose its
+  // styling. That direction is now watched by output.test.ts, which requires
+  // zero inline <style> rather than at least one.
   markdown: {
     processor: unified(),
   },

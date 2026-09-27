@@ -99,8 +99,14 @@ describe('**CSP が admin の通信先を全部許可している**', () => {
     expect(directive('script-src')).not.toContain("'unsafe-inline'");
   });
 
-  it("**style-src に 'unsafe-inline' がある**（Astro のインライン style と shiki の style 属性）", () => {
-    expect(directive('style-src')).toContain("'unsafe-inline'");
+  it("**style-src に 'unsafe-inline' は無い**（<style> ブロックの注入を禁じる）", () => {
+    expect(directive('style-src')).not.toContain("'unsafe-inline'");
+  });
+
+  it("**style-src-attr は 'unsafe-inline'**（shiki は style 属性で色付けする）", () => {
+    // `'none'` や未設定にすると CSP3 のフォールバック規則で属性が拒否され、
+    // **コードフェンスの色が飛ぶ。** `script-src-attr 'none'` との非対称は意図的。
+    expect(directive('style-src-attr')).toEqual(["'unsafe-inline'"]);
   });
 
   it("img-src が 'self' を含む（投稿画像は /media/* 経由の同一オリジン）", () => {
@@ -184,6 +190,7 @@ describe('**ディレクティブ集合が想定どおり**', () => {
         'script-src',
         'script-src-attr',
         'style-src',
+        'style-src-attr',
       ].sort(),
     );
   });

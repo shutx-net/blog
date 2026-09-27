@@ -227,11 +227,15 @@ describe('**CSP がサイトを壊さないことの静的確認（site/dist）*
     expect(offenders.map((path) => path.replace(SITE_DIST, ''))).toEqual([]);
   });
 
-  it('**インライン <style> は実在する**（style-src の unsafe-inline が要る根拠）', () => {
-    // ここが 0 件になったら 'unsafe-inline' を外せる合図。
-    // **外せる根拠が消えたことに気づけるようにしておく。**
-    const withStyle = htmlFiles().filter((path) => /<style[^>]*>/i.test(readFileSync(path, 'utf8')));
-    expect(withStyle.length).toBeGreaterThan(0);
+  it('**インライン <style> が 0 件**（style-src self がそれを禁じている）', () => {
+    // 以前は逆向きだった（「実在する」= 'unsafe-inline' が要る根拠）。その合図が
+    // 0 件になったので `style-src` から 'unsafe-inline' を外した。**いまは逆向きの見張り。**
+    //
+    // 1 件でも現れたら `style-src 'self'` がそれをブロックし、**そのページは見た目を失う。**
+    // `build.inlineStylesheets: "always"` を戻す / `<style>` を直書きする、が典型的な経路。
+    // CSP は cdk deploy まで効かないので、本番で気づくのは配信後になる。
+    const offenders = htmlFiles().filter((path) => /<style[^>]*>/i.test(readFileSync(path, 'utf8')));
+    expect(offenders.map((path) => path.replace(SITE_DIST, ''))).toEqual([]);
   });
 
   it('**外部オリジンのスクリプト参照が無い**（script-src self で足りる）', () => {
