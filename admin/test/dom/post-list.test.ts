@@ -193,4 +193,33 @@ describe('一覧の読み込み', () => {
       expect(root.querySelector<HTMLButtonElement>('#post-list-reload')?.disabled).toBe(false),
     );
   });
+
+  it('**ボタンの disabled に頼らずに重複を止める**（Phase 4 は直接呼ぶ）', async () => {
+    const root = mount();
+    const calls: string[] = [];
+    let resolveFirst: ((response: Response) => void) | undefined;
+    const impl: typeof fetch = async (input) => {
+      calls.push(String(input));
+      return new Promise<Response>((resolve) => {
+        resolveFirst = resolve;
+      });
+    };
+    start(root, impl);
+
+    const button = root.querySelector<HTMLButtonElement>('#post-list-reload');
+    button?.click();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+
+    // **`.click()` は disabled な要素では発火しない**ので、それだけでは
+    // 「二重呼び出しを止めている」ことの証明にならない。`dispatchEvent` は
+    // disabled でもリスナまで届くので、**中の見張り**を直接試せる。
+    // Phase 4 が編集後に一覧を呼ぶのは、まさにこの「ボタンを経由しない」経路。
+    expect(button?.disabled).toBe(true);
+    button?.dispatchEvent(new Event('click', { bubbles: true }));
+    button?.dispatchEvent(new Event('click', { bubbles: true }));
+    await Promise.resolve();
+
+    expect(calls).toEqual(['/api/posts']);
+    resolveFirst?.(json(200, { posts: [], count: 0 })());
+  });
 });
