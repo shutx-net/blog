@@ -36,7 +36,40 @@ const { title, description, noindex = false } = Astro.props;
          and dist/ is compared byte for byte when the deploy pipeline changes. */
     }
     <footer class="site-footer">
-      <a href="/rss.xml">RSS</a>
+      {
+        /* The fixed pages hang off the footer because nothing else in the site
+           mentions them. They are not entries in the posts collection, so the
+           listing, the tag pages and the feed have no way to reach them, and a
+           reader without a link here has only the address bar. sitemap-0.xml does
+           list them, but a sitemap is discovery for crawlers, not a way in for
+           people. The header was the alternative and carries only the site name:
+           three links up there would make the first thing on every page a menu
+           instead of the content.
+
+           Labelled because this is never the only <nav> on the page -- the
+           listing has the pager, a post and a tag page have their back links --
+           and an unlabelled landmark is offered as a bare "navigation" in the
+           list a screen reader builds. The pager set the precedent with
+           aria-label="ページ送り".
+
+           The trailing slashes are load-bearing. build.format is "directory", so
+           these pages are about/index.html and privacy/index.html, and both the
+           canonical link and the sitemap's <loc> name /about/ -- writing /about
+           here would put a second spelling of one page into the site's own
+           markup. It would still resolve: infra/functions/rewrite-uri.js appends
+           /index.html to any URI whose last segment has no dot. Resolving is not
+           the same as being the same URL.
+
+           Three literal hrefs, not a list of fixed pages mapped from src/lib: the
+           test that pins them has to derive its expectation without importing
+           whatever this file reads, or renaming a page moves both sides at once
+           and stays green. */
+      }
+      <nav class="site-footer__nav" aria-label="サイト情報">
+        <a href="/about/">プロフィール</a>
+        <a href="/privacy/">プライバシーポリシー</a>
+        <a href="/rss.xml">RSS</a>
+      </nav>
     </footer>
   </body>
 </html>

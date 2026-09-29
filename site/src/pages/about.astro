@@ -1,0 +1,68 @@
+---
+import Layout from "../layouts/Layout.astro";
+
+// A fixed page, deliberately NOT an entry in the posts collection.
+//
+// Two of this system's irreversible outputs are the reason. rss.xml.ts hands
+// getCollection("posts") straight to subscribers, and each item's
+// <guid isPermaLink="true"> becomes a permanent identity on their side -- a
+// profile would be delivered as news, and a delivered feed cannot be recalled.
+// And a post's slug is only ever the date path derived from its pubDate:
+// deploy.yml asserts that shape (^[0-9]{4}/[0-9]{2}/[0-9]{2}/[0-9]{6}$) over
+// the collection's own relative paths, so an entry named `about` builds green
+// and then fails the deploy.
+//
+// Living in src/pages/ costs nothing on that second point either: the deploy's
+// slug comparison is a set equality built from site/dist/posts alone, so a page
+// emitted at the root of dist/ is outside what it looks at. Hence no
+// frontmatter, no schema and no pubDate -- the file is the page, and its name is
+// the route.
+---
+
+{
+  /* <article> rather than bare children of <main>, and the wrapper is doing real
+     work: every prose rule in global.css -- the ruled h2, the paragraph rhythm,
+     lists, blockquotes, tables -- is selected from `article`. What exists outside
+     it is `main > h1` and `main > p`, which is a heading and a loose paragraph
+     and nothing else, because the listing, the 404 and the tag index never
+     needed more. Drop the wrapper and the sections below render unstyled.
+
+     Free to use here even though the post page's <article> is under a byte
+     comparison: admin/test/parity/published-html.test.ts reads only
+     site/dist/posts/<slug>/index.html, and it compares what it finds against
+     renderPreview(post.body) -- a page with no Markdown body cannot be its
+     subject. The constraint that does still hold is the other direction:
+     nothing may be added inside the post page's <article>.
+
+     No scoped <style> block here, on this page or any other. The CSP is
+     `style-src 'self'`, while build.inlineStylesheets defaults to "auto" and
+     inlines anything under vite's 4KB limit -- so a handful of page-scoped rules
+     would ship as an inline <style>, be blocked in production, and leave this one
+     page unstyled with nothing failing anywhere else. Rules go in global.css, and
+     admin/test/build/output.test.ts scans all of site/dist for the zero. */
+}
+<Layout title="プロフィール" description="shutx-net と、このブログについて。">
+  <article>
+    <h1>プロフィール</h1>
+    {
+      /* Stated in the copy rather than in a comment: deploy.yml runs on every
+         push to main that touches the site, so this text is live the moment it
+         merges. The reader has to be able to tell that it is unfinished. */
+    }
+    <p><strong>このページは仮置きです。</strong>内容は後で書き直します。</p>
+    <h2>このサイトについて</h2>
+    <p>shutx-net が個人で書いているブログです。（何のために書いているのかをここに書く。）</p>
+    <h2>書いていること</h2>
+    <p>（扱っている話題をここに書く。）</p>
+    <h2>連絡先</h2>
+    <p>（連絡手段を載せるかどうか、載せるなら何を載せるのかをここで決める。）</p>
+  </article>
+  {
+    /* Same class the post page and the tag pages use, so the three read as one
+       piece of furniture and the back arrow comes from global.css's
+       `:first-child::before` -- nothing to add to the stylesheet for this page. */
+  }
+  <nav class="post__back">
+    <a href="/">記事一覧へ戻る</a>
+  </nav>
+</Layout>

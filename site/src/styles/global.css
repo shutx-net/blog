@@ -1,8 +1,16 @@
 /*
  * The whole design system. One file, no build step, no dependencies -- the CSP
- * this site is served under is `style-src 'self' 'unsafe-inline'` and
- * `font-src 'self'`, so there is nothing to fetch and nowhere to fetch it from.
- * Web fonts are not an option; the stacks below are what the reader already has.
+ * this site is served under is `style-src 'self'` and `font-src 'self'`, so there
+ * is nothing to fetch and nowhere to fetch it from. Web fonts are not an option;
+ * the stacks below are what the reader already has.
+ *
+ * `style-src 'self'` is also why this file is the only place rules may go. An
+ * inline <style> block is refused outright, and build.inlineStylesheets defaults
+ * to "auto", so a handful of page-scoped rules would ship inline, be blocked, and
+ * leave that one page unstyled with nothing else going red. The one
+ * 'unsafe-inline' the policy still grants is on `style-src-attr`, and it is there
+ * for the `style="color:#..."` attributes shiki writes into code fences -- see
+ * infra/lib/response-headers.ts, which owns both halves of that split.
  *
  * Still not covered by tests, on purpose. Any assertion specific enough to pin a
  * colour or a margin breaks on the first honest restyle. The HTML structure the
@@ -171,6 +179,37 @@ main {
   border-top: 1px solid var(--border);
   font-size: 0.875rem;
   color: var(--muted);
+}
+
+/*
+ * A row of links that wraps. `プライバシーポリシー` is ten full-width characters
+ * on its own, so the three labels and their gaps do not fit on one line on a
+ * narrow phone; without the wrap they would widen the page instead of stacking.
+ *
+ * Not `.post__back`, although that is the same flex row with the same 1.5rem gap:
+ * it draws its own border-top to cut itself off from the content above, and
+ * `.site-footer` already has one, so sharing the class would rule the footer
+ * twice. Two declarations of the same shape is the cheaper duplication here.
+ *
+ * Dropping the underline is the call `.post__back a` and `.pager a` already made
+ * -- three underlined labels side by side read as a band of rules rather than as
+ * text -- and it is safe here in a way it would not be inside prose: every word
+ * in the footer is a link, so there is no surrounding text that colour alone
+ * would have to distinguish them from. Hover puts the underline back. This does
+ * restyle the RSS link, which until now was an ordinary underlined one.
+ */
+.site-footer__nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+}
+
+.site-footer__nav a {
+  text-decoration: none;
+}
+
+.site-footer__nav a:hover {
+  text-decoration: underline;
 }
 
 /* ------------------------------------------------------- post: furniture -- */

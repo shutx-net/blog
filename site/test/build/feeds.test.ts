@@ -34,6 +34,22 @@ describe("rss.xml", () => {
     },
   );
 
+  // The counterpart of the assertion above, and the half that cannot be undone.
+  // A feed is this system's one irreversible output: every item carries
+  // <guid isPermaLink="true">, subscribers store that guid forever, and a reader
+  // who has already been shown an item cannot be un-shown it. A fixed page slipping
+  // in would be delivered as news to every subscriber, permanently.
+  //
+  // Satisfied for free today -- rss.xml.ts iterates getCollection("posts") and
+  // the fixed pages are files in src/pages/, not entries in that collection. That
+  // is exactly why it is written down: on the day the feed's source widens (an
+  // "everything" feed, a scan of dist/, a second collection), **this is the only
+  // thing in the repository that stops it.** Matched on the absolute URL rather
+  // than the path so it is the <link>/<guid> form that is pinned.
+  it.each(["about/", "privacy/"])("does not carry the fixed page %s", (path) => {
+    expect(readDist("rss.xml")).not.toContain(`${site}${path}`);
+  });
+
   // getCollection() hands entries back in filename order, so leaving out
   // byPubDateDesc yields an oldest-first feed -- and nothing else would notice.
   it("orders items newest first", () => {
@@ -67,8 +83,19 @@ describe("sitemap", () => {
   });
 
   // Guards against the file existing but being empty, which the assertions above
-  // cannot distinguish. One post, one tag page, one paginated page.
-  it.each(["posts/2026/08/02/090000/", "tags/astro/", "2/"])("lists %s", (path) => {
+  // cannot distinguish. One post, one tag page, one paginated page -- and the two
+  // fixed pages, which belong here: a profile and a privacy policy are meant to be
+  // indexed, and the footer is the only link to either anywhere on the site, so
+  // the sitemap is what tells a crawler they exist at all. Being listed here is
+  // the intended behaviour, not a leak -- contrast the rss.xml assertion above,
+  // where the same two paths must NOT appear.
+  it.each([
+    "posts/2026/08/02/090000/",
+    "tags/astro/",
+    "2/",
+    "about/",
+    "privacy/",
+  ])("lists %s", (path) => {
     expect(readDist("sitemap-0.xml")).toContain(`<loc>${site}${path}</loc>`);
   });
 
