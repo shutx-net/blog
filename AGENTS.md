@@ -36,6 +36,14 @@ npx -w infra cdk deploy <Stack>
   下書きを public に晒さないため、かつコード側の履歴を記事コミットで動かさないために分離してある
 - **このリポジトリに記事を置かない。** `site/src/content/posts/` は `.gitignore` 済み。
   `.gitkeep` も置かないこと。`site/test/fixtures/posts/*.md` はテスト用フィクスチャで本番には出ない
+- **固定ページ（プロフィール・プライバシーポリシー）は例外で、このリポジトリの
+  `site/src/content/pages/*.md` に置く**（`pages` コレクション）。公開前提で更新も稀なので、
+  記事を分けた 2 つの理由（下書きの秘匿・コード履歴の保護）が当てはまらず、
+  プライバシーポリシーは改定履歴が公開されているほうがよい。**`posts` には入れないこと**
+  （RSS に配信され、スラッグ照合のガードと記事 API の一覧が落ちる）。
+  **ルートは `site/src/pages/*.astro` が持ち、`getEntry` が空なら throw する。**
+  コレクションからルートを生成すると、md が消えたとき空のままビルドが緑になり、
+  `s3 sync --delete` が本番のページを消す
 - **content repo を `site/src/content/posts` へ直接 checkout しない。**
   `actions/checkout` はリポジトリの**ルート**を `path` に置くので、`README.md` が
   コレクションに混ざり、記事が 1 階層深くなって `entry.id` が `posts/2026/09/27/142621` になる。
