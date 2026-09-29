@@ -100,9 +100,18 @@ describe("shared layout", () => {
   // Only BaseHead emits a canonical link, so its presence is the evidence that a
   // page actually went through the layout rather than carrying its own <html>.
   // The value is asserted too: a canonical that is not absolute is useless.
+  //
+  // The fixed pages are rows in this table rather than a describe of their own:
+  // what they are being asked to prove is this site-wide invariant, and there is
+  // nothing about a profile or a policy that changes it. Note the trailing slash --
+  // build.format is "directory", so about.astro is emitted as about/index.html and
+  // its canonical URL is /about/; a canonical of /about would put a second
+  // spelling of one page into the site's own markup.
   it.each([
     ["index.html", ""],
     ["posts/2026/08/01/090000/index.html", "posts/2026/08/01/090000/"],
+    ["about/index.html", "about/"],
+    ["privacy/index.html", "privacy/"],
   ])("gives %s an absolute canonical link", (file, path) => {
     expect(readDist(file)).toContain(`<link rel="canonical" href="${site}${path}">`);
   });
@@ -116,6 +125,8 @@ describe("social card metadata", () => {
     ["index.html", ""],
     ["posts/2026/08/01/090000/index.html", "posts/2026/08/01/090000/"],
     ["tags/astro/index.html", "tags/astro/"],
+    ["about/index.html", "about/"],
+    ["privacy/index.html", "privacy/"],
   ])("gives %s an og:url equal to its canonical", (file, path) => {
     const html = readDist(file);
 
@@ -157,6 +168,16 @@ describe("social card metadata", () => {
     );
     expect(readDist("index.html")).toContain('<meta property="og:type" content="website">');
     expect(readDist("tags/astro/index.html")).toContain(
+      '<meta property="og:type" content="website">',
+    );
+    // The fixed pages are where "article" is most tempting and most wrong: they
+    // read as documents, and their body really is wrapped in an <article>. But the
+    // article:* properties a consumer then looks for are a published time and an
+    // author, and a page with no frontmatter has neither to give. BaseHead decides
+    // this from the pathname prefix rather than from a prop, so this row is also
+    // what pins that a page added straight to src/pages/ still lands on the
+    // default -- no page passes og:type, so nothing else would say.
+    expect(readDist("about/index.html")).toContain(
       '<meta property="og:type" content="website">',
     );
   });

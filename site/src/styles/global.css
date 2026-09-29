@@ -181,6 +181,37 @@ main {
   color: var(--muted);
 }
 
+/*
+ * A row of links that wraps. `プライバシーポリシー` is ten full-width characters
+ * on its own, so the three labels and their gaps do not fit on one line on a
+ * narrow phone; without the wrap they would widen the page instead of stacking.
+ *
+ * Not `.post__back`, although that is the same flex row with the same 1.5rem gap:
+ * it draws its own border-top to cut itself off from the content above, and
+ * `.site-footer` already has one, so sharing the class would rule the footer
+ * twice. Two declarations of the same shape is the cheaper duplication here.
+ *
+ * Dropping the underline is the call `.post__back a` and `.pager a` already made
+ * -- three underlined labels side by side read as a band of rules rather than as
+ * text -- and it is safe here in a way it would not be inside prose: every word
+ * in the footer is a link, so there is no surrounding text that colour alone
+ * would have to distinguish them from. Hover puts the underline back. This does
+ * restyle the RSS link, which until now was an ordinary underlined one.
+ */
+.site-footer__nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+}
+
+.site-footer__nav a {
+  text-decoration: none;
+}
+
+.site-footer__nav a:hover {
+  text-decoration: underline;
+}
+
 /* ------------------------------------------------------- post: furniture -- */
 
 /*
