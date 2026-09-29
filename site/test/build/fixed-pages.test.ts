@@ -57,6 +57,14 @@ describe("fixed pages", () => {
     expect(readDist(`${path}index.html`)).toContain("<article>");
   });
 
+  // The body comes from src/content/pages/*.md, so this is what notices the page
+  // shipping as a heading alone: a route that stopped rendering <Content /> still
+  // emits its index.html, its <h1> and its <article>. Structure again, not prose --
+  // any real text will have at least one section.
+  it.each(FIXED_PAGES)("renders the Markdown body of $path", ({ path }) => {
+    expect(readDist(`${path}index.html`)).toMatch(/<h2[ >]/);
+  });
+
   // These pages are reached from the footer, the smallest link on the page, so a
   // reader who follows one lands somewhere with no obvious way on. The class is
   // pinned and not just the href: the back arrow is drawn by global.css's

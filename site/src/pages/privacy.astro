@@ -1,4 +1,6 @@
 ---
+import { getEntry, render } from "astro:content";
+
 import Layout from "../layouts/Layout.astro";
 
 // The second fixed page, and a page rather than a post for the structural
@@ -7,15 +9,21 @@ import Layout from "../layouts/Layout.astro";
 // a `YYYY/MM/DD/HHmmss` slug for anything in the posts collection. Not repeated
 // here -- only the part that is specific to this file is.
 //
-// That part is: the text below is this site's privacy policy as far as a reader
-// or a regulator is concerned, and deploy.yml runs on every push to main whose
-// paths touch site/**, so merging it publishes it. A placeholder therefore is
+// The text itself is src/content/pages/privacy.md; this file owns the route and
+// throws when the entry is missing, for the reason about.astro gives.
+//
+// What is specific to this page is: that text is this site's privacy policy as
+// far as a reader or a regulator is concerned, and deploy.yml runs on every push
+// to main whose paths touch site/**, so merging it publishes it. A placeholder therefore is
 // not the harmless thing it is on the profile page -- naming an analytics
 // product, a cookie or a disclosure to a third party that this site does not
 // actually do would be a false statement standing on a live page. So the
 // sections below name what has to be decided and assert nothing about what
 // currently happens, and the first paragraph says outright that the text is
 // provisional. Replace them with the real policy before pointing anyone here.
+const page = await getEntry("pages", "privacy");
+if (!page) throw new Error("src/content/pages/privacy.md is missing");
+const { Content } = await render(page);
 ---
 
 {
@@ -24,23 +32,10 @@ import Layout from "../layouts/Layout.astro";
      free to use it while the post page's <article> is not, and why no page here
      may carry a scoped <style> block. */
 }
-<Layout title="プライバシーポリシー" description="このサイトのプライバシーポリシー。">
+<Layout title={page.data.title} description={page.data.description}>
   <article>
-    <h1>プライバシーポリシー</h1>
-    {
-      /* Kept on one line: astro emits the template's whitespace verbatim, so
-         breaking it would put a newline and the indentation between the two
-         sentences in the shipped HTML. */
-    }
-    <p><strong>この文面は仮のものです。</strong>公開前に、実際の運用に合わせて書き換えてください。</p>
-    <h2>アクセス解析</h2>
-    <p>（アクセス解析を利用するかどうか、利用するなら何を収集するのかをここに書く。）</p>
-    <h2>Cookie</h2>
-    <p>（Cookie を使うかどうか、使うなら何のために使うのかをここに書く。）</p>
-    <h2>外部サイトへのリンク</h2>
-    <p>（記事から外部サイトへリンクすることがある旨と、リンク先での扱いをここに書く。）</p>
-    <h2>本ポリシーの変更</h2>
-    <p>（このポリシーを変更したときに、それをどう知らせるのかをここに書く。）</p>
+    <h1>{page.data.title}</h1>
+    <Content />
   </article>
   <nav class="post__back">
     <a href="/">記事一覧へ戻る</a>

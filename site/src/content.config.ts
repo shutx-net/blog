@@ -40,4 +40,30 @@ const posts = defineCollection({
   schema: postSchema,
 });
 
-export const collections = { posts };
+// The fixed pages (profile, privacy policy). Deliberately a collection of its own
+// and never a corner of `posts`: everything built from `posts` -- rss.xml, the
+// date-path slug guard in deploy.yml, the posting API's tree walk -- assumes each
+// entry is an article with a pubDate, and a profile delivered through the feed
+// cannot be recalled.
+//
+// Unlike the posts, these files are tracked in THIS repository. They are public
+// the moment they are published and change rarely, so neither reason the posts
+// live in private blog-content (drafts, and keeping article commits out of the
+// code history) applies -- and a privacy policy whose revisions are public is the
+// better policy. That is also why the base is a literal and not an env-resolved
+// path: there is no deploy-time checkout for it and nothing to swap in tests.
+//
+// No `**`: the pages are flat, and each route in src/pages/ names its entry by id.
+// A missing file is NOT caught here (an empty collection still builds green); it
+// is caught by the page itself, which throws when getEntry comes back empty.
+export const pageSchema = z.object({
+  title: z.string().min(1),
+  description: z.string().min(1),
+});
+
+const pages = defineCollection({
+  loader: glob({ pattern: "*.md", base: "./src/content/pages" }),
+  schema: pageSchema,
+});
+
+export const collections = { posts, pages };

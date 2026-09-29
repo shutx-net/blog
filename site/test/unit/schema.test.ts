@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { parseFrontmatter } from "@astrojs/markdown-remark";
 import { describe, expect, it } from "vitest";
 
-import { collections, postSchema } from "../../src/content.config.ts";
+import { collections, pageSchema, postSchema } from "../../src/content.config.ts";
 import { postsDirUrl } from "../../src/posts-dir.ts";
 
 // src/content.config.ts imports defineCollection/glob/z from astro's real module
@@ -39,12 +39,18 @@ const postFiles = readdirSync(postsDir, { recursive: true, encoding: "utf8" })
   .sort();
 
 describe("content collections", () => {
-  it("defines exactly one collection, posts", () => {
-    expect(Object.keys(collections)).toEqual(["posts"]);
+  // Two and only two. A third collection is a new kind of content, and the posts
+  // are the only one that feeds rss.xml and the deploy's slug guards.
+  it("defines exactly the posts and pages collections", () => {
+    expect(Object.keys(collections)).toEqual(["posts", "pages"]);
   });
 
   it("wires postSchema into the posts collection", () => {
     expect(collections.posts.schema).toBe(postSchema);
+  });
+
+  it("wires pageSchema into the pages collection", () => {
+    expect(collections.pages.schema).toBe(pageSchema);
   });
 });
 
@@ -117,6 +123,28 @@ describe("post fixtures", () => {
     if (!result.success) {
       // Name the file and the offending fields, so a bad post is diagnosable
       // straight from the failure message rather than by bisecting the directory.
+      throw new Error(`${name}: ${JSON.stringify(result.error.issues, null, 2)}`);
+    }
+  });
+});
+
+// The fixed pages are tracked in this repository, so unlike the posts there is no
+// corpus to switch: this reads the real files. Listed rather than globbed so a
+// deleted page fails here by name -- the routes in src/pages/ throw on a missing
+// entry too, but only once the whole site is being built.
+const pagesDir = fileURLToPath(new URL("../../src/content/pages/", import.meta.url));
+const FIXED_PAGE_FILES = ["about.md", "privacy.md"];
+
+describe("fixed page files", () => {
+  it("are exactly the pages the site routes to", () => {
+    expect(readdirSync(pagesDir).sort()).toEqual(FIXED_PAGE_FILES);
+  });
+
+  it.each(FIXED_PAGE_FILES)("%s has frontmatter satisfying pageSchema", (name) => {
+    const { frontmatter } = parseFrontmatter(readFileSync(join(pagesDir, name), "utf8"));
+
+    const result = pageSchema.safeParse(frontmatter);
+    if (!result.success) {
       throw new Error(`${name}: ${JSON.stringify(result.error.issues, null, 2)}`);
     }
   });
