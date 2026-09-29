@@ -22,9 +22,11 @@ export default defineConfig({
   // status pages (404, 500).
   integrations: [sitemap()],
   // No `build.inlineStylesheets` on purpose: the default "auto" inlines a
-  // stylesheet only while it stays under vite's 4KB assetsInlineLimit, and
-  // global.css is 10600 bytes, so it always becomes an external
-  // /_astro/Layout.*.css (measured: inline <style> 0/5, one <link>).
+  // stylesheet only while it stays under vite's 4KB assetsInlineLimit, and the
+  // /_astro/Layout.*.css this build emits is 6.0KB, so it always stays external
+  // (measured: inline <style> 0/13, one <link>). The limit is compared against
+  // the built file, not against global.css -- which is 15KB of source, most of
+  // the difference being comments that minification drops.
   //
   // It was pinned to "always" for one release, when designing the post page
   // pushed global.css past the threshold and the stylesheet silently went

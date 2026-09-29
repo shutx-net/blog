@@ -1,8 +1,16 @@
 /*
  * The whole design system. One file, no build step, no dependencies -- the CSP
- * this site is served under is `style-src 'self' 'unsafe-inline'` and
- * `font-src 'self'`, so there is nothing to fetch and nowhere to fetch it from.
- * Web fonts are not an option; the stacks below are what the reader already has.
+ * this site is served under is `style-src 'self'` and `font-src 'self'`, so there
+ * is nothing to fetch and nowhere to fetch it from. Web fonts are not an option;
+ * the stacks below are what the reader already has.
+ *
+ * `style-src 'self'` is also why this file is the only place rules may go. An
+ * inline <style> block is refused outright, and build.inlineStylesheets defaults
+ * to "auto", so a handful of page-scoped rules would ship inline, be blocked, and
+ * leave that one page unstyled with nothing else going red. The one
+ * 'unsafe-inline' the policy still grants is on `style-src-attr`, and it is there
+ * for the `style="color:#..."` attributes shiki writes into code fences -- see
+ * infra/lib/response-headers.ts, which owns both halves of that split.
  *
  * Still not covered by tests, on purpose. Any assertion specific enough to pin a
  * colour or a margin breaks on the first honest restyle. The HTML structure the
