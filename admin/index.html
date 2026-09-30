@@ -73,9 +73,25 @@
           <label for="draft">draft（下書きとして公開しない）</label>
         </div>
 
+        <!--
+          本文は GitHub の Markdown エディタと同じく「Code」/「Preview」のタブで切り替える。
+          **タブは type="button"。** <form> の中の <button> は既定が submit なので、
+          書き忘れるとタブを押しただけで公開される。
+          プレビューは入力のたびに描き直しているので、タブを開いた時点で最新（tabs.ts）。
+        -->
         <div class="field">
           <label for="body">本文</label>
-          <textarea id="body" name="body" rows="24" spellcheck="false"></textarea>
+          <div id="body-tabs" class="tabs" role="tablist" aria-label="本文の表示">
+            <button id="tab-code" type="button" role="tab" aria-selected="true" aria-controls="panel-code">Code</button>
+            <button id="tab-preview" type="button" role="tab" aria-selected="false" aria-controls="panel-preview" tabindex="-1">Preview</button>
+          </div>
+          <div id="panel-code" class="tab-panel" role="tabpanel" aria-labelledby="tab-code">
+            <textarea id="body" name="body" rows="24" spellcheck="false"></textarea>
+          </div>
+          <div id="panel-preview" class="tab-panel" role="tabpanel" aria-labelledby="tab-preview" tabindex="0" hidden>
+            <!-- site が @astrojs/markdown-remark の unified() で描くのと同じ HTML。 -->
+            <article id="preview"></article>
+          </div>
         </div>
 
         <div class="field">
@@ -95,12 +111,6 @@
         -->
         <button id="new-post" type="button" hidden>新規に戻る</button>
       </form>
-
-      <section class="preview-pane">
-        <h2>プレビュー</h2>
-        <!-- site が @astrojs/markdown-remark の unified() で描くのと同じ HTML。 -->
-        <article id="preview"></article>
-      </section>
     </main>
 
     <script type="module" src="/src/main.ts"></script>

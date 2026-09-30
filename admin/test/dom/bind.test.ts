@@ -70,7 +70,7 @@ describe('readFields', () => {
 });
 
 describe('必須要素が無ければ即座に投げる', () => {
-  it.each(['#preview', '#body', '#problems', '#submit', '#targetPath'])(
+  it.each(['#preview', '#body', '#problems', '#submit', '#targetPath', '#body-tabs'])(
     '%s が無いと bindEditor が投げる',
     (selector) => {
       // 存在チェックを黙って握りつぶすと、UI が「動いているように見えて

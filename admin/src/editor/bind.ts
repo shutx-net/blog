@@ -1,4 +1,5 @@
 import { draftProblems, publishPathLabel, type DraftFields, type DraftProblem } from './model.ts';
+import { bindBodyTabs } from './tabs.ts';
 
 /**
  * DOM 結線。**ここには「何を描くか」しか無く、「どこに送るか」は無い**
@@ -59,6 +60,8 @@ export const bindEditor = (root: HTMLElement, ports: EditorPorts): BoundEditor =
   const targetPath = require$<HTMLElement>(root, '#targetPath');
   const submit = require$<HTMLButtonElement>(root, '#submit');
   const status = require$<HTMLElement>(root, '#status');
+  // 本文の Code / Preview の切り替え。表示だけで、下の update() とは独立している。
+  bindBodyTabs(root);
 
   /**
    * **世代カウンタ。** デバウンスを使わないのは、使うと DOM テストが

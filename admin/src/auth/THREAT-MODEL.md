@@ -40,7 +40,7 @@ Cognito の **ID トークン（有効 60 分）** と **refresh トークン（
 <svg onload=alert(1)>              -> <svg onload="alert(1)"></svg> になる
 ```
 
-そして `admin/src/editor/bind.ts:98` がそれを `preview.innerHTML` に代入する。
+そして `admin/src/editor/bind.ts:106` がそれを `preview.innerHTML` に代入する。
 `innerHTML` 経由の `<script>` は HTML 仕様上そもそも実行されないが、
 **`onerror` と `onload` は発火し、`javascript:` リンクもクリックで動く。**
 著者が外部から Markdown を貼れば成立する。
