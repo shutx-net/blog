@@ -16,23 +16,17 @@ body {
   line-height: 1.6;
 }
 
+/*
+ * 1 段組み。プレビューは本文のタブに入ったので、横に並べる相手がいない。
+ * 幅は本文の 1 行が読める程度に抑える。
+ */
 #editor {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--gap);
-  max-width: 1400px;
+  max-width: 60rem;
   margin: 0 auto;
   padding: var(--gap);
-}
-
-@media (min-width: 60rem) {
-  #editor {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-
-  #editor > h1 {
-    grid-column: 1 / -1;
-  }
 }
 
 .field {
@@ -110,15 +104,54 @@ button[disabled] {
   opacity: 0.5;
 }
 
-.preview-pane {
+/*
+ * 本文の Code / Preview タブ。選択中は下線で示す。**色だけに頼らない**ため、
+ * 選択中のタブは文字も太くする。表示の出し分けは hidden 属性だけで行う。
+ */
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-block: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.tabs [role='tab'] {
+  padding: 0.35rem 0.9rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: none;
+  color: inherit;
+}
+
+.tabs [role='tab'][aria-selected='true'] {
+  border-bottom-color: currentColor;
+  font-weight: 600;
+}
+
+.tab-panel {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
 
+.tab-panel[hidden] {
+  display: none;
+}
+
+/* Preview に切り替えても高さが大きく跳ねないよう、textarea の 24 行に近づける。 */
 #preview {
+  min-height: 24lh;
   overflow-x: auto;
   padding: var(--gap);
   border: 1px solid var(--border);
   border-radius: 4px;
+}
+
+/* 本文が空のときに、真っ白な枠だけを見せない。 */
+#preview:empty::before {
+  content: 'プレビューする内容がありません';
+  opacity: 0.6;
 }
 
 #preview :is(img, table) {
