@@ -26,7 +26,7 @@
 import { createApiClient, ApiError } from '../src/api/client.ts';
 import { createStubAuthTransport } from '../src/auth/session.ts';
 
-const ORIGIN = process.env['ADMIN_API_ORIGIN'] ?? 'https://d8gsxbwzr6ft8.cloudfront.net';
+const ORIGIN = process.env['ADMIN_API_ORIGIN'] ?? 'https://blog.shutx.net';
 
 interface Check {
   name: string;

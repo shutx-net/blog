@@ -29,7 +29,7 @@ import {
   resolveRedirectUri,
 } from '../src/auth/config.ts';
 
-const ORIGIN = process.env['ADMIN_SITE_ORIGIN'] ?? 'https://d8gsxbwzr6ft8.cloudfront.net';
+const ORIGIN = process.env['ADMIN_SITE_ORIGIN'] ?? 'https://blog.shutx.net';
 const REDIRECT_URI = resolveRedirectUri(ORIGIN);
 
 /** issuer の末尾がユーザプール ID。**別々に書かない**（ずれる余地を作らない）。 */
