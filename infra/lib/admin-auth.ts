@@ -33,8 +33,22 @@ export interface AdminAuthProps {
    */
   readonly domainPrefix: string;
 
-  /** ログイン後の戻り先のオリジン（CloudFront の配信ドメイン）。 */
-  readonly siteOrigin: string;
+  /**
+   * ログイン後の戻り先として許可するオリジン。**移行中は 2 本**
+   * （`*.cloudfront.net` とカスタムドメイン）。
+   *
+   * `CallbackURLs` / `LogoutURLs` は**許可リストであって 1 値ではない**ので、
+   * 証明書が付く前からカスタムドメインを入れておける（入れても
+   * `*.cloudfront.net` からのログインは動き続ける）。admin 側は
+   * `resolveRedirectUri(location.origin)` でオリジンを導出するので、ここに
+   * 載っているオリジンから開けばそのまま通る。**載っていなければ Cognito が
+   * `redirect_mismatch` を返す** — つまりここが最終的な番人である。
+   *
+   * 呼び出し側は site-stack.ts の `SITE_ORIGINS` 定数を渡すこと（メディアの
+   * CORS `AllowedOrigins` と**同じ配列**を参照させる。別々に書くと
+   * 「ログインはできるが画像が上がらない」という壊れ方をする）。
+   */
+  readonly siteOrigins: readonly string[];
 }
 
 export class AdminAuth extends Construct {
@@ -114,8 +128,11 @@ export class AdminAuth extends Construct {
         // **openid だけ。** aws.cognito.signin.user.admin を含めると、
         // アクセストークンでユーザ属性を書き換えられるようになる。
         scopes: [cognito.OAuthScope.OPENID],
-        callbackUrls: [`${props.siteOrigin}/admin/`],
-        logoutUrls: [`${props.siteOrigin}/admin/`],
+        // **許可リストの全件を並べる。** 順序は `SITE_ORIGINS` のまま（先頭が正のオリジン）。
+        // hosted-UI ドメイン（`LoginDomain`）はこれに影響されない —
+        // Managed Login は `<prefix>.auth.<region>.amazoncognito.com` のままである。
+        callbackUrls: props.siteOrigins.map((origin) => `${origin}/admin/`),
+        logoutUrls: props.siteOrigins.map((origin) => `${origin}/admin/`),
       },
 
       // ユーザ名の存在有無を応答から推測させない。

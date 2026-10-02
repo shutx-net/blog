@@ -1,7 +1,7 @@
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
-import { SITE_ORIGIN, SiteStack } from '../lib/site-stack.ts';
+import { SiteStack } from '../lib/site-stack.ts';
 
 /**
  * ステートフル資源の論理 ID は固定する。変わると置換になるため。
@@ -202,11 +202,18 @@ describe('メディアバケットの CORS（ブラウザからの presigned PUT
     expect(mediaCors()).toHaveLength(1);
   });
 
-  it('**AllowedOrigins がちょうど 1 本で、SITE_ORIGIN 定数と完全一致する**', () => {
-    // CORS と Cognito の CallbackURLs が **同じ 1 定数**を指していること。
+  it('**AllowedOrigins がちょうど 2 本で、リテラルの集合と完全一致する**', () => {
+    // **期待値を `SITE_ORIGINS` から導かない。** 導くと定数を間違えた日に両辺が
+    // 一緒にずれ、テストは緑のまま通ってしまう（admin/test/support/site-renderer.ts
+    // と同じ規律）。ここは「この 2 本である」という独立した宣言でなければならない。
+    //
+    // CORS と Cognito の CallbackURLs が同じ集合であることは site-origins.test.ts が見る。
     // 2 か所に別々の文字列を書くと「ログインはできるが画像が上がらない」という
     // デバッグしにくい壊れ方をする。
-    expect(mediaCors()[0]?.['AllowedOrigins']).toEqual([SITE_ORIGIN]);
+    expect(mediaCors()[0]?.['AllowedOrigins']).toEqual([
+      'https://d8gsxbwzr6ft8.cloudfront.net',
+      'https://blog.shutx.net',
+    ]);
   });
 
   it('**AllowedOrigins に "*" が含まれない**', () => {
@@ -216,11 +223,16 @@ describe('メディアバケットの CORS（ブラウザからの presigned PUT
     for (const origin of origins) expect(origin).not.toContain('*');
   });
 
-  it('AllowedOrigins の唯一の値が https:// で始まる', () => {
+  it('AllowedOrigins の全件が https:// で始まる', () => {
+    // **全件ループにする。** 1 本目だけを見ていると、2 本目に http:// を足した日に
+    // 素通りする（オリジンが 1 本だった頃の形をそのまま残すと穴になる）。
     const origins = mediaCors()[0]?.['AllowedOrigins'] as string[];
-    expect(origins).toHaveLength(1);
-    expect(origins[0]?.startsWith('https://')).toBe(true);
-    expect(origins[0]).not.toContain('http://');
+    // 件数アサーションが非空ガードを兼ねる。0 本だとループが素通りする。
+    expect(origins).toHaveLength(2);
+    for (const origin of origins) {
+      expect(origin.startsWith('https://'), origin).toBe(true);
+      expect(origin, origin).not.toContain('http://');
+    }
   });
 
   it('**AllowedMethods が ["PUT"] ちょうど**（POST / GET / DELETE を含まない）', () => {

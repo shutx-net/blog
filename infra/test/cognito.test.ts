@@ -1,7 +1,7 @@
 import { App } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
-import { ADMIN_LOGIN_DOMAIN_PREFIX, SITE_ORIGIN, SiteStack } from '../lib/site-stack.ts';
+import { ADMIN_LOGIN_DOMAIN_PREFIX, SiteStack } from '../lib/site-stack.ts';
 
 interface CfnResource {
   Type?: string;
@@ -172,26 +172,46 @@ describe('アプリクライアント', () => {
     });
   });
 
-  it('**CallbackURLs が CloudFront の https オリジンで始まる**（http でも * でもない）', () => {
-    const callbacks = client()['CallbackURLs'] as string[];
-    expect(callbacks).toHaveLength(1);
-    for (const url of callbacks) {
-      expect(url.startsWith(`${SITE_ORIGIN}/`)).toBe(true);
-      expect(url.startsWith('https://')).toBe(true);
-      expect(url).not.toContain('*');
-      expect(url).not.toContain('http://');
-    }
+  /**
+   * **期待値をリテラルで書く。**
+   *
+   * `SITE_ORIGINS` から `.map()` で導くと、定数を打ち間違えた日に期待値も同じだけ
+   * ずれて**テストが緑のまま通る**（admin/test/support/site-renderer.ts と同じ規律）。
+   * ここは「この 2 本である」という独立した宣言でなければならない。
+   *
+   * 移行中は 2 本。**`startsWith(SITE_ORIGIN)` では書けない** — 正のオリジン以外も
+   * 載るのが本フェーズの目的なので、その形は 2 本目で必ず落ちる。
+   */
+  const EXPECTED_REDIRECT_URLS = [
+    'https://d8gsxbwzr6ft8.cloudfront.net/admin/',
+    'https://blog.shutx.net/admin/',
+  ];
+
+  it('**CallbackURLs がリテラル 2 本と完全一致する**（順序も含む）', () => {
+    expect(client()['CallbackURLs']).toEqual(EXPECTED_REDIRECT_URLS);
   });
 
-  it('LogoutURLs も同じオリジンで、http でも * でもない', () => {
-    const logouts = client()['LogoutURLs'] as string[];
-    expect(logouts.length).toBeGreaterThan(0);
-    for (const url of logouts) {
-      expect(url.startsWith(`${SITE_ORIGIN}/`)).toBe(true);
-      expect(url).not.toContain('*');
-      expect(url).not.toContain('http://');
-    }
+  it('**LogoutURLs も同じ 2 本と完全一致する**', () => {
+    // Callback と Logout がずれると「ログインはできるがログアウトで
+    // redirect_mismatch」という非対称な壊れ方をする。
+    expect(client()['LogoutURLs']).toEqual(EXPECTED_REDIRECT_URLS);
   });
+
+  it.each(['CallbackURLs', 'LogoutURLs'])(
+    '%s の全件が https:// 始まりで、* も http:// も含まない',
+    (key) => {
+      // **全件ループ。** 上の完全一致とは別に残す — リテラルを書き換えるときに
+      // 「`*` を 1 本足す」「http:// のオリジンを足す」を名指しで禁止する側である。
+      const urls = client()[key] as string[];
+      // 件数アサーションが非空ガードを兼ねる（0 本だとループが素通りする）。
+      expect(urls, `${key} は 2 本`).toHaveLength(2);
+      for (const url of urls) {
+        expect(url.startsWith('https://'), url).toBe(true);
+        expect(url, url).not.toContain('*');
+        expect(url, url).not.toContain('http://');
+      }
+    },
+  );
 
   it('SupportedIdentityProviders が COGNITO だけ（外部 IdP を足していない）', () => {
     expect(client()['SupportedIdentityProviders']).toEqual(['COGNITO']);

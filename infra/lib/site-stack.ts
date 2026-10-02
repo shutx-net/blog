@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
-import { CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
+import { ArnFormat, CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import type { StackProps } from 'aws-cdk-lib';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
@@ -46,9 +47,104 @@ export const MEDIA_PATH_PATTERN = '/media/*';
 export const API_PATH_PATTERN = '/api/*';
 
 /**
- * サイトのオリジン（CloudFront の配信ドメイン）。
+ * CloudFront が自分で配る配信ドメイン。**カスタムドメインを足しても消さないこと。**
  *
- * 「物理名をハードコードしない」方針の**意図的な例外**。理由は 3 つ。
+ * 許可リストに残すのは退路のため。Cloudflare の CNAME を触って壊しても、ACM の証明書が
+ * 切れても、**ここから `/admin/` に入って記事を直せる。** admin は
+ * `resolveRedirectUri(location.origin)`（admin/src/main.ts）でオリジンを導出するので、
+ * Cognito の許可リストに載っているオリジンならどれでもそのままログインが通る。
+ */
+export const CLOUDFRONT_ORIGIN = 'https://d8gsxbwzr6ft8.cloudfront.net';
+
+/**
+ * カスタムドメイン。**DNS は Cloudflare、証明書は us-east-1 の ACM**（どちらも帯域外）。
+ *
+ * **ここに書いただけでは配信は切り替わらない。** ディストリビューションの `domainNames`
+ * （= `Aliases`）に入れるまで、`https://blog.shutx.net` は SNI 不一致で TLS ハンドシェイクに
+ * 失敗する。この定数の役目は、**証明書が付く前に Cognito の許可リストとメディアの CORS を
+ * 広げておくこと**だけである。
+ */
+export const CUSTOM_DOMAIN_NAME = 'blog.shutx.net';
+
+/** `CUSTOM_DOMAIN_NAME` のオリジン表記。`https://` を 2 箇所に書き足さないため。 */
+export const CUSTOM_ORIGIN = `https://${CUSTOM_DOMAIN_NAME}`;
+
+/**
+ * **証明書を置けるリージョンの全体集合。1 要素しかない。**
+ *
+ * 型注釈を別名に逃がしてあるのは oxlint のため。`: 'us-east-1' = 'us-east-1'` と直に書くと
+ * `typescript(prefer-as-const)` が「`as const` にしろ」と言い、`npm run lint` は
+ * `--deny-warnings` なので exit 1 になる（実測）。**だが `as const` では守れない** —
+ * あれは初期化子から型を推論するので、**値を別リージョンに書き換えると型も一緒に動いて
+ * 素通りする。** 下の注釈だけが「値を書き換えたら typecheck が落ちる」を成立させている。
+ */
+type SiteCertificateRegion = 'us-east-1';
+
+/**
+ * ACM 証明書のリージョン。**CloudFront は us-east-1 の証明書しか読まない**（デプロイ先が
+ * ap-northeast-1 であることとは無関係の、CloudFront 側の制約）。
+ *
+ * **型で固定してある**（上の `SiteCertificateRegion`）。他のリージョンを書くと typecheck で
+ * 落ちる。間違っていても `cdk synth` は通り、`cdk deploy` が `InvalidViewerCertificate` という
+ * 原因の書かれていないエラーで落ちるだけなので、型とテストの 2 段で手前に寄せる。
+ *
+ * **CDK 自身の検査には頼れない。** `Distribution` の構築子は
+ * `splitArn(certificateArn).region !== 'us-east-1'` を見るが、その前に
+ * `Token.isUnresolved(region)` で抜ける（実測、aws-cdk-lib 2.267.0）。下で ARN を
+ * `formatArn` に組ませると partition と account がトークンになり ARN 全体がトークンに
+ * なるので、**あの検査は常に沈黙する。** 代わりに
+ * `test/distribution-custom-domain.test.ts` がテンプレート上の ARN を見ている。
+ */
+export const SITE_CERTIFICATE_REGION: SiteCertificateRegion = 'us-east-1';
+
+/**
+ * ACM 証明書の UUID（ARN の `.../certificate/<ここ>`）。**ARN を丸ごと書かない。**
+ *
+ * ARN にはアカウント ID が入り、**このリポジトリは public である。** 同じ規律が既に
+ * 3 箇所に明文で書かれている — `.github/workflows/deploy.yml` が role ARN を variable に
+ * 逃がす理由、`ADMIN_LOGIN_DOMAIN_PREFIX` の JSDoc、`infra/README.md` の
+ * 「アカウント ID をマスクして貼る」。だから ARN は `Stack.formatArn` が
+ * `AWS::Partition` / `AWS::AccountId` から組み立て、**コードに載るのはこの UUID と
+ * `'us-east-1'` だけ**にする。フル ARN の定数 1 本に替えたいなら 1 行で済むが、
+ * そのときはアカウント ID が public に載ることを承知の上で行うこと。
+ *
+ * **証明書は帯域外で手で作る。** `new acm.Certificate` も `DnsValidatedCertificate` も
+ * このスタックには置かない。理由は 2 つ。
+ *
+ * 1. **このスタックは env-agnostic** である（`bin/blog.ts` は env を渡さず、
+ *    `test/site-stack.test.ts` がそれを固定している）。構築子で作るとデプロイ先の
+ *    ap-northeast-1 に出来てしまい、**CloudFront から読めない証明書が生える。**
+ * 2. 検証用の CNAME は Cloudflare に手で入れる。スタック内に置くと `cdk deploy` が
+ *    `ISSUED` になるまで待ち続けるだけで、待ち時間を CFN に肩代わりさせる意味がない。
+ *
+ * 再発行したときに直すのはこの 1 行だけ（`aws acm describe-certificate` の ARN 末尾）。
+ */
+export const SITE_CERTIFICATE_ID = '943c0a33-26c2-4fa9-910c-3c50e4b7d204';
+
+/**
+ * 正（canonical）のオリジン。**この定数自身はテンプレートに 1 文字も現れない。**
+ *
+ * 描画されるのは下の `SITE_ORIGINS` のほうで、こちらは「正はどれか」という宣言である。
+ * **実体は `.github/workflows/deploy.yml` の build ステップの `SITE_URL`** で、canonical link も
+ * sitemap も RSS の `<guid isPermaLink="true">` もそこから生える。ここはその鏡にすぎず、
+ * 定数として存在する理由は **`test/site-origins.test.ts` が deploy.yml を実際に parse して
+ * 両者の一致を固定するため**（片方だけ差し替えた半端な状態を禁じる唯一のアサーション）。
+ *
+ * **許可リストと違って「両方」にはできない。** Astro の `site:` は 1 値で、guid が変われば
+ * 購読者に全記事が再配信される（取り消せない。AGENTS.md）。だからここを動かすのは
+ * 不可逆な決定であり、許可リストを 1 本広げるのとは別の作業になる。
+ */
+export const SITE_ORIGIN = CLOUDFRONT_ORIGIN;
+
+/**
+ * 配信オリジンの許可リスト。**Cognito の `CallbackURLs` / `LogoutURLs` とメディアバケットの
+ * CORS `AllowedOrigins` が、どちらもこの 1 つの配列を参照する。**
+ *
+ * 2 か所に別々の文字列を書くと「ログインはできるが画像が上がらない」というデバッグしにくい
+ * 壊れ方をする。`test/site-origins.test.ts` が**テンプレート上でこの 2 つの集合の一致**を
+ * 見ている（1 定数が担っていた役目をテストに移したもの）。
+ *
+ * 「物理名をハードコードしない」方針の**意図的な例外**。理由は 2 つ。
  *
  * 1. **`distribution.distributionDomainName` は原理的に使えない。** メディアバケットの CORS
  *    （`CorsConfiguration` は `AWS::S3::Bucket` 本体のプロパティ）に入れると、
@@ -58,15 +154,22 @@ export const API_PATH_PATTERN = '/api/*';
  *    捕まえる（実測で 2 件）。バケットポリシー（別リソース）が Distribution を参照するのは
  *    問題ないが、CorsConfiguration には逃げ道が無い。
  * 2. Cognito の `CallbackURLs` でも同じ値が必要で、どのみち synth 時に確定した文字列が要る。
- * 3. カスタムドメインを入れるとき、この 1 定数を差し替えるだけで済む。
  *
- * **CORS と CallbackURLs の両方がこの 1 定数を参照する。** 2 か所に別々の文字列を書くと
- * 「ログインはできるが画像が上がらない」というデバッグしにくい壊れ方をする。
+ * **移行は 2 段で、可逆なのは前半だけ。**
  *
- * 変えるのは CloudFront のドメインが変わったときだけ。デプロイ後に `describe-stacks` の
- * Output `DistributionDomainName` と突き合わせること（手順は infra/README.md）。
+ * - **この配列に 1 本足す。** 両方のオリジンが同時に有効になるだけなので、外して
+ *   deploy し直せば戻る。**可逆。**
+ * - **`SITE_ORIGIN` と deploy.yml の `SITE_URL` を同時に差し替える。** RSS の guid が変わるので
+ *   **不可逆**（上の `SITE_ORIGIN` のコメント）。
+ *
+ * **順序を入れ替えないこと。** 機能は変わらないが、テンプレートには配列として描画されるので
+ * 並べ替えただけで `cdk diff` に差分が出る。先頭が正のオリジンであること自体にも意味がある
+ * （`describe-user-pool-client` や Cognito コンソールを目で見るとき、先頭が最初に目に入る）。
+ *
+ * 配信ドメインが変わったときは `describe-stacks` の Output `DistributionDomainName` と
+ * 突き合わせること（手順は infra/README.md）。
  */
-export const SITE_ORIGIN = 'https://d8gsxbwzr6ft8.cloudfront.net';
+export const SITE_ORIGINS: readonly string[] = [CLOUDFRONT_ORIGIN, CUSTOM_ORIGIN];
 
 /**
  * Managed Login のドメイン接頭辞。**AWS グローバルで一意でなければならない。**
@@ -150,16 +253,16 @@ export class SiteStack extends Stack {
     // メディアは配信用と別バケットにする。同居させると sync --delete が巻き込んで消す。
     // 別 Stack ではなく Construct なのは、別 Stack だと synth が DependencyCycle で落ちるため
     // （media-bucket.ts のコメントと README を参照）。
-    // **siteOrigin に distribution.distributionDomainName を渡してはいけない** — 循環参照になる
-    // （SITE_ORIGIN の定義のコメントを参照）。
-    const media = new MediaBucket(this, 'MediaBucket', { siteOrigin: SITE_ORIGIN });
+    // **siteOrigins に distribution.distributionDomainName を渡してはいけない** — 循環参照になる
+    // （SITE_ORIGINS の定義のコメントを参照）。
+    const media = new MediaBucket(this, 'MediaBucket', { siteOrigins: SITE_ORIGINS });
     this.mediaBucket = media.bucket;
 
     // 管理画面のログイン（単一著者の Cognito ユーザプール）。Stack ではなく Construct
     // （CloudFront に紐づくものを別 Stack にすると DependencyCycle になる、という実測に揃える）。
     const adminAuth = new AdminAuth(this, 'AdminAuth', {
       domainPrefix: ADMIN_LOGIN_DOMAIN_PREFIX,
-      siteOrigin: SITE_ORIGIN,
+      siteOrigins: SITE_ORIGINS,
     });
     this.adminAuth = adminAuth;
 
@@ -222,9 +325,15 @@ export class SiteStack extends Stack {
       },
       // frame-ancestors の二重化。古いブラウザ向け。
       frameOptions: { frameOption: cloudfront.HeadersFrameOption.DENY, override: true },
-      // **includeSubdomains も preload も付けない。**
-      // *.cloudfront.net は他人と共有するドメインなので、サブドメイン全体に
-      // HSTS を宣言するのは自分のものでないホストに対する宣言になる。
+      // **カスタムドメインが付いて、HSTS が初めて実利を持つ。** 手で打たれたり
+      // リンクされたりするのは `blog.shutx.net` のほうで、スキームを省いた最初の 1 本は
+      // 平文で出て 301 を踏む。HSTS があれば 2 回目以降はブラウザが送る前に https へ上げる
+      // （AWS が配る配信ドメインを手で打つ人は居ないので、そこでは実質何も守っていなかった）。
+      //
+      // **それでも includeSubdomains も preload も付けない**（理由 3 つは
+      // `HSTS_MAX_AGE_SECONDS` の JSDoc）。要点だけ: `blog.shutx.net` の下にホストが無いので
+      // includeSubDomains には守る対象が無く、将来そこに平文のホストを置いた日に
+      // max-age の残りだけ到達不能にする。親の `shutx.net` はこのスタックの管理外。
       strictTransportSecurity: {
         accessControlMaxAge: Duration.seconds(HSTS_MAX_AGE_SECONDS),
         includeSubdomains: false,
@@ -276,12 +385,51 @@ export class SiteStack extends Stack {
       comment: 'viewer-request: /about -> /about/index.html',
     });
 
+    // カスタムドメインの証明書。**帯域外で発行済みのものを ARN で参照するだけ**なので、
+    // `AWS::CertificateManager::Certificate` は 1 つも生えない（理由は
+    // `SITE_CERTIFICATE_ID` の JSDoc）。
+    //
+    // **アカウント ID をコードに書かない**ため ARN は `formatArn` に組ませる。前例は下の
+    // `AllowCloudFrontInvokeFunction` の `sourceArn`。代償として ARN がトークンになり、
+    // CDK 自身の `DistributionCertificateMustBeInUsEast1` 検査が `Token.isUnresolved` で
+    // 抜ける（`SITE_CERTIFICATE_REGION` の JSDoc）。us-east-1 はテストで固定する。
+    const certificate = acm.Certificate.fromCertificateArn(
+      this,
+      'SiteCertificate',
+      Stack.of(this).formatArn({
+        service: 'acm',
+        region: SITE_CERTIFICATE_REGION,
+        resource: 'certificate',
+        resourceName: SITE_CERTIFICATE_ID,
+        arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
+      }),
+    );
+
     // withOriginAccessControl は OAC リソースの作成とバケットポリシーの更新を
     // まとめて行う。手で addToResourcePolicy すると文が重複するので書かない。
     // 既定の originAccessLevels は [READ] なので読み取り専用。
     const distribution = new cloudfront.Distribution(this, 'SiteDistribution', {
       // defaultRootObject はルート '/' にしか効かない。/about は Function 側が担当する。
       defaultRootObject: 'index.html',
+      // **この 3 つは `DistributionConfig` 直下の `Aliases` と `ViewerCertificate` にしか
+      // 描画されない。** `renderOrigins()` も `additionalBehaviors` も通らないので、
+      // **OAC の論理 ID 集合（上の `API_PATH_PATTERN` のコメント）もビヘイビア件数 3 も不変**
+      // であり、`cdk diff` は Distribution の in-place 更新 1 件だけになる（実測）。
+      //
+      // **`*.cloudfront.net` は alias ではないので消えない。** 退路として残す
+      // （`CLOUDFRONT_ORIGIN` のコメント）。alias のほうは CloudFront グローバルで一意で、
+      // 他人が押さえていれば deploy が `CNAMEAlreadyExists` で落ちる — 静かには壊れない。
+      domainNames: [CUSTOM_DOMAIN_NAME],
+      certificate,
+      // cdk.json の `@aws-cdk/aws-cloudfront:defaultSecurityPolicyTLSv1.2_2021` で既定も
+      // 同値になるが **明示する** — あのフラグを外した日に黙って TLSv1.2_2019 へ落ちる。
+      // **既定の `*.cloudfront.net` 証明書のままだと `ViewerCertificate` ごと描画されない**
+      // ので、この指定が効くのは証明書を付ける今日から（それまで README の TODO に
+      // 「TLS 最低バージョンを上げられない」として残っていた。経緯は README の
+      // 「カスタムドメイン blog.shutx.net」の「付随して閉じた宿題」）。
+      minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
+      // `sslSupportMethod` は書かない。既定が `sni-only` で、`vip`（専用 IP）は
+      // 月 600 USD 付く。SNI を話せないクライアントは相手にしない。
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(siteBucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,

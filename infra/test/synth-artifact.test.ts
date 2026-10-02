@@ -152,10 +152,19 @@ describe('cdk synth が出力した実テンプレート: BlogSiteStack 固有',
     const rules = cors.CorsRules;
     expect(rules).toHaveLength(1);
     expect(rules?.[0]?.['AllowedMethods']).toEqual(['PUT']);
+    // **移行中は 2 本**（`*.cloudfront.net` と独自ドメイン）。期待値は**リテラル**で、
+    // `SITE_ORIGINS` から導かない — このファイルの存在意義は「定数ではなく cdk CLI が
+    // 書いたバイト列を読む」ことなので、定数を import したら意味が消える。
     const origins = rules?.[0]?.['AllowedOrigins'] as string[];
-    expect(origins).toHaveLength(1);
+    expect(origins).toEqual([
+      'https://d8gsxbwzr6ft8.cloudfront.net',
+      'https://blog.shutx.net',
+    ]);
     expect(origins).not.toContain('*');
-    expect(origins[0]?.startsWith('https://')).toBe(true);
+    for (const origin of origins) {
+      expect(origin.startsWith('https://'), origin).toBe(true);
+      expect(origin, origin).not.toContain('*');
+    }
   });
 
   it('実ファイル上でも OAI が 1 文字も出現しない', () => {
