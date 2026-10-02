@@ -669,17 +669,17 @@ gh variable list -R shutx-net/blog     # 3 つ入っているか確認
 
 ```sh
 # サイトは毎回検証させる
-curl -sI https://d8gsxbwzr6ft8.cloudfront.net/ | grep -i cache-control
+curl -sI https://blog.shutx.net/ | grep -i cache-control
 # → cache-control: no-cache
 
 # 記事ページも同じ（HTML 全般に効いていること）
-curl -sI https://d8gsxbwzr6ft8.cloudfront.net/posts/2026/09/27/142621/ | grep -i cache-control
+curl -sI https://blog.shutx.net/posts/2026/09/27/142621/ | grep -i cache-control
 
 # メディアは 1 年 + immutable
 MEDIA_BUCKET=$(aws cloudformation describe-stacks --stack-name BlogSiteStack \
   --query "Stacks[0].Outputs[?OutputKey=='MediaBucketName'].OutputValue" --output text)
 KEY=$(aws s3 ls "s3://$MEDIA_BUCKET/media/" --recursive | head -1 | awk '{print $4}')
-curl -sI "https://d8gsxbwzr6ft8.cloudfront.net/$KEY" | grep -i cache-control
+curl -sI "https://blog.shutx.net/$KEY" | grep -i cache-control
 # → cache-control: public, max-age=31536000, immutable
 
 # S3 側に二重定義していないこと（null のままであること）

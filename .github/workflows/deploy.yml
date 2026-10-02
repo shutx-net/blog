@@ -33,7 +33,10 @@ on:
       - 'package.json'
       - 'package-lock.json'
       # SITE_URL をここに直書きしている以上、この 1 行の変更がそのまま
-      # 再デプロイのトリガであるべき（独自ドメイン移行が 1 手で完結する）。
+      # 再デプロイのトリガであるべき。**独自ドメインへの切替がまさにそれだった** —
+      # infra 側の SITE_ORIGIN はテンプレートに 1 文字も描画されないので
+      # `cdk deploy` は要らず（切替は cdk diff を 1 行も増やさない）、
+      # このワークフローの 1 回の実行だけで新しいオリジンのサイトが公開される。
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
@@ -197,7 +200,7 @@ jobs:
           #
           # site/test/unit/deploy-workflow.test.ts が resolveSiteUrl を実際に通して
           # 「絶対 https」「プレースホルダではない」「正規化済み」を機械的に見ている。
-          SITE_URL: https://d8gsxbwzr6ft8.cloudfront.net/
+          SITE_URL: https://blog.shutx.net/
         run: npm run -w site build
 
       # **二重の砦。** 上のガードは checkout されたファイルを数えるだけで、

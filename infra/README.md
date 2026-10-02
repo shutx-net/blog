@@ -206,7 +206,7 @@ principal しか受け付けないので SSO からは assume できず、`act` 
    **同時に `test/toolchain.test.ts` の「TODO に『実デプロイ未検証』が残っている」という
    アサーションを、「もう無い」側に反転させること**（宿題が閉じたことをテストで固定する）
 8. 事後確認: `aws iam get-role --role-name ... --query 'Role.RoleLastUsed'` が空でなくなっている
-   （現在は `{}`）。`https://d8gsxbwzr6ft8.cloudfront.net/rss.xml` に `blog.invalid` が
+   （現在は `{}`）。`https://blog.shutx.net/rss.xml` に `blog.invalid` が
    **1 度も現れない**こと
 
 AccessDenied が出た場合は `s3:GetObject` → `s3:ListBucketMultipartUploads` →
@@ -526,7 +526,7 @@ npx -w infra cdk deploy BlogSiteStack
 **(1) モードが切り替わったか**（無認証で確認できる）
 
 ```sh
-curl -s https://d8gsxbwzr6ft8.cloudfront.net/api/health
+curl -s https://blog.shutx.net/api/health
 # => {"status":"ok","authMode":"cognito"}
 ```
 
@@ -537,7 +537,7 @@ BODY='{}'
 SHA=$(printf '%s' "$BODY" | sha256sum | cut -d' ' -f1)
 curl -s -o /dev/null -w '%{http_code}\n' -X POST \
   -H 'content-type: application/json' -H "x-amz-content-sha256: $SHA" \
-  -d "$BODY" https://d8gsxbwzr6ft8.cloudfront.net/api/posts
+  -d "$BODY" https://blog.shutx.net/api/posts
 # => 401  （本文は {"error":"unauthenticated"}）
 ```
 
@@ -568,14 +568,14 @@ CLIENT_ID=$(aws cloudformation describe-stacks --stack-name BlogSiteStack \
 LOGIN=$(aws cloudformation describe-stacks --stack-name BlogSiteStack \
   --query "Stacks[0].Outputs[?ends_with(OutputKey,'AdminLoginDomain')].OutputValue" --output text)
 
-echo "$LOGIN/login?client_id=$CLIENT_ID&response_type=code&scope=openid&redirect_uri=https://d8gsxbwzr6ft8.cloudfront.net/admin/"
+echo "$LOGIN/login?client_id=$CLIENT_ID&response_type=code&scope=openid&redirect_uri=https://blog.shutx.net/admin/"
 ```
 
 ブラウザで開いて code を取り、`/oauth2/token` で ID トークンに交換してから:
 
 ```sh
 curl -s -H "x-blog-authorization: Bearer $ID_TOKEN" \
-  https://d8gsxbwzr6ft8.cloudfront.net/api/health/github-app
+  https://blog.shutx.net/api/health/github-app
 # => 200 {"status":"degraded","canMintInstallationToken":false,...}
 ```
 
@@ -589,14 +589,16 @@ GitHub App が未作成なので中身は `degraded` でよい。
 aws cognito-idp admin-delete-user --user-pool-id "$POOL_ID" --username <2 人目>
 ```
 
-**(6) `SITE_ORIGIN` 定数のドリフト確認**
+**(6) `CLOUDFRONT_ORIGIN` 定数のドリフト確認**
 
 ```sh
 aws cloudformation describe-stacks --stack-name BlogSiteStack \
   --query "Stacks[0].Outputs[?OutputKey=='DistributionDomainName'].OutputValue" --output text
 ```
 
-`SITE_ORIGIN` の `https://` を除いた部分と一致すること。
+**`CLOUDFRONT_ORIGIN`** の `https://` を除いた部分と一致すること。**`SITE_ORIGIN` ではない** —
+正のオリジンは `CUSTOM_ORIGIN`（`blog.shutx.net`）に移っており、カスタムドメインの方は
+この Output には出ない（`Aliases` は CfnOutput にしていない。下の「`SITE_ORIGIN` 定数」）。
 
 **(7) CORS の確認**（admin ができてから）
 
@@ -604,11 +606,14 @@ aws cloudformation describe-stacks --stack-name BlogSiteStack \
 MEDIA=$(aws cloudformation describe-stacks --stack-name BlogSiteStack \
   --query "Stacks[0].Outputs[?OutputKey=='MediaBucketName'].OutputValue" --output text)
 curl -s -D- -o /dev/null -X OPTIONS \
-  -H 'Origin: https://d8gsxbwzr6ft8.cloudfront.net' \
+  -H 'Origin: https://blog.shutx.net' \
   -H 'Access-Control-Request-Method: PUT' \
   "https://$MEDIA.s3.ap-northeast-1.amazonaws.com/media/probe.png"
-# => Access-Control-Allow-Origin が CloudFront ドメインで返ること
+# => Access-Control-Allow-Origin: https://blog.shutx.net（送った Origin がそのまま返る）
 ```
+
+**`Origin:` を `https://d8gsxbwzr6ft8.cloudfront.net` に替えてもう 1 回走らせること** —
+`SITE_ORIGINS` の 2 本目（退路）の CORS が生きていることは、ここでしか確かめられない。
 
 ### 4. 切り戻し
 
@@ -630,7 +635,7 @@ auth: { mode: 'deny-all' },
 | --- | --- |
 | `SiteBucketName` | `aws s3 sync` の宛先 |
 | `MediaBucketName` | presigned PUT の宛先バケット |
-| `DistributionDomainName` | 配信ドメイン。**`SITE_ORIGIN` 定数と突き合わせる** |
+| `DistributionDomainName` | CloudFront の既定ドメイン。**`CLOUDFRONT_ORIGIN` 定数と突き合わせる**（`SITE_ORIGIN` ではない） |
 | `DistributionId` | キャッシュ無効化 |
 | `AdminUserPoolId` | `aws cognito-idp admin-create-user --user-pool-id` |
 | `AdminUserPoolClientId` | admin の OAuth `client_id` |
@@ -1218,7 +1223,7 @@ export const CUSTOM_DOMAIN_NAME = 'blog.shutx.net'; // Distribution の domainNa
 export const CUSTOM_ORIGIN = `https://${CUSTOM_DOMAIN_NAME}`;
 
 /** **正（canonical）のオリジン 1 本。テンプレートには 1 文字も現れない。** */
-export const SITE_ORIGIN = CLOUDFRONT_ORIGIN;
+export const SITE_ORIGIN = CUSTOM_ORIGIN;
 /** **許可リスト。テンプレートに描画されるのはこちら。** */
 export const SITE_ORIGINS: readonly string[] = [CLOUDFRONT_ORIGIN, CUSTOM_ORIGIN];
 ```
@@ -1270,8 +1275,11 @@ Dist.Properties...Origins[0].DomainName            = Fn::GetAtt [Media, Regional
 「カスタムドメイン blog.shutx.net」の 9 番。
 
 **`SITE_ORIGINS` の順序を入れ替えないこと。** 機能は変わらないが配列としてテンプレートに
-描画されるので、並べ替えただけで `cdk diff` に差分が出る。先頭が正のオリジンであること自体にも
-意味がある（`describe-user-pool-client` やコンソールを目で見るとき、先頭が最初に目に入る）。
+描画されるので、並べ替えただけで `cdk diff` に差分が出る（CORS と Cognito の 2 リソース）。
+**先頭は正のオリジンではない。** 配列は追加順のままで、`SITE_ORIGIN` が `CUSTOM_ORIGIN` に
+移ったあとも `CLOUDFRONT_ORIGIN` が先頭に残っている。「正を先頭に」と直したくなるが、
+得られるのはコンソールを目で見たときの見た目だけで、代わりに意味の無い差分と deploy が 1 回要る
+（`test/site-origins.test.ts` は期待値を**順序付きのリテラル配列**で固定しているので落ちる）。
 
 **`CLOUDFRONT_ORIGIN` を変えるのは CloudFront のドメインが変わったときだけ。** ドリフトの確認:
 
