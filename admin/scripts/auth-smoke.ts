@@ -141,8 +141,12 @@ const checks: Check[] = [
       if (client === undefined) throw new Error('UserPoolClient が応答に無い');
 
       equal('ClientId', client['ClientId'], AUTH_CONFIG.clientId);
-      equal('CallbackURLs[0]', (client['CallbackURLs'] as string[])[0], REDIRECT_URI);
-      equal('LogoutURLs[0]', (client['LogoutURLs'] as string[])[0], REDIRECT_URI);
+      // **先頭ではなく「含まれている」を見る。** CallbackURLs は許可リストで、
+      // 独自ドメイン移行中は 2 本入っている（infra の SITE_ORIGINS）。[0] と比べると
+      // ADMIN_SITE_ORIGIN で 2 本目を指定したときに**設定は正しいのに落ちる**。
+      // 本当に見たいのは「この ORIGIN からのログインが許可されているか」である。
+      equal('CallbackURLs includes', (client['CallbackURLs'] as string[]).includes(REDIRECT_URI), true);
+      equal('LogoutURLs includes', (client['LogoutURLs'] as string[]).includes(REDIRECT_URI), true);
       equal('AllowedOAuthFlows', client['AllowedOAuthFlows'], ['code']);
       equal('AllowedOAuthScopes', client['AllowedOAuthScopes'], [AUTH_CONFIG.scope]);
       equal('AllowedOAuthFlowsUserPoolClient', client['AllowedOAuthFlowsUserPoolClient'], true);

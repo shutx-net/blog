@@ -230,6 +230,63 @@ describe('infra/README.md が実装に追いついている', () => {
     return end === -1 ? rest : rest.slice(0, end);
   };
 
+  /**
+   * '### HSTS に' の節だけを切り出す（次の見出しの直前まで）。
+   *
+   * **README 全体を対象にしてはいけない。** HSTS の理由を機械的に固定していたのは
+   * かつて `toContain('cloudfront.net')` だったが、あの語は受け入れ確認の `curl` 例など
+   * **別の節に何度も出る。** 全体を見る形だと、節の本文が嘘になってもテストは
+   * 他の節に当たって緑のまま通る — **理由を固定しているつもりで何も固定していない。**
+   */
+  const hstsSection = (): string => {
+    const text = readme();
+    // 見出しは荷重がかかっている。変えるならこの行も一緒に直すこと。
+    const start = text.indexOf('\n### HSTS に');
+    expect(start, 'README に HSTS の節が必要（見出しを変えたらここも直す）').toBeGreaterThan(-1);
+    const rest = text.slice(start + 1);
+    const end = rest.search(/\n#{2,4} /);
+    return end === -1 ? rest : rest.slice(0, end);
+  };
+
+  /**
+   * '## カスタムドメイン' の節（手順書）だけを切り出す。次の `## ` 見出しの直前まで。
+   *
+   * **`hstsSection()` と同じ理由で、README 全体を対象にしてはいけない。**
+   * `blog.shutx.net` も `--region us-east-1` も `grey cloud` も **別の節に出る**ので、
+   * 全体を `toContain` で見る形だと**手順書を丸ごと削っても緑のまま通る。**
+   *
+   * 切り方は `todoSection()` と同じ（`'\n## '` は `###` に当たらない — 3 文字目が
+   * 空白ではないため。したがって中の `### 0.` 〜 `### 9.` は節の中に残る）。
+   */
+  const customDomainSection = (): string => {
+    const text = readme();
+    // 見出しは荷重がかかっている。変えるならこの行も一緒に直すこと。
+    const start = text.indexOf('\n## カスタムドメイン');
+    expect(
+      start,
+      'README にカスタムドメインの手順書が必要（見出しを変えたらここも直す）',
+    ).toBeGreaterThan(-1);
+    const rest = text.slice(start + 1);
+    const end = rest.indexOf('\n## ', 1);
+    return end === -1 ? rest : rest.slice(0, end);
+  };
+
+  /**
+   * '### cdk_best_practices との既知の乖離' の節だけを切り出す。
+   *
+   * ここも全体走査にしない。`env` という語は README の至るところに出るので、
+   * **乖離の節の本文が嘘になっても他の節に当たって緑になる。**
+   */
+  const divergenceSection = (): string => {
+    const text = readme();
+    // 見出しは荷重がかかっている。変えるならこの行も一緒に直すこと。
+    const start = text.indexOf('\n### cdk_best_practices との既知の乖離');
+    expect(start, 'README に乖離の節が必要（見出しを変えたらここも直す）').toBeGreaterThan(-1);
+    const rest = text.slice(start + 1);
+    const end = rest.search(/\n#{2,4} /);
+    return end === -1 ? rest : rest.slice(0, end);
+  };
+
   it('TODO セクションが残っているが、そこに 403 の宿題は無い（step 2.2 で閉じた）', () => {
     const todo = todoSection();
     expect(todo.length).toBeGreaterThan(0);
@@ -361,11 +418,22 @@ describe('infra/README.md が実装に追いついている', () => {
     expect(text).toMatch(/meta[^\n]*無視|無視[^\n]*meta/);
   });
 
-  it('**HSTS に includeSubDomains と preload を付けない理由が書かれている**', () => {
-    const text = readme();
-    expect(text).toContain('includeSubDomains');
-    expect(text).toContain('preload');
-    expect(text).toContain('cloudfront.net');
+  it('**HSTS に includeSubDomains と preload を付けない理由が、いまも真である形で書かれている**', () => {
+    const section = hstsSection();
+    expect(section).toContain('includeSubDomains');
+    expect(section).toContain('preload');
+    // **`toContain('cloudfront.net')` から差し替えた。** 旧い理由（「`*.cloudfront.net` は
+    // 他人と共有するドメインなので、サブドメイン全体への宣言は自分のものでないホストに
+    // 対する宣言になる」）は、`blog.shutx.net` が alias になった時点で決定を支えない。
+    // 代わりに、**宣言の射程がこのスタックの管理範囲に収まっている**ことを主張する。
+    expect(section, '宣言の対象ホストが名指しされていること').toContain('blog.shutx.net');
+    expect(section, '親ドメインがこのスタックの管理外であることが書かれていること').toContain(
+      '管理外',
+    );
+    // **宿題として残さない。** 「独自ドメインに移ったら改めて決めること」は閉じた
+    // （移った。決めた。据え置いた）。保留の文言が残っていると、次に読む人が
+    // 「まだ決まっていない」と誤解する。
+    expect(section).not.toContain('改めて決めること');
   });
 
   it('**cfn-lint の E3004（循環参照）についての記述がある**', () => {
@@ -419,6 +487,105 @@ describe('infra/README.md が実装に追いついている', () => {
     expect(text).toContain('DistributionDomainName');
   });
 
+  it('**手順書が ACM のリージョンを us-east-1 に固定している**', () => {
+    // CloudFront は us-east-1 の証明書しか読まない（デプロイ先の ap-northeast-1 とは無関係）。
+    // ここを落とすと `cdk synth` は通り、deploy が `InvalidViewerCertificate` という
+    // 原因の書かれていないエラーで落ちる。**手順書の 1 行が唯一の歯止めである。**
+    const section = customDomainSection();
+    expect(section).toContain('aws acm request-certificate');
+    expect(section).toContain('--region us-east-1');
+    expect(section).toContain('blog.shutx.net');
+    expect(section, 'リージョンを間違えたときの症状').toContain('InvalidViewerCertificate');
+  });
+
+  it('**手順 0 が「確認」であって「レコードの追加」ではない**', () => {
+    // **`blog` の CNAME は既に存在し、既に grey cloud である**（実測 2026-10-02）。
+    // 手順書が「追加する」と読める形だと、次に読む人が重複レコードを作る。
+    const section = customDomainSection();
+    expect(section).toContain('dig +short blog.shutx.net');
+    expect(section, '重複レコードを作る危険が明示されていること').toContain('重複レコード');
+    // プロキシが ON になっているときの見分け方（Cloudflare のエッジ IP）。
+    expect(section).toContain('104.x');
+    expect(section).toContain('172.67.x');
+  });
+
+  it('**Cloudflare のプロキシを ON にしない指示と、この構成に固有の理由がある**', () => {
+    // 一般論ではなく、このリポジトリに固有の 4 つの理由を書いてある。
+    // 「二重 CDN でも動くでしょう」と誰かが ON にする前に読めるように。
+    const section = customDomainSection();
+    expect(section).toContain('grey cloud');
+    expect(section).toContain('DNS only');
+    expect(section, 'invalidation が手前のキャッシュに届かない').toContain('create-invalidation');
+    expect(section, 'AGENTS.md が記録している事故と同型である旨').toContain(
+      '更新したのに反映されない',
+    );
+    expect(section, 'Flexible SSL との無限リダイレクト').toContain('Flexible');
+    expect(section, 'admin の XHR がチャレンジされる').toContain('Bot Fight Mode');
+  });
+
+  it('**Cloudflare がゾーン名を二重に付ける罠が書かれている**', () => {
+    // FQDN をそのまま貼ると `_xxxx.blog.shutx.net.shutx.net` になり、
+    // **検証は永久に通らない**（`PENDING_VALIDATION` のまま待てる）。
+    // 症状が「待っていれば通る」と区別できないので、手順書に書く以外に防ぐ手が無い。
+    expect(customDomainSection()).toContain('.shutx.net.shutx.net');
+  });
+
+  it('**検証用 CNAME を消さないことと、消えうる具体的な経路が書かれている**', () => {
+    // ACM は有効期限の約 60 日前に**同じ名前・同じ値の**レコードをもう一度読む。
+    // ACME の dns-01 はトークンが毎回変わるので、そちらの直感で「使い捨て」と
+    // 思って消されるのが一番ありうる壊し方である。
+    const section = customDomainSection();
+    expect(section).toContain('acm-validations.aws');
+    expect(section, '更新のタイミング').toContain('60 日前');
+    expect(section, 'dns-01 との構造的な違い').toContain('dns-01');
+    // **失敗が有効期限まで見えない**ことが書かれていること（これが危険の本体）。
+    expect(section).toMatch(/ISSUED のまま|黙って壊れる/);
+    // 実在する削除経路。リージョン未指定の ACMClient が us-east-1 を見ないという具体。
+    expect(section).toContain('claudeflare-aws-acm-federator');
+    expect(section).toContain('cleanupStaleCnames');
+  });
+
+  it('**受け入れ確認に RenewalEligibility と既定ドメインの生存確認がある**', () => {
+    // `RenewalEligibility` は手順 7 より前は INELIGIBLE が正しく、
+    // ディストリビューションに付いて初めて ELIGIBLE になる。**これを見ないと
+    // 「自動更新が最初から入っていなかった」ことに気づくのが有効期限の日になる。**
+    const section = customDomainSection();
+    expect(section).toContain('RenewalEligibility');
+    expect(section).toContain('ELIGIBLE');
+    // alias を足しても `*.cloudfront.net` は無効化されない（退路が残る）ことの確認。
+    expect(section).toContain('d8gsxbwzr6ft8.cloudfront.net');
+    // 証明書が本当に入れ替わったかの確認（SNI 付きの s_client）。
+    expect(section).toContain('-servername blog.shutx.net');
+    expect(section).toContain('CN = blog.shutx.net');
+  });
+
+  it('**証明書の有効期間が短くなっていくこと（SC-081）が書かれている**', () => {
+    // 198 日という実測値が「13 か月のはずでは」と疑われないように。
+    // 手を入れない更新経路の価値がこれから上がる、という判断の根拠でもある。
+    const section = customDomainSection();
+    expect(section).toContain('SC-081');
+    expect(section).toContain('198 日');
+  });
+
+  it('**apex `shutx.net` を触らないことが書かれている**', () => {
+    // 実測で apex には別のものが載っている（75.2.60.5 / 99.83.190.102）。
+    // apex -> blog のリダイレクトを作るには apex の DNS をこちらに向けることになる。
+    const section = customDomainSection();
+    expect(section).toContain('apex');
+    expect(section).toMatch(/apex[^\n]*触らない|触らない[^\n]*apex/);
+  });
+
+  it('**手順 0〜4 と 7 を人間が実行すると明記されている**', () => {
+    // 既存の「初回デプロイの手順（人間が実行する）」と同じ扱い。
+    // **`cdk deploy` はエージェントに実行させない**（AGENTS.md）。
+    const section = customDomainSection();
+    expect(section).toContain('人間が実行する');
+    expect(section).toContain('エージェントには実行させない');
+    expect(section).toContain('cdk deploy');
+    // 差分が in-place だけであること（新規・置換・削除が出たら止める）。
+    expect(section).toContain('新規 0 / 置換 0 / 削除 0');
+  });
+
   it('**TODO から「Cognito が入っていない」と「CORS は admin フェーズで」が消えている**', () => {
     // **反転済み。** Phase 3 までは「意図的に開けたまま残した穴」だったが、
     // Phase 4 が両方とも閉じた。宿題として残し続けると次に読む人が
@@ -427,6 +594,34 @@ describe('infra/README.md が実装に追いついている', () => {
     expect(todo.length).toBeGreaterThan(0);
     expect(todo).not.toContain('エンドユーザ認証（Cognito）が入っていない');
     expect(todo).not.toContain('メディアバケットの CORS は admin フェーズで');
+  });
+
+  it('**TODO から「TLS 最低バージョン」「カスタムドメインと ACM」「env」が消えている**', () => {
+    // **反転済み。** 3 つとも結果が出た（上の「カスタムドメイン blog.shutx.net」の
+    // 「付随して閉じた宿題」）。TLS は明示できるようになり、alias と証明書は付き、
+    // env は**要らないと分かった**。宿題として残し続けると次に読む人が
+    // 「まだ出来ていない」と誤解する。
+    //
+    // **逆に、結果を書かずに消すのも禁じている** — 下の「結果と確かめ方つき」の
+    // アサーションと対になっている。
+    const todo = todoSection();
+    expect(todo.length).toBeGreaterThan(0);
+    expect(todo).not.toContain('TLS 最低バージョンを上げられない');
+    expect(todo).not.toContain('カスタムドメインと ACM');
+    expect(todo).not.toContain('`env` を明示するのは ACM のフェーズで');
+  });
+
+  it('**`env` を ACM のフェーズに先送りする予告が撤回されている**', () => {
+    // **これは「予告どおりやった」ではなく「予告を取り下げた」側である。**
+    // 証明書を帯域外で us-east-1 に作って ARN で参照する形にしたので、
+    // カスタムドメインのフェーズでも env は要らなかった。
+    // `test/site-stack.test.ts` が env-agnostic を固定し続けるので、
+    // **README がここで「いずれ入れる」と言っているとテストと食い違う。**
+    const section = divergenceSection();
+    expect(section, '帯域外で作ったことが理由として書かれていること').toContain('帯域外');
+    expect(section).toContain('env を入れる予定はもう無い');
+    // 旧い文末（「…フェーズなので、そこに送る」）が残っていないこと。
+    expect(section, '先送りの文言が残っていないこと').not.toContain('そこに送る');
   });
   it('実デプロイで解決した宿題が TODO に残っていない', () => {
     // **反転済み。** 2026-08-30 の deploy ワークフロー実走で

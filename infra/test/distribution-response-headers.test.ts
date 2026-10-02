@@ -441,8 +441,15 @@ describe('**HSTS は includeSubDomains も preload も付けない**', () => {
     expect(securityHeaders()['StrictTransportSecurity']).toBeDefined();
   });
 
-  it('**IncludeSubdomains が false**（*.cloudfront.net は他人と共有するドメイン）', () => {
-    // サブドメイン全体に HSTS を宣言するのは、自分のものでないホストに対する宣言になる。
+  it('**IncludeSubdomains が false**（`blog.shutx.net` の下にホストが 1 つも無い）', () => {
+    // `blog.shutx.net` を alias に足しても据え置く。サブドメインを作るリソースがこの
+    // スタックに無いので守る対象が無く、将来そこに HTTPS を話せないホストを置いた日に
+    // max-age の残り（最大 1 年）だけ到達不能にするだけ。親の `shutx.net` はこのスタックの
+    // 管理外（HSTS はホスト単位なのでそもそも及ばない）。
+    //
+    // **旧い理由（「*.cloudfront.net は他人と共有するドメイン」）に戻さないこと。**
+    // alias を足した時点で決定を支えなくなる。理由の本体は `HSTS_MAX_AGE_SECONDS` の
+    // JSDoc と `infra/README.md` の同名の節にあり、後者は toolchain.test.ts が固定している。
     expect(
       (securityHeaders()['StrictTransportSecurity'] as Record<string, unknown>)[
         'IncludeSubdomains'

@@ -10,16 +10,18 @@ const CORS_MAX_AGE_SECONDS = 3600;
 
 export interface MediaBucketProps {
   /**
-   * CORS で許可する唯一のオリジン。
+   * CORS で許可するオリジン。**移行中は 2 本**（`*.cloudfront.net` とカスタムドメイン）。
    *
    * **`distribution.distributionDomainName` を渡してはいけない。**
    * `CorsConfiguration` は `AWS::S3::Bucket` **本体**のプロパティなので、
    * Distribution の GetAtt を入れると
    *   Media.CorsConfiguration -> GetAtt[Dist] と Dist.Origins -> GetAtt[Media]
    * の循環参照になる。**`cdk synth` はこれを検出せず成功し**、cfn-lint の E3004 だけが
-   * 捕まえる。呼び出し側は site-stack.ts の `SITE_ORIGIN` 定数を渡すこと。
+   * 捕まえる。呼び出し側は site-stack.ts の `SITE_ORIGINS` 定数を渡すこと
+   * （Cognito の `CallbackURLs` と**同じ配列**を参照させる。別々に書くと
+   * 「ログインはできるが画像が上がらない」という壊れ方をする）。
    */
-  readonly siteOrigin: string;
+  readonly siteOrigins: readonly string[];
 }
 
 /**
@@ -61,11 +63,11 @@ export class MediaBucket extends Construct {
       ],
       // CORS はメディアバケットにだけ入れる。ブラウザから presigned PUT で画像を上げるために
       // 要る。読み取り用の GET は入れない — 画像は CloudFront 経由で読むので関与しない。
-      // AllowedOrigins は CloudFront のドメイン 1 本だけ。**`*` にすると、任意のサイトの
-      // JavaScript が（presigned URL さえ手に入れば）このバケットに書ける。**
+      // AllowedOrigins は許可リスト（移行中は 2 本）をそのまま並べる。**`*` にすると、
+      // 任意のサイトの JavaScript が（presigned URL さえ手に入れば）このバケットに書ける。**
       cors: [
         {
-          allowedOrigins: [props.siteOrigin],
+          allowedOrigins: [...props.siteOrigins],
           allowedMethods: [s3.HttpMethods.PUT],
           // presigned PUT は content-type と content-length を署名済みヘッダとして送る
           // （api/src/media/presign.ts の requiredHeaders）。ブラウザに送らせるには
