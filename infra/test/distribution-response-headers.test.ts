@@ -2,13 +2,19 @@ import { App } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
 import {
+  ASTRO_ASSETS_CACHE_CONTROL,
   HSTS_MAX_AGE_SECONDS,
   MEDIA_CACHE_CONTROL,
   REFERRER_POLICY,
   SITE_CACHE_CONTROL,
   buildCsp,
 } from '../lib/response-headers.ts';
-import { API_PATH_PATTERN, MEDIA_PATH_PATTERN, SiteStack } from '../lib/site-stack.ts';
+import {
+  API_PATH_PATTERN,
+  ASTRO_ASSETS_PATH_PATTERN,
+  MEDIA_PATH_PATTERN,
+  SiteStack,
+} from '../lib/site-stack.ts';
 
 interface CacheBehavior {
   PathPattern?: string;
@@ -48,6 +54,7 @@ const distributionConfig = (): DistributionConfig => {
  */
 const SITE_POLICY_SUFFIX = '-security-headers';
 const MEDIA_POLICY_SUFFIX = '-media-headers';
+const ASSETS_POLICY_SUFFIX = '-assets-headers';
 
 interface FoundPolicy {
   logicalId: string;
@@ -73,6 +80,37 @@ const policyByNameSuffix = (suffix: string): FoundPolicy => {
 
 const sitePolicy = (): FoundPolicy => policyByNameSuffix(SITE_POLICY_SUFFIX);
 const mediaPolicy = (): FoundPolicy => policyByNameSuffix(MEDIA_POLICY_SUFFIX);
+const assetsPolicy = (): FoundPolicy => policyByNameSuffix(ASSETS_POLICY_SUFFIX);
+
+/**
+ * **ポリシーを全件返す（名前で引かない）。**
+ *
+ * 下の「CSP が 3 本のポリシーで一致している」は、名指しの 2 本ではなく**テンプレートに
+ * 実在するポリシー全部**をサイト側と突き合わせる。`securityHeadersBehavior` を
+ * `site-stack.ts` のローカル変数 1 つに括っている目的はドリフト防止なのに、**見張りが
+ * 3 本のうち 2 本しか見ていない状態が実際にあった** — ポリシーが 3 本になった時点で、
+ * `AssetsHeaders` に別のセキュリティヘッダを渡しても何も落ちなかった。
+ * 全件走査にしておけば 4 本目でも同じ穴は開かない。
+ *
+ * **module スコープで `expect` を呼ばない。** `it.each` は収集時に配列を必要とするので、
+ * ここで落ちるとファイルごと実行されずに終わる（AGENTS.md「失敗はファイルごと実行されずに
+ * 終わるので、件数を見ないと緑に見える」）。非空であることは下の 1 本目の `it` が主張する。
+ */
+const allPolicies = (): FoundPolicy[] =>
+  Object.entries(template.findResources('AWS::CloudFront::ResponseHeadersPolicy'))
+    .map(([logicalId, resource]) => ({
+      logicalId,
+      config: (resource as { Properties?: { ResponseHeadersPolicyConfig?: Record<string, unknown> } })
+        .Properties?.ResponseHeadersPolicyConfig,
+    }))
+    .filter((entry): entry is FoundPolicy => entry.config !== undefined);
+
+const policyName = (policy: FoundPolicy): string => String(policy.config['Name'] ?? '');
+
+/** サイト以外のポリシー。`it.each` のタイトルに名前を出すので `{ name, policy }` で持つ。 */
+const FOLLOWER_POLICIES = allPolicies()
+  .filter((policy) => !policyName(policy).endsWith(SITE_POLICY_SUFFIX))
+  .map((policy) => ({ name: policyName(policy), policy }));
 
 const policyLogicalId = (): string => sitePolicy().logicalId;
 
@@ -156,22 +194,29 @@ const directive = (name: string): string[] => {
   return values as string[];
 };
 
-describe('**ResponseHeadersPolicy がちょうど 2 個**', () => {
-  it('リソースが 2 個である', () => {
-    // **1 個から 2 個に増やしたのは意図的。** サイトとメディアで Cache-Control の値が
-    // 正反対（毎回検証させる / 1 年持たせる）で、1 本のポリシーでは表現できない。
+describe('**ResponseHeadersPolicy がちょうど 3 個**', () => {
+  it('リソースが 3 個である', () => {
+    // **1 個 -> 2 個 -> 3 個と増やしたのは、どれも意図的。**
+    // 2 本目（メディア）はサイトと Cache-Control の値が正反対（毎回検証させる / 1 年持たせる）で、
+    // 1 本のポリシーでは表現できない。3 本目（/_astro/*）は値はメディアと同じだが
+    // **真である条件が別**（メディアは**キーがランダム**で二度使われない / _astro は
+    // **中身のハッシュ**が名前に入る）。1 本に寄せると、どちらかの根拠が崩れた日に
+    // **両方が参照している宣言**を触ることになり、無関係なパスを道連れにする。
     // ここは「増えたこと自体が見える」ための件数ガードなので残す。
     // **個々のポリシーの特定には使わない**（下の policyByNameSuffix を見ること）。
-    template.resourceCountIs('AWS::CloudFront::ResponseHeadersPolicy', 2);
+    template.resourceCountIs('AWS::CloudFront::ResponseHeadersPolicy', 3);
   });
 
-  it('ポリシーに名前が付いている（コンソールで識別できる）', () => {
+  it('3 本とも名前が付いている（コンソールで識別できる）', () => {
     expect(typeof policyProperties()['Name']).toBe('string');
     expect(typeof mediaPolicy().config['Name']).toBe('string');
+    expect(typeof assetsPolicy().config['Name']).toBe('string');
   });
 
-  it('**2 本の論理 ID が別物である**（同じリソースを 2 回数えていない）', () => {
+  it('**3 本の論理 ID が互いに別物である**（同じリソースを数え直していない）', () => {
     expect(sitePolicy().logicalId).not.toBe(mediaPolicy().logicalId);
+    expect(sitePolicy().logicalId).not.toBe(assetsPolicy().logicalId);
+    expect(mediaPolicy().logicalId).not.toBe(assetsPolicy().logicalId);
   });
 });
 
@@ -190,12 +235,30 @@ describe('**Cache-Control**（ブラウザのヒューリスティックキャ�
     expect(cacheControlHeader(mediaPolicy())?.Value).toBe(MEDIA_CACHE_CONTROL);
   });
 
+  it('アセット側（/_astro/*）に Cache-Control が入っている', () => {
+    // **定数を import する。リテラルを書き写さない。** 値そのものは下の
+    // 「アセット側も長く持たせる」がリテラルで固定する（二段構え）。
+    expect(cacheControlHeader(assetsPolicy())?.Value).toBe(ASTRO_ASSETS_CACHE_CONTROL);
+  });
+
   it('**2 つの値が異なる**（同じポリシーを 2 本並べただけになっていない）', () => {
     const site = cacheControlHeader(sitePolicy())?.Value;
     const media = cacheControlHeader(mediaPolicy())?.Value;
     expect(site).toBeDefined();
     expect(media).toBeDefined();
     expect(site).not.toBe(media);
+  });
+
+  it('**サイトとアセットの値も異なる**（デフォルトのポリシーを使い回していない）', () => {
+    // **media と assets が「等しい」ことは主張しない。** 値はいま同じだが**真である条件が
+    // 別**（メディアは**キーがランダム**で二度使われない / `_astro` は**中身のハッシュ**が
+    // 名前に入る）なので、片方の根拠が変わって値を直した日に「等しくない」で落ちるのは
+    // 間違った理由での赤になる。縛るのは**サイトとの違い**だけでよい。
+    const site = cacheControlHeader(sitePolicy())?.Value;
+    const assets = cacheControlHeader(assetsPolicy())?.Value;
+    expect(site).toBeDefined();
+    expect(assets).toBeDefined();
+    expect(site).not.toBe(assets);
   });
 
   it('**サイト側は再利用の前に必ず検証させる**（no-cache 相当である）', () => {
@@ -214,35 +277,82 @@ describe('**Cache-Control**（ブラウザのヒューリスティックキャ�
     expect(value).toMatch(/max-age=\d{6,}/);
   });
 
-  it('両方とも Override が true である', () => {
+  it('**アセット側も長く持たせる**（vite が名前に内容ハッシュを付ける）', () => {
+    // **リテラルでも主張する。** 定数と比べるだけでは固定にならない（値を変えたときに
+    // テストが一緒に動く）。site / media で既に使っている二段構えと同じ。
+    //
+    // 真である条件は「同じ URL が二度と別の中身を返さない」こと。それを支えているのは
+    // `site/astro.config.mjs` の 2 つの既定値で、`distribution-assets-behavior.test.ts` が
+    // テキスト走査で、`site/test/build/output.test.ts` が `dist/_astro/` の実ファイル名で
+    // それぞれ固定している。
+    const value = cacheControlHeader(assetsPolicy())?.Value ?? '';
+    expect(value).toContain('max-age=31536000');
+    expect(value).toContain('immutable');
+  });
+
+  it('**3 本とも Override が true である**', () => {
+    // **「両方」から「3 本」へ広げた。** 3 本目を足したとき、ここが 2 本のままだと
+    // `AssetsHeaders` の override を落としてもテストは緑のまま通る。
     expect(cacheControlHeader(sitePolicy())?.Override).toBe(true);
     expect(cacheControlHeader(mediaPolicy())?.Override).toBe(true);
+    expect(cacheControlHeader(assetsPolicy())?.Override).toBe(true);
   });
 
   it('**カスタムヘッダは Cache-Control だけ**（他のヘッダが紛れ込んでいない）', () => {
     expect(customHeaders(sitePolicy()).map((header) => header.Header)).toEqual(['Cache-Control']);
     expect(customHeaders(mediaPolicy()).map((header) => header.Header)).toEqual(['Cache-Control']);
+    expect(customHeaders(assetsPolicy()).map((header) => header.Header)).toEqual(['Cache-Control']);
   });
 });
 
-describe('**CSP が 2 本のポリシーで一致している**', () => {
-  it('メディア側にも CSP がある（分割で落ちていない）', () => {
-    expect(cspTextOf(mediaPolicy()).length).toBeGreaterThan(0);
+/**
+ * **サイト以外のポリシー全件をサイト側と突き合わせる。名指しの 2 本ではない。**
+ *
+ * 以前はこの describe が「2 本のポリシーで一致している」で、site と media だけを比べていた。
+ * ポリシーが 3 本になったあともそのままだったので、**`AssetsHeaders` に別のセキュリティ
+ * ヘッダを渡しても 1 件も落ちない**という状態が実在した（AGENTS.md「検査されていないものを
+ * 『検査されている』と書かないこと」に反する）。全件走査に変えて 4 本目でも同じ穴が
+ * 開かないようにしてある。
+ */
+describe('**CSP が 3 本のポリシーすべてで一致している**', () => {
+  it('**サイト以外のポリシーがちょうど 2 本ある**（下の `it.each` が空振りしていない）', () => {
+    // **`it.each([])` はテストを 0 件登録して緑になる。** 走査が空になった形をここで落とす。
+    // 名指しの 2 本と突き合わせるので、「全件」が実際に何だったかもここで固定される。
+    expect(FOLLOWER_POLICIES.map((entry) => entry.policy.logicalId).sort()).toEqual(
+      [mediaPolicy().logicalId, assetsPolicy().logicalId].sort(),
+    );
   });
 
-  it('**2 本の CSP が同一である**（片方だけ古くなる乖離が起きていない）', () => {
-    // securityHeadersBehavior を 1 つのローカル変数から共有しているので、
-    // ここが食い違ったら「片方に直接書いた」ということ。
-    expect(cspTextOf(mediaPolicy())).toBe(cspTextOf(sitePolicy()));
+  it.each(FOLLOWER_POLICIES)('$name にも CSP がある（分割で落ちていない）', ({ policy }) => {
+    // 先に存在を主張する。無いまま `cspTextOf` を呼ぶと TypeError で落ちて、
+    // 「何が欠けたのか」がスタックトレースからしか読めない。
+    expect(
+      securityHeadersOf(policy)['ContentSecurityPolicy'],
+      `${policyName(policy)} に ContentSecurityPolicy が無い`,
+    ).toBeDefined();
+    expect(cspTextOf(policy).length).toBeGreaterThan(0);
   });
 
-  it('**他のセキュリティヘッダも 2 本で一致している**', () => {
-    for (const key of ['ContentTypeOptions', 'ReferrerPolicy', 'FrameOptions', 'StrictTransportSecurity']) {
-      expect(securityHeadersOf(mediaPolicy())[key], `${key} がメディア側で欠けている`).toEqual(
-        securityHeadersOf(sitePolicy())[key],
-      );
-    }
-  });
+  it.each(FOLLOWER_POLICIES)(
+    '**$name の CSP がサイト側と同一である**（片方だけ古くなる乖離が起きていない）',
+    ({ policy }) => {
+      // securityHeadersBehavior を 1 つのローカル変数から共有しているので、
+      // ここが食い違ったら「片方に直接書いた」ということ。
+      expect(cspTextOf(policy)).toBe(cspTextOf(sitePolicy()));
+    },
+  );
+
+  it.each(FOLLOWER_POLICIES)(
+    '**$name の他のセキュリティヘッダもサイト側と一致している**',
+    ({ policy }) => {
+      for (const key of ['ContentTypeOptions', 'ReferrerPolicy', 'FrameOptions', 'StrictTransportSecurity']) {
+        expect(
+          securityHeadersOf(policy)[key],
+          `${key} が ${policyName(policy)} で欠けている`,
+        ).toEqual(securityHeadersOf(sitePolicy())[key]);
+      }
+    },
+  );
 });
 
 describe('**ビヘイビアへの結線**', () => {
@@ -276,10 +386,20 @@ describe('**ビヘイビアへの結線**', () => {
   });
 
   it('**/admin/* 専用のビヘイビアを新設していない**（admin はデフォルト経由）', () => {
+    // **完全一致で主張する。** 「/admin/* が無いこと」を不在として見るのではなく、
+    // 実在する追加ビヘイビアを全部数え上げて固定する（増えた日に必ずここが落ちる）。
+    //
+    // 3 件目の /_astro/* は**サイト側の資産**用で、admin は巻き込まれない。
+    // admin/vite.config.ts が base: '/admin/' を宣言するので出力は /admin/assets/* になり、
+    // このパターンには一致しない（意図した判断。site-stack.ts の mediaResponseHeaders のコメント）。
     const patterns = (distributionConfig().CacheBehaviors ?? []).map(
       (behavior) => behavior.PathPattern,
     );
-    expect(patterns).toEqual([MEDIA_PATH_PATTERN, API_PATH_PATTERN]);
+    expect(patterns).toEqual([
+      MEDIA_PATH_PATTERN,
+      API_PATH_PATTERN,
+      ASTRO_ASSETS_PATH_PATTERN,
+    ]);
   });
 });
 
