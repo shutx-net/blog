@@ -63,7 +63,19 @@
    * the lines visually, so it needs the leading to stay readable.
    */
   --leading: 1.9;
-  --measure: 42rem;
+  /*
+   * The border box of all three columns -- header, main, footer -- so the inner
+   * width is 40px less than this: 768 - 2x20 = 728px. At a 16px body that is
+   * about 45 full-width Japanese characters to the line, the top of the
+   * comfortable range, and wide enough that Shiki's slab scrolls sideways less
+   * often than it did.
+   *
+   * What reads is the character count, not the width, so this token has to move
+   * whenever the body size does. It sat at 42rem (632px inner) while the body
+   * was 17px, which came to 37 characters; dropping the body to 16px stretched
+   * that same column to 39.5 with nothing here changing.
+   */
+  --measure: 48rem;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -275,7 +287,7 @@ article {
 
 /*
  * The heading ladder, against a 16px body: 24-30 / 21 / 18 / 16. One step down
- * from where it started (28-36 / 24 / 20 / 16) -- 36px of title over a 42rem
+ * from where it started (28-36 / 24 / 20 / 16) -- 36px of title over the text
  * column read as louder than the writing under it.
  *
  * h2 and h3 come down with the titles rather than staying put, and they have to:
