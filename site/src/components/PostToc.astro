@@ -1,0 +1,70 @@
+---
+import type { MarkdownHeading } from "astro";
+
+import { buildToc } from "../lib/toc.ts";
+
+// The contents bar of a post. Everything about *which* headings appear and how they
+// nest lives in src/lib/toc.ts, where test/unit/toc.test.ts can reach it; this file
+// only walks what comes back. That is also why there is no threshold and no depth
+// named here: toc.ts keeps both module-private, and the one question a caller may
+// ask it is whether the result is empty.
+interface Props {
+  headings: MarkdownHeading[];
+}
+
+const { headings } = Astro.props;
+const sections = buildToc(headings);
+---
+
+{
+  /* A `false` makes astro emit nothing at all, the same shape the tag list on the
+     post page uses. No empty state: a bar that says a post has no contents spends a
+     column of the viewport to tell the reader something they did not ask.
+
+     Labelled, because on a post page this is one of three <nav> landmarks -- the
+     back link below and the footer's are the others -- and an unlabelled one is
+     offered as a bare "navigation" in the list a screen reader builds. Layout.astro
+     carries the same note for the footer.
+
+     A literal aria-label rather than aria-labelledby pointing at the <p> below. The
+     ids on this page are the body's heading slugs, derived from whatever the author
+     wrote in Markdown, so introducing one more global id here would bring a
+     collision into a namespace this file does not control. The price is the word
+     being read twice, once as the landmark's name and once as its first line.
+
+     The visible label is a <p> and not an <h2>. It sits outside <article>, so a
+     heading here would be a sibling of the post title rather than one of its
+     sections: one more line in the post's outline, and a non-section in the list a
+     screen reader offers for heading navigation.
+
+     Nested <ul>s, not one flat list with a depth class per row. An h3 belonging to
+     the h2 above it is then readable from the HTML alone, which is what lets the
+     build layer assert the shape rather than a count, and it is what carries the
+     hierarchy to assistive technology at all.
+
+     No <script>: the entry for the section being read is not highlighted. The CSP
+     that infra/lib/response-headers.ts serves grants script-src neither
+     'unsafe-inline' nor a nonce, so an inline one is blocked outright, and an
+     external one would mean a request on every post page to move an underline. */
+  sections.length > 0 && (
+    <nav class="post__toc" aria-label="目次">
+      <p class="post__toc-title">目次</p>
+      <ul>
+        {sections.map((section) => (
+          <li>
+            <a href={`#${section.heading.slug}`}>{section.heading.text}</a>
+            {section.children.length > 0 && (
+              <ul>
+                {section.children.map((child) => (
+                  <li>
+                    <a href={`#${child.slug}`}>{child.text}</a>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </li>
+        ))}
+      </ul>
+    </nav>
+  )
+}
