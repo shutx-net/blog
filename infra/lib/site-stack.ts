@@ -133,8 +133,18 @@ export const SITE_CERTIFICATE_ID = '943c0a33-26c2-4fa9-910c-3c50e4b7d204';
  * **許可リストと違って「両方」にはできない。** Astro の `site:` は 1 値で、guid が変われば
  * 購読者に全記事が再配信される（取り消せない。AGENTS.md）。だからここを動かすのは
  * 不可逆な決定であり、許可リストを 1 本広げるのとは別の作業になる。
+ *
+ * **正は `blog.shutx.net`（`CUSTOM_ORIGIN`）。** `*.cloudfront.net` は下の `SITE_ORIGINS` に
+ * 残してあるので、**admin はどちらのホストからでもログインできる** — DNS や証明書を壊しても
+ * 既定ドメインから `/admin/` に入って記事を直せる（`CLOUDFRONT_ORIGIN` の JSDoc の「退路」）。
+ * **サイトの出力が名乗るのはこの 1 本だけ**で、canonical link も sitemap も RSS の guid も
+ * `blog.shutx.net` を指す。
+ *
+ * **`CLOUDFRONT_ORIGIN` に戻しても切り戻しにはならない。** 定数と `SITE_URL` を戻せば次の
+ * ビルドの出力は元の形に戻るが、**一度配信されたフィードは戻らない。** 戻すと全記事が
+ * もう一度「新着」として配られるだけで、損害が 2 倍になる。
  */
-export const SITE_ORIGIN = CLOUDFRONT_ORIGIN;
+export const SITE_ORIGIN = CUSTOM_ORIGIN;
 
 /**
  * 配信オリジンの許可リスト。**Cognito の `CallbackURLs` / `LogoutURLs` とメディアバケットの
@@ -163,8 +173,12 @@ export const SITE_ORIGIN = CLOUDFRONT_ORIGIN;
  *   **不可逆**（上の `SITE_ORIGIN` のコメント）。
  *
  * **順序を入れ替えないこと。** 機能は変わらないが、テンプレートには配列として描画されるので
- * 並べ替えただけで `cdk diff` に差分が出る。先頭が正のオリジンであること自体にも意味がある
- * （`describe-user-pool-client` や Cognito コンソールを目で見るとき、先頭が最初に目に入る）。
+ * 並べ替えただけで `cdk diff` に差分が出る（CORS と Cognito の 2 リソースが更新される）。
+ * **先頭は正のオリジンではない。** ここは追加順のままで、`SITE_ORIGIN` が `CUSTOM_ORIGIN` に
+ * 移ったあとも `CLOUDFRONT_ORIGIN` が先頭に残っている。「正を先頭に」と並べ替えたくなるが、
+ * 得られるのは `describe-user-pool-client` を目で見たときの見た目だけで、代わりに意味の無い
+ * 差分と deploy が 1 回要る。`test/site-origins.test.ts` が期待値をリテラルの順序付き配列で
+ * 固定しているので、並べ替えるとそこが落ちる。
  *
  * 配信ドメインが変わったときは `describe-stacks` の Output `DistributionDomainName` と
  * 突き合わせること（手順は infra/README.md）。
