@@ -14,6 +14,7 @@ import { AdminAuth } from './admin-auth.ts';
 import { MediaBucket } from './media-bucket.ts';
 import { PostingApi } from './posting-api.ts';
 import {
+  ASTRO_ASSETS_CACHE_CONTROL,
   HSTS_MAX_AGE_SECONDS,
   MEDIA_CACHE_CONTROL,
   REFERRER_POLICY,
@@ -45,6 +46,68 @@ export const MEDIA_PATH_PATTERN = '/media/*';
  * test/distribution-oac.test.ts が論理 ID 集合を固定している。
  */
 export const API_PATH_PATTERN = '/api/*';
+
+/**
+ * Astro がビルドした資産（CSS / JS）に振り分けるパス。**サイト側で唯一 immutable を返す。**
+ *
+ * `_astro` は Astro の `build.assets` の既定値で、`site/astro.config.mjs` はそれを上書きして
+ * いない。長く持たせられる根拠（vite が名前に内容ハッシュを入れる）と、その前提を固定して
+ * いるテストは `ASTRO_ASSETS_CACHE_CONTROL` の JSDoc にまとめてある。
+ *
+ * **admin はここに入らない。** `admin/vite.config.ts` が `base: '/admin/'` を宣言するので
+ * 出力は `/admin/assets/*`（実測 391 ファイル）で、このパターンには一致しない。admin の資産は
+ * デフォルトビヘイビア経由の `no-cache` のままで、それは意図した判断である（`mediaResponseHeaders`
+ * の上のコメント）。
+ *
+ * # **`additionalBehaviors` の末尾に置くこと**
+ *
+ * 理由は既存 2 要素（`/media/*` -> `/api/*`）の位置を動かさないため。実測:
+ *
+ * | 実装 | Origins | OAC | OAC の論理 ID |
+ * | --- | --- | --- | --- |
+ * | `siteOrigin` を再利用・**末尾**に追加（これ） | 3 | 3 | 3 本とも 1 文字も変わらない |
+ * | `siteOrigin` を再利用・先頭に追加 | 3 | 3 | 同じく不変。ただし `CacheBehaviors` 配列の並びが動く |
+ * | `withOriginAccessControl` をもう 1 回呼ぶ | **4** | **4** | `SiteDistributionOrigin4S3OriginAccessControl505731E1` が増える |
+ *
+ * 3 行目は配信用バケットに 2 本目の OAC が生えた状態で、`test/distribution-oac.test.ts` の
+ * 論理 ID 集合が落とす（機構は `siteOrigin` の宣言のコメント）。**ビヘイビアは 1 本増えるが
+ * オリジンは増えない**という形を保つこと。
+ *
+ * # 懸念していた故障モードは起きない: 存在しない `/_astro/*` の 404 は `no-cache`
+ *
+ * `CustomErrorResponses` はディストリビューション全体に効く（ビヘイビア単位ではない）ので、
+ * 消えたファイル名への要求にも `/404.html` の中身が返る。**そこで `immutable` が付くと、
+ * `aws s3 sync --delete` と invalidation の間に古い HTML を受け取った閲覧者が、消えた旧 CSS の
+ * URL を最大 1 年ぶん「無い」と覚えうる** — 当初はそれを新しい故障モードとして書いていた。
+ * **デプロイ後に測った結果、そうはならない。**
+ *
+ * 実測（2026-10-03、デプロイ後の本番）:
+ *
+ * ```sh
+ * curl -sI https://blog.shutx.net/_astro/does-not-exist.css
+ * # => HTTP/2 404 / content-type: text/html / cache-control: no-cache
+ * curl -sI https://blog.shutx.net/media/   # 対照: /media/* に一致するが鍵が無い
+ * # => HTTP/2 404 / content-type: text/html / cache-control: no-cache
+ * ```
+ *
+ * 理由は `/404.html` の出所である。**CloudFront はエラーページの差し替えに、要求が一致した
+ * ビヘイビアのポリシーではなくデフォルトビヘイビアの ResponseHeadersPolicy を当てる。**
+ * `/404.html` は `MEDIA_PATH_PATTERN` にもこのパターンにも一致しない（上のコメント）ので
+ * デフォルトビヘイビア＝配信用バケットから返り、ヘッダもそちらの `SITE_CACHE_CONTROL`
+ * （`no-cache`）に従う。`ErrorCachingMinTTL` の 10 秒はエッジのキャッシュ期間であって
+ * 閲覧者に渡るヘッダではないが、**閲覧者に渡る値がそもそも `no-cache` なので救いは要らない。**
+ *
+ * したがって残るのは `/media/*` が今日すでに持っている性質と同じもので、1 パス増えただけ —
+ * 存在しない資産には HTML の 404 が返り、その 1 回の表示が素のままになる。HTML は `no-cache`
+ * なので次のナビゲーションで検証が走り、新しいファイル名を取りに行って自然に治る。
+ *
+ * **これはテンプレートからは読み取れない**（`CustomErrorResponses` にヘッダの話は書かれて
+ * いない）ので、固定しているのはテストではなく上の 1 回の観測だけである。CloudFront が
+ * この当て方を変えれば黙って元の懸念に戻るので、**ヘッダの付き方を触る変更を入れるときは
+ * 同じ `curl` を打ち直すこと。** 同じ内容は `infra/README.md` の
+ * 「`/_astro/*` は immutable、`/admin/assets/*` は no-cache」にも書いてある。
+ */
+export const ASTRO_ASSETS_PATH_PATTERN = '/_astro/*';
 
 /**
  * CloudFront が自分で配る配信ドメイン。**カスタムドメインを足しても消さないこと。**
@@ -320,10 +383,12 @@ export class SiteStack extends Stack {
     // **ホストは construct から導出する。** 物理名を書くと、片方だけ変わったときに
     // 「ログインだけ動かない」「画像だけ上がらない」という最も分かりにくい壊れ方をする。
     //
-    // ポリシーが 2 本あるのは Cache-Control の値がサイトとメディアで正反対だから（毎回検証させる /
-    // 1 年持たせる）。**セキュリティヘッダのほうは同一でなければならない**ので、ローカル変数に
-    // 括り出して値の出所を 1 つにしておく。2 箇所に書くと CSP に connect-src を足した日に
-    // 片方だけ古くなる。
+    // ポリシーが 3 本あるのは Cache-Control の値がパスごとに違うから。サイトは毎回検証させ
+    // （`no-cache`）、メディアと `/_astro/*` は 1 年持たせる（`immutable`）。後者 2 本は**値が
+    // 同じでも根拠が別**なので定数も別にしてある（`response-headers.ts` の JSDoc）。
+    // **セキュリティヘッダのほうは 3 本で同一でなければならない**ので、ローカル変数に
+    // 括り出して値の出所を 1 つにしておく。3 箇所に書くと CSP に connect-src を足した日に
+    // どれかだけ古くなる。distribution-response-headers.test.ts が 3 本の一致を固定している。
     const securityHeadersBehavior: cloudfront.ResponseSecurityHeadersBehavior = {
       contentSecurityPolicy: {
         contentSecurityPolicy: buildCsp({
@@ -375,11 +440,17 @@ export class SiteStack extends Stack {
 
     // メディア用。セキュリティヘッダは上と同一で、Cache-Control だけが違う。
     //
-    // admin/dist/assets の Vite ハッシュ付きファイル（実測 391 個、shiki の文法定義）も
-    // デフォルトビヘイビア経由なので no-cache になる。**それでよしとする** — 利用者は 1 人、
-    // 遅延ロードで実際に読むのは数本、CloudFront にキャッシュがあるので 304 が返り S3 には行かない。
-    // 必要になったら専用ビヘイビアを足すより、ハッシュ付き資産だけ s3 sync --cache-control で
-    // 長い値を付けるほうが安い。
+    // **`/admin/assets/*` は引き続きデフォルトビヘイビア経由の `no-cache` である。**
+    // Vite のハッシュ付きファイル（実測 391 個、shiki の文法定義）なので中身は不変だが、
+    // `admin/vite.config.ts` が `base: '/admin/'` を宣言するので下の `/_astro/*` には
+    // 一致しない。**それでよしとする** — 利用者は 1 人、遅延ロードで実際に読むのは数本、
+    // CloudFront にキャッシュがあるので 304 が返り S3 には行かない。
+    //
+    // **伸ばしたくなったら専用ビヘイビアを足すこと。`aws s3 sync --cache-control` は使わない**
+    // （以前このコメントはそちらを勧めていた。AGENTS.md が明文で禁じているものだった）。
+    // sync の比較はサイズと更新時刻だけで**メタデータを見ない**ので、内容が変わっていない
+    // オブジェクトは古いヘッダのまま取り残される。加えて Cache-Control の定義が S3 と CDK の
+    // 2 箇所に分かれる（同じ理由が `SITE_CACHE_CONTROL` の JSDoc にも書いてある）。
     const mediaResponseHeaders = new cloudfront.ResponseHeadersPolicy(this, 'MediaHeaders', {
       responseHeadersPolicyName: `${Stack.of(this).stackName}-media-headers`,
       comment: 'CSP ほか + Cache-Control: immutable（キーがランダムで上書きされない）',
@@ -387,6 +458,24 @@ export class SiteStack extends Stack {
       customHeadersBehavior: {
         customHeaders: [
           { header: 'Cache-Control', value: MEDIA_CACHE_CONTROL, override: true },
+        ],
+      },
+    });
+
+    // Astro の資産（`/_astro/*`）用。**3 本目。** セキュリティヘッダは上 2 本と同一で、
+    // Cache-Control だけが違う。値はメディアと同じだが**真である条件が別**なので、定数も
+    // 別にしてある（`ASTRO_ASSETS_CACHE_CONTROL` の JSDoc）。
+    //
+    // **論理 ID は 'AssetsHeaders' のまま。** 変えると CloudFormation は「削除して作り直す」と
+    // 解釈し、ビヘイビアの差し替えと削除の順序で失敗しうる。名前も
+    // `${stackName}-assets-headers` のままにする（実測で `BlogSiteStack-assets-headers`）。
+    const assetsResponseHeaders = new cloudfront.ResponseHeadersPolicy(this, 'AssetsHeaders', {
+      responseHeadersPolicyName: `${Stack.of(this).stackName}-assets-headers`,
+      comment: 'CSP ほか + Cache-Control: immutable（vite が内容ハッシュを付ける）',
+      securityHeadersBehavior,
+      customHeadersBehavior: {
+        customHeaders: [
+          { header: 'Cache-Control', value: ASTRO_ASSETS_CACHE_CONTROL, override: true },
         ],
       },
     });
@@ -422,9 +511,75 @@ export class SiteStack extends Stack {
     // withOriginAccessControl は OAC リソースの作成とバケットポリシーの更新を
     // まとめて行う。手で addToResourcePolicy すると文が重複するので書かない。
     // 既定の originAccessLevels は [READ] なので読み取り専用。
+    //
+    // **配信用バケットのオリジンはこの 1 インスタンスだけを作り、デフォルトと `/_astro/*` の
+    // 2 つのビヘイビアで使い回す。呼び出しを 2 回に分けるとテンプレートが変わる。**
+    //
+    // `Distribution.addOrigin` は `boundOrigins.find(b => b.origin === origin)` と
+    // **インスタンス同一性**で既存のオリジン ID を引き当てる（aws-cdk-lib 2.267.0 の実装）。
+    // `withOriginAccessControl` は呼ぶたびに別のオブジェクトを返すので、同じバケットに対して
+    // 2 回呼ぶと `Origin4` のスコープが生え、**2 本目のオリジンと 2 本目の OAC**（実測
+    // `SiteDistributionOrigin4S3OriginAccessControl505731E1`）がデプロイされる。使い回すほうは
+    // `S3BucketOriginWithOAC.bind` が `this.originAccessControl ||` で自分の OAC を再利用するので
+    // 1 本に留まる。`test/distribution-oac.test.ts` が OAC の論理 ID 集合をリテラルで固定して
+    // いるので、2 回呼ぶ実装はそこで落ちる。
+    const siteOrigin = origins.S3BucketOrigin.withOriginAccessControl(siteBucket);
+
     const distribution = new cloudfront.Distribution(this, 'SiteDistribution', {
       // defaultRootObject はルート '/' にしか効かない。/about は Function 側が担当する。
       defaultRootObject: 'index.html',
+      // **HTTP/3（QUIC）も受ける。** 下の `minimumProtocolVersion` と同じ「既定に任せない」の線
+      // だが、性格が 1 つ違う — あちらは既定と**同値**を書き写した保険で、こちらは既定
+      // （`http2`）と**違う値**なので行そのものが機能を担っている。そして消えたときの見え方が
+      // 悪い: aws-cdk-lib 2.267.0 の実装は `this.httpVersion = props.httpVersion ?? HttpVersion.HTTP2`
+      // なので、**この行を消してもテンプレートから `HttpVersion` が消えるのではなく `"http2"` が
+      // 描画される。** 欠けたようには見えないまま HTTP/3 だけが無効に戻るので、
+      // `test/distribution-behavior.test.ts` がテンプレート上の値を `'http2and3'` で
+      // リテラル固定している。
+      //
+      // 描画先は `DistributionConfig.HttpVersion` の 1 行だけで、**ビヘイビアもオリジンも OAC も
+      // 1 文字も動かない**（実測。`cdk diff` は Distribution の in-place 更新 1 件、置換は無い）。
+      // 効くのは**ビューアとの接続だけ**で、CloudFront からオリジンへの接続には関係しない。
+      //
+      // 得るもの: QUIC は TCP の 3-way と TLS の握手を畳んで 2 RTT を 1 RTT にする。実測
+      // （2026-10-03、国内から本番）の握手は connect 34 ms / tls 56 ms なので、**取れるのは
+      // 握手 1 往復ぶんだけ**で転送そのものは速くならない。`HTTP3` 単独ではなく `HTTP2_AND_3`
+      // なので退路は常にある — CloudFront の HTTP/3 は TLS1.3 と SNI を話せるビューアにだけ
+      // 使われ、話せないビューアや UDP/443 が塞がれている経路は h2 のまま通る。
+      //
+      // 効いたかどうかの見方: 有効なら応答に `alt-svc: h3=":443"; ma=86400` が付く。
+      // **有効化前の `blog.shutx.net` には無かった**ことを実測済み（2026-10-03）。正の対照は
+      // h3 が有効な CloudFront である `d1.awsstatic.com` で、あちらはこのヘッダを返す。
+      //
+      // **反対側の実測（見込みが崩れたら判断を見直すこと）。** PSI mobile のスコアを作る
+      // Lighthouse の Lantern は **h3 をモデル化していない** — `ConnectionPool.js:46` が
+      // `request.protocol === 'h2'` とリテラル比較しており、`'h3'` は非多重化（1 オリジン
+      // 6 本の HTTP/1.1 相当）として扱われる。同じ `TCPConnection` を rtt 150 ms / 1.6 Mbps で
+      // 走らせた実測では、同一オリジン 2 本目の CSS 1846 B は h2 なら **0 ms**、h2 扱いされないと
+      // **150 ms**。**PSI が h3 を記録したら、シミュレートされる FCP / LCP が 150 ms 悪化しうる。**
+      //
+      // そうならないと見込んだ根拠は 2 つあった。**うち 1 つは有効化後に崩れた。**
+      // (a) PSI は毎回クリーンプロファイルなので `alt-svc` のキャッシュを持たない — これは今も有効。
+      // (b) CloudFront の DNS HTTPS(SVCB) RR が h3 を広告していない — **これは崩れた。**
+      //
+      // RR は `d8gsxbwzr6ft8.cloudfront.net` に付いていて **TTL 60 秒**で、有効化の前後で
+      // こう動いた（実測）:
+      //
+      //   有効化前（2026-10-03 22:49）        1 . alpn="h2"
+      //   デプロイ直後（23:35）                1 . alpn="h2"      <- まだ切り替わっていない
+      //   約 25 分後（翌 00:0x）               1 . alpn="h2,h3"   <- system / 1.1.1.1 / 8.8.8.8 で一致
+      //
+      // **Chrome は HTTPS(SVCB) の `alpn` を見て初回接続から QUIC を試すので、PSI が h3 を
+      // 記録しうる状態になった = 上の 150 ms の下振れは仮定ではなく現実の可能性である。**
+      // （RR を書き換える AWS 側の規則は観測できていない。値の変化だけを測った。）
+      //
+      // **したがって次にやることは PSI の FCP / LCP の実測である。** 悪化していたら
+      // `HTTP2` に戻す — 直すのはこの行、`test/distribution-behavior.test.ts` の
+      // `'http2and3'` のリテラル、README の「HTTP/3 を有効にする」の 3 箇所。
+      // 悪化していなければ、Lantern の挙動がこのサイトの構成（リクエスト 2 本・
+      // 合計 2582 B で初期輻輳ウィンドウに収まる）では効いていないということなので、
+      // その実測値を README に足して判断を確定させる。
+      httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       // **この 3 つは `DistributionConfig` 直下の `Aliases` と `ViewerCertificate` にしか
       // 描画されない。** `renderOrigins()` も `additionalBehaviors` も通らないので、
       // **OAC の論理 ID 集合（上の `API_PATH_PATTERN` のコメント）もビヘイビア件数 3 も不変**
@@ -445,7 +600,8 @@ export class SiteStack extends Stack {
       // `sslSupportMethod` は書かない。既定が `sni-only` で、`vip`（専用 IP）は
       // 月 600 USD 付く。SNI を話せないクライアントは相手にしない。
       defaultBehavior: {
-        origin: origins.S3BucketOrigin.withOriginAccessControl(siteBucket),
+        // **`/_astro/*` と同じインスタンスであること**（上の `siteOrigin` の宣言）。
+        origin: siteOrigin,
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         // **admin もここから配信される**（/admin/* 専用のビヘイビアは無い）。
         responseHeadersPolicy: responseHeaders,
@@ -493,6 +649,25 @@ export class SiteStack extends Stack {
           originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
           // functionAssociations は付けない。URI 書き換え Function は拡張子の無いパスに
           // /index.html を足すので、/api/posts が /api/posts/index.html になってしまう。
+        },
+        // Astro の資産。**末尾に置く**（上の ASTRO_ASSETS_PATH_PATTERN のコメント）。
+        //
+        // origin は**デフォルトと同じ `siteOrigin` インスタンス**。同じバケットなので
+        // オリジンは増えず、ビヘイビアだけが 1 本増える（Origins 3 / OAC 3 のまま）。
+        //
+        // functionAssociations は付けない。`rewrite-uri.js` は最終セグメントにドットがある URI を
+        // 素通しするので `/_astro/Layout.<hash>.css` に対しては何もしないが、
+        // distribution-behavior.test.ts が「デフォルト以外に Function が付いていない」を
+        // 全ビヘイビア走査で固定している。
+        //
+        // cachePolicy も allowedMethods も指定しない（既定の Managed-CachingOptimized と
+        // GET/HEAD のまま）。**エッジの TTL を 1 年にする独自キャッシュポリシーは作らない** —
+        // 閲覧者に届く Cache-Control を決めるのは下の responseHeadersPolicy のほうで、
+        // 違いは POP ごとに 1 日 1 回 S3 まで検証に行くかどうかだけ。閲覧者から見える差は無い。
+        [ASTRO_ASSETS_PATH_PATTERN]: {
+          origin: siteOrigin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          responseHeadersPolicy: assetsResponseHeaders,
         },
       },
       // **403 も入れるのが本質。** OAC + S3 REST オリジンではバケットポリシーに s3:ListBucket が

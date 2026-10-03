@@ -130,8 +130,42 @@ export const SITE_CACHE_CONTROL = 'no-cache';
  *
  * **キーの作り方を変えるなら、ここも一緒に変えること。** 決め打ちのキーやファイル名由来の
  * キーにした瞬間に、この宣言は嘘になる。
+ *
+ * **下の `ASTRO_ASSETS_CACHE_CONTROL` と値は同じだが、別の定数である。** 真である条件が
+ * 違うので、片方の条件が変わっても他方を巻き込まない（理由はそちらの JSDoc）。
  */
 export const MEDIA_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+
+/**
+ * `/_astro/*`（Astro がビルドした CSS / JS）が返す `Cache-Control`。1 年 + `immutable`。
+ *
+ * **真である条件は「同じ URL が二度と別の中身を返さない」こと。** vite は
+ * `_astro/<名前>.<内容ハッシュ>.<拡張子>` という名前で出力する（実測は 1 ファイル、
+ * `_astro/Layout.3W-5Im-W.css`）。CSS を 1 バイト直せばハッシュが変わって別の URL になり、
+ * それを指す HTML は `SITE_CACHE_CONTROL`（`no-cache`）なので必ず検証されて新しい名前が届く。
+ * したがって「古い URL を 1 年キャッシュしたまま」でも古いページは生まれない。
+ *
+ * 前提が 2 つあり、**どちらもこのファイルでは保証できないのでテストが固定している。**
+ *
+ *   1. **出力先が `_astro` であること。** これは Astro の `build.assets` の既定値
+ *      （`astro/dist/core/config/schemas/defaults.js` の `assets: "_astro"`）で、
+ *      `site/astro.config.mjs` は `build.assets` も `build.assetsPrefix` も書いていない。
+ *      書いた日に CloudFront 側のパターン（`ASTRO_ASSETS_PATH_PATTERN`）に一致しなくなり、
+ *      **ヘッダは静かに `no-cache` へ戻る**（何も壊れたように見えない）。
+ *      `site/test/unit/stylesheets.test.ts` が両者の不在を主張する。
+ *   2. **名前に内容ハッシュが入り、そもそも外部ファイルとして出ること。**
+ *      後者は `site/astro.config.mjs` の `build.inlineStylesheets: "never"` が宣言し、
+ *      同じ `stylesheets.test.ts` が値を固定する（既定の `"auto"` はビルド後のサイズが
+ *      vite の 4096 B を下回ると勝手にインライン化し、`dist/_astro/` が空になる）。
+ *      前者は `site/test/build/` が `dist/_astro/` の実ファイル名を走査して主張する。
+ *
+ * **`MEDIA_CACHE_CONTROL` と同値だが共有しない。** 値が一致しているのは結果で、根拠が別物
+ * （メディアは**キーがランダム**で二度使われない / `_astro` は**中身のハッシュ**が名前に入る）。
+ * 1 本に寄せると、どちらかの根拠が崩れた日に**両方が参照している宣言**を触ることになり、
+ * 無関係なパスのキャッシュ戦略を道連れにする。3 本のポリシーでセキュリティヘッダが
+ * 一致していることは `infra/test/distribution-response-headers.test.ts` が別に固定している。
+ */
+export const ASTRO_ASSETS_CACHE_CONTROL = 'public, max-age=31536000, immutable';
 
 /**
  * CSP を組み立てる。
