@@ -99,7 +99,17 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-body);
-  font-size: 1.0625rem;
+  /*
+   * 1rem -- the reader's own default. 1.0625rem (17px) read as slightly large
+   * for Japanese against --leading 1.9. Redundant with the inherited value, and
+   * kept anyway: this is the line to edit.
+   *
+   * Editing it moves the prose and nothing else. Every other size in this file
+   * is in rem, measured against the root rather than against this, so the
+   * headings, the listing titles, the code slab, the table and the footer stay
+   * where they are. The knob for the whole page is a font-size on `html`.
+   */
+  font-size: 1rem;
   line-height: var(--leading);
   /* Japanese line breaking: keep kinsoku rules strict, and let long unbroken
      Latin (URLs, hashes) wrap instead of widening the page. */
