@@ -41,27 +41,29 @@ const MINIMUM_HEADINGS = 2;
 /**
  * The headings of one post, as the contents bar should show them.
  *
- * 1. Only h2 and h3 become entries. A depth-1 heading in the body is a *second* h1 on
- *    the page -- `<article>` already opens with the post title as its h1 -- so it is
- *    the title's sibling, not one of the title's sections. From h4 down the heading is
- *    no longer a landmark a reader navigates by: global.css deliberately leaves
- *    `article h4` at the body font size and lets weight and colour carry it, and in a
- *    bar a fraction of the body's width those headings wrap to three lines each.
+ * 1. Only h2 and h3 become entries ("takes only h2 and h3"). A depth-1 heading in the
+ *    body is a *second* h1 -- `<article>` already opens with the post title as its h1
+ *    -- so it is the title's sibling, not one of its sections. From h4 down a heading
+ *    is no longer a landmark a reader navigates by: global.css leaves `article h4` at
+ *    the body font size, and in a bar a fraction of the body's width those headings
+ *    wrap to three lines each.
  *
- * 2. A heading whose slug is empty is dropped. It happens: github-slugger strips
- *    punctuation-only text down to nothing, so `## ：：：` renders as `<h2 id="">`
- *    (measured). `href="#"` does not scroll to that heading, it jumps to the top of the
- *    document -- an entry that quietly lies is worse than a missing one.
+ * 2. A heading whose slug is empty is dropped ("drops an h2 whose slug is empty"). It
+ *    happens: github-slugger strips punctuation-only text down to nothing, so
+ *    `## ：：：` renders as `<h2 id="">` (measured). `href="#"` does not scroll to that
+ *    heading, it jumps to the top of the document -- an entry that quietly lies is
+ *    worse than a missing one.
  *
- * 3. An h3 nests under the h2 above it. An h3 with no h2 above it becomes its own
- *    top-level entry rather than being dropped, because dropping it would leave the
- *    heading in the body and absent from the contents. Two such h3s in a row become
- *    two entries, not one inside the other: they are siblings in the document, so the
- *    check below is "is the open section an h2?" and not "is a section open?".
+ * 3. An h3 nests under the h2 above it; one with no h2 above it becomes its own
+ *    top-level entry ("promotes h3s with no h2 above them") rather than being dropped,
+ *    which would leave the heading in the body and absent from the contents. Two such
+ *    h3s in a row are siblings in the document, so they become two entries and the
+ *    check below asks "is the open section an h2?" and not "is a section open?".
  *
- * 4. Below MINIMUM_HEADINGS entries the answer is `[]`. A one-entry contents is a link
- *    to the only section of the post, which the reader reaches by scrolling once; it
- *    spends a column of the viewport to say nothing.
+ * 4. Below MINIMUM_HEADINGS entries the answer is `[]` ("returns nothing for a lone
+ *    h2"). A one-entry contents is a link to the only section of the post, which the
+ *    reader reaches by scrolling once; it spends a column of the viewport to say
+ *    nothing.
  *
  * Neither the given array nor the heading objects are modified -- `render(post).headings`
  * is astro's own array, and anything else on the page reading it sees the same one. The
@@ -79,10 +81,9 @@ export const buildToc = (headings: readonly TocHeading[]): TocSection[] => {
 
   const sections: TocSection[] = [];
   for (const heading of entries) {
-    // `at(-1)` is typed TocSection | undefined -- unlike `[length - 1]`, which this
-    // tsconfig (astro/tsconfigs/strict, no noUncheckedIndexedAccess) would type as
-    // TocSection. That is what lets rule 3's promotion be a plain `else` rather than a
-    // non-null assertion on an element that is genuinely absent for the first heading.
+    // `at(-1)`, not `[length - 1]`: this tsconfig sets no noUncheckedIndexedAccess, so
+    // the index form would be typed TocSection and rule 3's `else` would need a
+    // non-null assertion on an element genuinely absent for the first heading.
     const open = sections.at(-1);
 
     if (heading.depth === SUBSECTION_DEPTH && open?.heading.depth === SECTION_DEPTH) {

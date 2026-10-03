@@ -4,17 +4,21 @@
  * is nothing to fetch and nowhere to fetch it from. Web fonts are not an option;
  * the stacks below are what the reader already has.
  *
- * `style-src 'self'` is also why this file is the only place rules may go. An
- * inline <style> block is refused outright, so a handful of page-scoped rules
- * would ship inline, be blocked, and leave that one page unstyled with nothing
- * else going red. What this file itself cannot do is go inline: astro.config.mjs
+ * This file is also the only place rules may go, but not for the reason it is
+ * tempting to write: under build.inlineStylesheets: "never" a page-scoped block
+ * is not inlined and not blocked -- it is emitted as a second external
+ * stylesheet (measured), which costs that page a second render-blocking request
+ * and splits one shared cached file into two. The guard is
+ * site/test/build/output.test.ts's `emits exactly one stylesheet`; the inline
+ * <style> count stays zero, so the admin guard does not see it.
+ * What this file itself cannot do is go inline: astro.config.mjs
  * declares build.inlineStylesheets: "never", so it is served as an external
- * /_astro/Layout.*.css at any size -- two thirds of the bytes below are comment,
- * and trimming them (or anything else) cannot put the page's styling at the mercy
- * of vite's 4096 B inlining threshold. The one 'unsafe-inline' the policy still
- * grants is on `style-src-attr`, and it is there for the `style="color:#..."`
- * attributes shiki writes into code fences -- see infra/lib/response-headers.ts,
- * which owns both halves of that split.
+ * /_astro/Layout.*.css at any size -- trimming the comments below (or anything
+ * else) cannot put the page's styling at the mercy of vite's 4096 B inlining
+ * threshold. The one 'unsafe-inline' the policy still grants is on
+ * `style-src-attr`, and it is there for the `style="color:#..."` attributes shiki
+ * writes into code fences -- see infra/lib/response-headers.ts, which owns both
+ * halves of that split.
  *
  * Still not covered by tests, on purpose. Any assertion specific enough to pin a
  * colour or a margin breaks on the first honest restyle. The HTML structure the
@@ -66,25 +70,22 @@
    * blocks of full-width glyphs with no ascender/descender rhythm to separate
    * the lines visually, so it needs the leading to stay readable.
    *
-   * It came down 1.9 -> 1.8 -> 1.7, and 1.7 is the bottom of the range Japanese
-   * body text wants (1.7-2.0). It sits at that bottom while --measure sits at
-   * its widest, which is the one combination the two tokens disagree about: a
-   * 45-character line leans on the leading to find its way back to the left
-   * edge. Both are at their tight end now, so anything further has to come out
-   * of --measure rather than out of here.
+   * 1.7 is the bottom of the range Japanese body text wants (1.7-2.0), and it
+   * sits there while --measure sits at its widest -- the one combination the two
+   * tokens disagree about, because a 45-character line leans on the leading to
+   * find its way back to the left edge. Anything further has to come out of
+   * --measure rather than out of here.
    */
   --leading: 1.7;
   /*
    * The border box of all three columns -- header, main, footer -- so the inner
    * width is 40px less than this: 768 - 2x20 = 728px. At a 16px body that is
    * about 45 full-width Japanese characters to the line, the top of the
-   * comfortable range, and wide enough that Shiki's slab scrolls sideways less
-   * often than it did.
+   * comfortable range.
    *
    * What reads is the character count, not the width, so this token has to move
-   * whenever the body size does. It sat at 42rem (632px inner) while the body
-   * was 17px, which came to 37 characters; dropping the body to 16px stretched
-   * that same column to 39.5 with nothing here changing.
+   * whenever the body size does -- changing the body size alone silently
+   * restretches this column.
    */
   --measure: 48rem;
 
@@ -141,10 +142,9 @@ body {
    * for Japanese against this page's leading. Redundant with the inherited
    * value, and kept anyway: this is the line to edit.
    *
-   * Editing it moves the prose and nothing else. Every other size in this file
-   * is in rem, measured against the root rather than against this, so the
-   * headings, the listing titles, the code slab, the table and the footer stay
-   * where they are. The knob for the whole page is a font-size on `html`.
+   * Editing it moves the prose and nothing else, because every other size here
+   * is in rem against the root. The knob for the whole page is a font-size on
+   * `html`.
    */
   font-size: 1rem;
   line-height: var(--leading);
@@ -242,8 +242,7 @@ main {
  * -- three underlined labels side by side read as a band of rules rather than as
  * text -- and it is safe here in a way it would not be inside prose: every word
  * in the footer is a link, so there is no surrounding text that colour alone
- * would have to distinguish them from. Hover puts the underline back. This does
- * restyle the RSS link, which until now was an ordinary underlined one.
+ * would have to distinguish them from. Hover puts the underline back.
  */
 .site-footer__nav {
   display: flex;
@@ -306,18 +305,15 @@ main {
  * The contents bar: the post's h2/h3 ladder, set in the margin to the right of
  * the column. `position: fixed` is the whole reason it may exist here at all.
  * An out-of-flow box takes no room in the flow, so nothing around it moves and
- * main keeps the width and the position it has today -- which mattered more
- * than usual: --measure and --leading were argued into place across the four
- * releases before this one, both now sit at the tight end of their range, and
- * the margin beside the column is the only space left on the page that can be
- * spent without reopening either of them.
+ * main keeps the width and the position it has -- which matters here because
+ * --measure and --leading both sit at the tight end of their range, so the
+ * margin beside the column is the only space left on the page that can be spent
+ * without reopening either of them.
  *
  * It does not follow the scroll, and it does not mark the section being read.
- * Both want an IntersectionObserver, and dist/ carries zero <script> tags
- * today: `script-src 'self' 'wasm-unsafe-eval'` in infra/lib/response-headers.ts
- * grants neither 'unsafe-inline' nor a nonce, so moving an underline would cost
- * an external file fetched on every post page. PostToc.astro makes the same
- * note from the markup side.
+ * Both want an IntersectionObserver, and dist/ carries zero <script> tags -- see
+ * PostToc.astro, which carries the CSP reason that makes that a decision rather
+ * than an omission.
  *
  * Where it lands, against a 768px --measure:
  *
@@ -359,9 +355,8 @@ main {
      one-line entry wants it tight. */
   font-size: 0.8125rem;
   /* Last, because the query below is the one line that undoes it. Hidden is the
-     default state and not the exception: being out of the flow is what keeps
-     main still, and a bar that is not out of the flow would sit between the
-     date and the title and push the whole post down the page. */
+     default state and not the exception: a bar that is not out of the flow would
+     sit between the date and the title and push the whole post down the page. */
   display: none;
 }
 
@@ -379,8 +374,8 @@ main {
  * its own heading navigation whatever this box does.
  *
  * A media query's `width` counts the classic scrollbar that `50%` does not, so
- * where one is present the bar at the breakpoint comes out half a scrollbar
- * narrower than 168px -- around 8px -- and reaches --toc-width equally late.
+ * where one is present the bar at the breakpoint comes out ~8px narrower than
+ * 168px.
  *
  * This is also why no `@media print` rule stands beside it. A page box is 794px
  * across for A4 and 816px for Letter -- 1122px and 1056px turned sideways --
@@ -424,14 +419,10 @@ main {
 }
 
 /*
- * Undecorated, the call `.post__back a`, `.pager a` and `.site-footer__nav a`
- * have already made, and it is safe here for the reason it is safe there: every
- * word in this box is a link, so there is no surrounding prose that colour
- * alone would have to tell them apart from. --muted rather than --accent,
- * because a dozen accent-coloured lines in the margin would compete with the
- * post for attention -- the bar is for glancing at, not for reading. Hover puts
- * the underline back, and :focus-visible is global, so keyboard use needs
- * nothing from here.
+ * Undecorated for the reason `.site-footer__nav` gives: every word in the box is
+ * a link. --muted rather than --accent, because a dozen accent-coloured lines in
+ * the margin would compete with the post for attention -- the bar is for glancing
+ * at, not for reading. Hover puts the underline back; :focus-visible is global.
  */
 .post__toc a {
   color: var(--muted);
@@ -452,19 +443,18 @@ article {
 }
 
 /*
- * The heading ladder, against a 16px body: 24-30 / 21 / 18 / 16. One step down
- * from where it started (28-36 / 24 / 20 / 16) -- 36px of title over the text
- * column read as louder than the writing under it.
+ * The heading ladder, against a 16px body: 24-30 / 21 / 18 / 16. The ceiling is
+ * a judgment: 36px of title over this text column read as louder than the
+ * writing under it.
  *
- * h2 and h3 come down with the titles rather than staying put, and they have to:
- * the h1 clamp bottoms out at its floor on a narrow phone, so a 24px floor over
- * an unmoved 24px h2 would leave the page title no larger than the sections
- * inside it. Lowering a title is therefore never a one-line change here.
+ * h2 and h3 have to come down with the h1: the clamp bottoms out at its floor on
+ * a narrow phone, so a 24px floor over an unmoved 24px h2 would leave the page
+ * title no larger than the sections inside it. Lowering a title is therefore
+ * never a one-line change here.
  */
 article > h1 {
   margin-block: 0.2em 1.5rem;
-  /* 24px up to a 400px viewport, 30px from 900px up, linear between. Those two
-     breakpoints are unchanged; only the endpoints moved. */
+  /* 24px up to a 400px viewport, 30px from 900px up, linear between. */
   font-size: clamp(1.5rem, 1.2rem + 1.2vw, 1.875rem);
   line-height: 1.35;
   letter-spacing: 0.01em;
@@ -743,12 +733,8 @@ main > h1 {
 /*
  * Body colour, not --muted: this is the sentence the reader uses to decide, so
  * dimming it would work against the entry. The title carries the emphasis by
- * weight and size instead -- and 14px is what keeps that step legible now the
- * title is 17px, while holding the ratio to the body the entry already had
- * (15/17 then, 14/16 now).
- *
- * Shrinking it and dimming it at once would be spending both; only one of the
- * two is available here, and the colour is the one being kept.
+ * weight and size instead: 14px against a 17px title is what keeps that step
+ * legible without also dimming it.
  */
 .post-list__summary {
   margin: 0;

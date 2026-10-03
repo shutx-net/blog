@@ -119,7 +119,7 @@ describe("POSTS_PER_PAGE", () => {
 });
 
 describe("formatPubDate", () => {
-  it("writes the date the way a Japanese reader expects", () => {
+  it("writes the date with 年 / 月 / 日", () => {
     expect(formatPubDate(new Date("2026-09-08T05:40:01.000Z"))).toBe("2026年9月8日");
   });
 

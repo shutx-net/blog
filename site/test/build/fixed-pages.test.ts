@@ -4,8 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-// dist/ is produced once by test/setup/build-site.ts (globalSetup). These tests
-// only read it -- they never trigger a build of their own.
+// Reads dist/, built once by test/setup/build-site.ts (globalSetup).
 const distDir = fileURLToPath(new URL("../../dist/", import.meta.url));
 
 const readDist = (relativePath: string): string =>
@@ -124,7 +123,7 @@ describe("site chrome links", () => {
   // literal is confirmed through dist/, which neither side can edit.
   const EXPECTED_CHROME_LINKS = ["/", "/about/", "/privacy/", "/rss.xml"];
 
-  it("links exactly the paths the chrome is meant to link", () => {
+  it("links exactly /, /about/, /privacy/ and /rss.xml", () => {
     // Both sides sorted, because the claim is about the set and not the order.
     expect(chromeLinks()).toEqual([...EXPECTED_CHROME_LINKS].sort());
   });
@@ -188,7 +187,7 @@ describe("site chrome links", () => {
   // label more than the pager does: it is on every page, so on a post page it is
   // one of three <nav> landmarks, and an unlabelled one is offered to a screen
   // reader as a bare "navigation" in the list it builds of them.
-  it("labels the footer nav so it is not a bare landmark", () => {
+  it("gives the footer nav an aria-label", () => {
     expect(sliceElement(readDist("index.html"), "footer")).toContain('aria-label="サイト情報"');
   });
 });

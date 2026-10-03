@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import config from "../../astro.config.mjs";
 import { defined } from "../support/defined.ts";
 
-// This suite is the only effective guard on AGENTS.md's non-negotiable decision 1
+// This suite is the only effective guard on AGENTS.md's "### Markdown" rule
 // ("use @astrojs/markdown-remark explicitly"). The generated HTML cannot protect it:
 // the default Satteri processor and unified() differ by exactly one trailing newline
 // for this kind of Markdown, so no assertion on dist/ output would notice the
