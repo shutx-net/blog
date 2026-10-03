@@ -65,7 +65,8 @@ npx -w infra cdk diff        # deploy の前に必ず。PR 本文に貼る（AGE
 | `AWS::S3::BucketPolicy` | `MediaBucketPolicyB24E187B` | 同上（`AWS:SourceArn` はこのディストリビューションに限定） |
 | `AWS::CloudFront::OriginAccessControl` | `SiteDistributionOrigin1S3OriginAccessControl7D960FE6` | 配信用オリジン。`s3` / `always` / `sigv4` |
 | `AWS::CloudFront::OriginAccessControl` | `SiteDistributionOrigin2S3OriginAccessControlE0FE6FAA` | メディア用オリジン。同上（**OAC はオリジンごとに別**） |
-| `AWS::CloudFront::Distribution` | `SiteDistribution3FF9535D` | `redirect-to-https` / `DefaultRootObject: index.html` / `/media/*` の追加ビヘイビア / 403・404 を `/404.html` にマップ |
+| `AWS::CloudFront::Distribution` | `SiteDistribution3FF9535D` | `redirect-to-https` / `DefaultRootObject: index.html` / 追加ビヘイビア 3 本（`/media/*` -> `/api/*` -> `/_astro/*` の順。順序に意味がある） / **`HttpVersion: http2and3`** / 403・404 を `/404.html` にマップ |
+| `AWS::CloudFront::ResponseHeadersPolicy` | `AssetsHeaders4F00D1B8` | **`/_astro/*` 用**（`Name` は `BlogSiteStack-assets-headers`）。セキュリティヘッダは他 2 本（`SecurityHeadersE66B69D3` / `MediaHeadersD7B00C3A`）と**同一**で、違いは `Cache-Control` が `public, max-age=31536000, immutable` であることだけ（3 本の一致は `test/distribution-response-headers.test.ts` が固定） |
 | `AWS::CloudFront::Function` | `RewriteUriFunctionF5D8A5AC` | `cloudfront-js-2.0` / viewer-request（デフォルトビヘイビアのみ） |
 | `AWS::Cognito::UserPool` | `AdminAuthUserPoolBFAE8287` | **`AdminAuth`**。管理画面のログイン。`UserPoolTier: ESSENTIALS` / **`AllowAdminCreateUserOnly: true`** / `UsernameConfiguration.CaseSensitive: true` / MFA は TOTP のみ / パスワード 16 文字 / `DeletionProtection: ACTIVE` / `DeletionPolicy: Retain` |
 | `AWS::Cognito::UserPoolDomain` | `AdminAuthUserPoolLoginDomain53790831` | **Managed Login**（`ManagedLoginVersion: 2`）。`Domain` は `shutx-blog-admin`（**グローバルに一意な物理名。意図的な例外**） |
@@ -83,6 +84,18 @@ npx -w infra cdk diff        # deploy の前に必ず。PR 本文に貼る（AGE
 **Phase 1 から 1 文字も変わっていない**（＝既存リソースの置換は起きない）。
 メディア用 OAC（`...Origin2S3OriginAccessControlE0FE6FAA`）も **Phase 2 から変わっていない**。
 Phase 3 の `cdk diff` は新規 8 リソースと Distribution の in-place 更新だけで、**置換も削除も 0 件**。
+
+**`/_astro/*` と HTTP/3 を足した回も同じ形だった**（実測 2026-10-03）。`cdk diff` は新規 1 リソース
+（`AssetsHeaders4F00D1B8`）と Distribution の in-place 更新の **2 件だけ**で、`DistributionConfig` の
+内訳は `.CacheBehaviors` への 1 要素追加と `.HttpVersion` の `http2` -> `http2and3` のみ。
+**置換 0 / 削除 0。** リソース総数は 24 -> 25。オリジンも OAC も 3 本のまま論理 ID は 1 文字も
+動いていない（理由は下の「`additionalBehaviors` の宣言順が本番の差分になる」）。デプロイは 56 秒で完了した。
+
+**同じ `cdk diff` に `Outputs[].Description` の差分が 10 件出るが、これは別件の既存ドリフトである。**
+デプロイ済みスタック側の Description はマルチバイト文字が `?` に落ちており（`"aws s3 sync ???????"`
+に対しローカルは `"aws s3 sync の宛先バケット"`）、10 件とも `Value` は完全に同一でリソースへの影響は無い。
+素の `cdk diff` はこれを `Omitted 10 changes because they are likely mangled non-ASCII characters.` と
+丸めて隠すので **`--strict` を付けたときだけ見える。** 差分に出ても、このブランチの変更と読み違えないこと。
 
 #### 投稿 API のエンドポイント
 
@@ -329,6 +342,51 @@ IAM ロール・IAM ポリシー・OIDC プロバイダ・CloudFront の追加�
 | `S3_BUCKET_DEFAULT_LOCK_ENABLED` | **意図的に見送り** | **意図的に見送り** | 配信用は毎デプロイ `sync --delete` で作り直す成果物で、オブジェクトロックは上書き・削除と正面から衝突する。メディアは誤削除対策をバージョニングで足りると判断した（オブジェクトロックは一度有効にすると解除できず、運用の自由度を大きく損なう） |
 | `S3_BUCKET_REPLICATION_ENABLED` | **意図的に見送り** | **意図的に見送り（後続フェーズで再検討の余地）** | 配信用は Git から再生成可能なので費用しか生まない。メディアは再生成できないぶん価値はゼロではないが、個人ブログの規模ではバージョニング + `Retain` で足りると判断した |
 | `S3_BUCKET_LOGGING_ENABLED` | **意図的に見送り（後続フェーズで再検討）** | **意図的に見送り（後続フェーズで再検討）** | S3 サーバアクセスログには第 3 のバケットが要り、そのバケット自体が新たな違反を生む（実測で 6 件 → 8 件に増える）。必要になった時点で CloudFront 標準ログとあわせて運用フェーズで設計する |
+
+### 配信の実測値（2026-10-03）
+
+PSI の指摘 2 件（「レンダリングをブロックしているリクエスト」「ネットワークの依存関係ツリー」）を
+裁定するために測ったもの。**裁定そのものは「設計上の約束ごと」の
+「CSS をインライン化しない」「HTTP/3 を有効にする」「`/_astro/*` は immutable…」の 3 節**にある。
+
+計測対象は本番 `https://blog.shutx.net`。DNS は Cloudflare だが **grey cloud（DNS only）** を
+実測で確認済みなので、前段に別の CDN は無い。
+
+| 項目 | 値 |
+| --- | --- |
+| HTML `/` | wire **736 B** / raw 2114 B |
+| CSS `/_astro/Layout.3W-5Im-W.css` | wire **1846 B** / raw 6741 B |
+| 圧縮方式の推定 | 手元の brotli q11 = 1750 B / **q5 = 1858 B** / gzip -9 = 2005 B。**配信は概ね brotli q5 相当** |
+| `Compress` | **全ビヘイビアで `true`**（テンプレート実測）。やることは残っていない |
+| `Vary` | `Accept-Encoding`（CloudFront が圧縮時に付けるもので正しい） |
+| ページ構成 | `<script>` 0 本 / webfont 0 本 / `<style>` 0 本。**`site/public/` 自体が存在せず favicon も無い**ので、リクエストは **HTML と CSS の 2 本だけ** |
+| TLS | TLSv1.3 / X25519 / `TLS_AES_128_GCM_SHA256`。証明書は **RSA 2048**（`Amazon RSA 2048 M04`、チェーン PEM 5270 B） |
+| `x-cache` | `Hit from cloudfront` 5/5（連続取得）。`x-amz-cf-pop` は国内 POP（実測で `NRT57-P9` / 再測定では `KIX82-P7`。POP は経路と時刻で変わる） |
+
+デプロイの前後で変わったもの（**後者はすべてデプロイ後の実測**）:
+
+| | デプロイ前 | デプロイ後 |
+| --- | --- | --- |
+| `alt-svc` | **無し** | `h3=":443"; ma=86400` |
+| DNS の HTTPS(SVCB) RR | `1 . alpn="h2"` | 直後は `1 . alpn="h2"` のまま、**約 25 分後に `1 . alpn="h2,h3"`**（TTL 60 秒。3 リゾルバで一致） |
+| `/` の `Cache-Control` | `no-cache` | `no-cache`（据え置き） |
+| `/_astro/*.css` の `Cache-Control` | `no-cache`（ETag 付きの条件付き GET で**毎ナビゲーション 304**） | **`public, max-age=31536000, immutable`** |
+| 存在しない `/_astro/*` | — | `HTTP/2 404` + **`cache-control: no-cache`**（懸念していた故障モードは不成立） |
+| セキュリティヘッダ 5 本 | — | CSP / HSTS / `X-Frame-Options` / `X-Content-Type-Options` / `Referrer-Policy` が **`/` と `/_astro/*` でバイト一致**。差は `Cache-Control` だけ |
+
+**HTTP/3 について確認したのは `alt-svc` の広告までで、QUIC の実接続は未確認である**
+（手元の curl 8.5.0 が HTTP/3 非対応。確かめるならブラウザが要る）。**DNS の RR が `h2,h3` に
+変わった意味**と、そこから出てくる宿題は「HTTP/3 を有効にする」の節に書いてある。
+
+タイミングの実測（国内から、デプロイ後）: HTML 単発の ttfb 96〜106 ms（デプロイ前 87 ms。誤差の範囲）、
+CSS 単発 82〜91 ms、同一接続で連続取得すると HTML 93.2 ms -> **CSS 20.8 ms**。
+**インライン化で消えるはずだった往復の実額はこの 21 ms** で、PSI のスコアを作る Lantern では
+初期輻輳ウィンドウに収まるため **0 ms** と計上される。
+
+**Lighthouse 13.5.0 の `core/config/default-config.js` を直接読んだ結果**:
+`render-blocking-insight`（:441）/ `network-dependency-tree-insight`（:440）/ `cache-insight`（:427）は
+**3 つとも weight 0**。パフォーマンススコアは FCP 10（:419）/ LCP 25（:420）/ TBT 30（:421）/
+CLS 25（:422）/ SI 10（:423）だけで構成される。**この 3 件をどう直してもスコアは動かない。**
 
 ## セキュリティヘッダ / CSP（Phase 5）
 
@@ -1354,7 +1412,7 @@ Distribution も一緒に動かすしかない。
 
 ### `additionalBehaviors` の宣言順が本番の差分になる
 
-`additionalBehaviors` のキー順は **`/media/*` -> `/api/*` から変えてはいけない。**
+`additionalBehaviors` のキー順は **`/media/*` -> `/api/*` -> `/_astro/*` から変えてはいけない。**
 
 CDK は `Object.entries` の順（＝挿入順）でオリジンに `Origin1` / `Origin2` / `Origin3` と
 番号を振り、OAC の論理 ID はその番号から作られる。実測で `/api/*` を先に書くと、
@@ -1368,6 +1426,247 @@ CDK は `Object.entries` の順（＝挿入順）でオリジンに `Origin1` / 
 機能は同じだが、デプロイ時に **OAC の置換とバケットポリシーの書き換え** が起きる。
 ソース上まったく見えない依存なので、`test/distribution-oac.test.ts` が OAC の論理 ID 集合を
 リテラルで固定している。
+
+`/_astro/*` を **末尾**に足したのも同じ理由である（先頭や中間に入れると既存 2 要素の位置が動く）。
+
+#### 同じバケットへ 2 本目のビヘイビアを足すときはオリジンのインスタンスを再利用する
+
+`/_astro/*` は配信用バケットを向く **2 本目**のビヘイビアで、オリジンはデフォルトビヘイビアと
+**同じ `IOrigin` インスタンス**を渡している（`site-stack.ts` の `siteOrigin` をローカル変数に
+括り出してある）。`Distribution.addOrigin` は `boundOrigins.find(b => b.origin === origin)` と
+**インスタンス同一性**で既存のオリジン ID を引き当てるため（aws-cdk-lib 2.267.0 の実装）、
+`withOriginAccessControl` をもう一度呼ぶと同じバケットなのにオリジンが増える。実測:
+
+| 実装 | Origins | OAC | 結果 |
+| --- | --- | --- | --- |
+| インスタンスを再利用・**末尾**に追加（これ） | 3 | 3 | OAC の論理 ID 3 本が 1 文字も変わらない。増えるのは `ResponseHeadersPolicy` 1 本だけ |
+| インスタンスを再利用・先頭に追加 | 3 | 3 | 論理 ID は同じく不変。ただし `CacheBehaviors` 配列の並びが動いて差分が増える |
+| `withOriginAccessControl` を**もう 1 回呼ぶ** | **4** | **4** | 配信用バケットに 2 本目の OAC（`SiteDistributionOrigin4S3OriginAccessControl505731E1`）が生える |
+
+固定しているテストは 2 本で、**どちらも相手の上位集合ではない。**
+
+- `test/distribution-oac.test.ts` — OAC の論理 ID 集合をリテラルで固定する。3 行目の実装を落とすが、
+  「`/_astro/*` がどのオリジンを向いているか」は見ていない
+- `test/distribution-assets-behavior.test.ts` — `/_astro/*` の `TargetOriginId` が
+  **デフォルトビヘイビアと一致する**ことを主張する。オリジンが 3 本に戻っていても、
+  `/_astro/*` だけメディアバケットを向いた状態を落とす
+
+### `/_astro/*` は immutable、`/admin/assets/*` は no-cache
+
+`/_astro/*` だけが `public, max-age=31536000, immutable` を返す（`ASTRO_ASSETS_CACHE_CONTROL`）。
+サイトの他のすべては `no-cache` のままである（AGENTS.md の「Cache-Control」）。
+
+**真である条件は「同じ URL が二度と別の中身を返さない」こと。** vite は
+`_astro/<名前>.<内容ハッシュ>.<拡張子>` という名前で出力する（実測は 1 ファイル、
+`/_astro/Layout.3W-5Im-W.css`）。CSS を 1 バイト直せばハッシュが変わって**別の URL**になり、
+それを指す HTML は `no-cache` なので必ず検証されて新しい名前が届く。したがって古い URL を
+1 年キャッシュしたままでも、古い見た目のページは生まれない。
+
+前提は 3 つあり、**どれも CloudFront 側では保証できない。** 崩れても何も壊れたようには見えず、
+ヘッダが静かに `no-cache` へ戻る（あるいは配るものが無くなる）だけなので、テストで固定してある。
+
+| 前提 | 固定しているもの |
+| --- | --- |
+| 出力先が `_astro`（Astro の `build.assets` の既定値） | `site/test/unit/stylesheets.test.ts`（設定オブジェクトの値を読む）と `test/distribution-assets-behavior.test.ts`（`site/astro.config.mjs` をテキスト走査し、コメント行を落としてから `assets:` / `assetsPrefix:` の不在を見る）。**CDN の宣言とあの設定ファイルを結び付けているのは後者だけ** |
+| そもそも外部ファイルとして出ること（`build.inlineStylesheets: "never"`） | 同じ 2 本（下の「CSS をインライン化しない」） |
+| 名前に内容ハッシュが入っていること | `site/test/build/` が `dist/_astro/` の実ファイル名を走査する |
+
+**`/admin/assets/*` は含まれない。** `admin/vite.config.ts` が `base: '/admin/'` を宣言するので
+出力は `/admin/assets/*`（実測 391 ファイル）で、`/_astro/*` にはパターンとして一致しない。
+admin の資産はデフォルトビヘイビア経由の `no-cache` のままで、それは意図した判断である
+（`/admin/*` 専用のビヘイビアは作らない。上の「セキュリティヘッダ / CSP」）。
+
+**ポリシーは 3 本目を新設した。`MediaHeaders` を使い回していない。** 値は同じだが**真である条件が
+違う**（メディアは**キーがランダム**で二度使われない / `_astro` は**中身のハッシュ**が名前に入る）。
+1 本に寄せると、どちらかの条件が崩れた日に両方が参照している宣言を触ることになり、無関係なパスの
+キャッシュ戦略を道連れにする。定数も `MEDIA_CACHE_CONTROL` と別に置いてある（`response-headers.ts`）。
+
+**エッジの TTL は既定の Managed-CachingOptimized（`658327ea-...`、DefaultTTL 86400）のまま。**
+独自キャッシュポリシーで 1 年にもできるが、閲覧者に届く `Cache-Control` を決めるのは
+ResponseHeadersPolicy のほうで、違いは「POP ごとに 1 日 1 回 S3 まで検証に行くかどうか」だけ。
+閲覧者から見える差は無く、リソースと概念が 1 つ増える。
+
+#### 懸念していた故障モードは起きない（実測で確認した）
+
+`CustomErrorResponses` はディストリビューション全体に効く（ビヘイビア単位ではない）ので、
+**存在しない `/_astro/*` の 404 に `immutable` が乗るなら**、`aws s3 sync --delete` と invalidation の
+間に古い HTML を受け取った閲覧者が、消えた旧 CSS の URL を最大 1 年ぶん「無い」と覚えうる。
+デプロイ後に測った結果、**そうはならない。**
+
+```sh
+curl -sI https://blog.shutx.net/_astro/does-not-exist.css
+# => HTTP/2 404 / content-type: text/html / cache-control: no-cache
+curl -sI https://blog.shutx.net/media/           # 対照: /media/* に一致するが鍵が無い
+# => HTTP/2 404 / content-type: text/html / cache-control: no-cache
+```
+
+**CloudFront はエラーページの差し替えに、要求が一致したビヘイビアではなく
+デフォルトビヘイビアの ResponseHeadersPolicy を当てる。** `/404.html` は `/media/*` にも
+`/_astro/*` にも一致しないオブジェクトなので、ヘッダもデフォルト側の `no-cache` に従う。
+
+したがって残るのは `/media/*` が今日すでに持っている性質と同じもの（存在しない資産には HTML の
+404 が返る）で、1 パス増えただけである。被害はその 1 回の表示が素のままになることだけで、HTML が
+`no-cache` なので次のナビゲーションで新しいファイル名を取りに行って自然に治る。
+
+**これはテンプレートからは読み取れない**（`CustomErrorResponses` にヘッダの話は書かれていない）。
+**固定しているのはテストではなく上の 1 回の観測だけ**なので、ヘッダの付き方を触る変更を入れる
+ときは同じ `curl` を打ち直すこと。同じ内容は `site-stack.ts` の `ASTRO_ASSETS_PATH_PATTERN` の
+JSDoc にも書いてある。
+
+#### 得られたもの（PSI のスコアは動かない）
+
+- **実訪問者の毎ナビゲーションから条件付き GET が 1 本消える。** 有効化前の `/_astro/*.css` は
+  `no-cache` で、ETag 付きの再検証が毎回走って 304 が返っていた（実測）。
+- PSI の `cache-insight` が黙る（`Stylesheet` は `STATIC_RESOURCE_TYPES` に含まれ、`no-cache` は
+  ttl 0 と判定される。`trace_engine` の `insights/Cache.js` / `helpers/Network.js:31-37` を読んで確認）。
+- **ラボスコアは 1 点も動かない。** PSI は必ずクリーンプロファイル（cold）で読むのでキャッシュの
+  恩恵を受けず、そもそも `cache-insight` は Lighthouse 13.5.0 の
+  `core/config/default-config.js:427` で **weight 0** である。
+
+### CSS をインライン化しない
+
+`site/astro.config.mjs` が `build.inlineStylesheets: "never"` を宣言している。**CSP の
+`style-src 'self'` はインライン `<style>` を拒否する**ので、インライン化はそのまま
+「全ページのスタイルが当たらない」になる。
+
+**既定の `"auto"` は危ない。** vite の `assetsInlineLimit`（既定 4096 B、`shouldInlineAsset` は
+`Buffer.byteLength < 4096` の厳密比較）を下回ると Astro が勝手にインライン化する。実測で再現した:
+ビルド後の CSS を 3643 B にして `"auto"` でビルドすると **13/13 の HTML がインライン `<style>` を
+持ち、`<link rel=stylesheet>` は 0 本、`dist/_astro/` は空**になった。本番ならこれは
+`style-src 'self'` に全ページまとめてブロックされる状態である。
+
+いまの余裕は **2645 B**（実測 2026-10-03）。
+
+| 対象 | サイズ |
+| --- | --- |
+| `site/src/styles/global.css`（ソース） | 25344 B。うち**コメント 16906 B** / ルール 8438 B |
+| ビルド後 `/_astro/Layout.3W-5Im-W.css` | **6741 B**（4096 B まで 2645 B） |
+| 同・配信時（brotli） | **1846 B** |
+
+**ソースの 25344 B は比較に一度も登場しない。** コメントを削っても 1 バイトも近づかないし、
+逆に「コメントが多いから安全」でもない — 効くのは minify 後の 6741 B だけである。
+
+**サイズ依存の偶然の不変条件を、宣言された不変条件に置き換えたことが要点。** 「いまは 4096 B を
+超えているから外部ファイルになる」ではなく「決してインライン化しない」と書いた。今日のサイズでは
+出力は 1 バイトも変わらない（`diff -r` で確認済み）。**買ったのはバイトではなく不変条件**であり、
+副作用として `/_astro/*` のビヘイビアが将来も意味を持ち続ける。
+
+#### 落ちるテストと、原因を名指しするテスト
+
+- `site/test/unit/stylesheets.test.ts` — `build.inlineStylesheets` の値を直接主張する。**原因を名指しする**
+- `test/distribution-assets-behavior.test.ts` — `site/astro.config.mjs` をテキスト走査して同じ値を
+  主張する。**原因を名指しする**（こちらだけが CDN 側の宣言と結び付いている）
+- `admin/test/build/output.test.ts` — `site/dist` を走査してインライン `<style>` が **0 件**で
+  あることを要求する（admin の pretest が site をビルドするので成立する）。**結果は見えるが
+  原因は名指しできない**。しかも `"auto"` のままだと、ビルド後の CSS が 4096 B を割る日まで緑でいる
+- `site/test/build/output.test.ts` の**目次テスト 7 本**も、`"always"` へ戻すと赤くなる。ただし
+  落ち方が紛らわしい: あれは目次を出さないページ（見出しの無い記事・`about` / `privacy`・一覧・
+  タグ）に `post__toc` が出ていないことを `not.toContain` で見ているので、**インラインされた
+  CSS 本文に含まれる `.post__toc` セレクタに当たって**落ちる。読めるメッセージは「そのページに
+  目次が漏れた」であって、インライン化は名前に出てこない（実測）。`"never"` はこの 7 本にとっても
+  荷重がかかっているが、**原因を正しく名指しするのは上の 2 本だけである**
+
+#### インライン化で得られる時間は 0 ms（だから CSP を緩める案は全部却下した）
+
+PSI が指摘する「レンダリングをブロックしているリクエスト」= `render-blocking-insight` と
+「ネットワークの依存関係ツリー」= `network-dependency-tree-insight` は、Lighthouse 13.5.0 の
+`core/config/default-config.js` で **どちらも weight 0**（:441 / :440）。スコアは
+FCP 10（:419）/ LCP 25（:420）/ TBT 30（:421）/ CLS 25（:422）/ SI 10（:423）だけで構成される。
+**この 2 件を消してもパフォーマンススコアは 1 点も動かない。**
+
+動きうるのは FCP / LCP の実数だが、PSI mobile のそれは Lantern が算出する。Lantern の実モジュール
+（`@paulirish/trace_engine` 0.0.65 の `TCPConnection`）を rtt 150 ms / 1.6 Mbps で**実行して**測った:
+
+- HTML 736 B（cold, TLS）= 450 ms。初期輻輳ウィンドウ 10 x 1460 = 14600 B のうち **13864 B が余る**
+- CSS 1846 B（warm h2, 同一オリジン）= **0 ms**（余りに収まるので `timeToFirstByte` も
+  ダウンロードのラウンドトリップも 0）
+
+**つまりスコアを作っているモデルの中で、render-blocking な CSS は既に 0 ms である。**
+国内の実機で同一接続の連続取得を測ると CSS の ttfb は 20.8 ms（HTML 93.2 ms の後）で、
+インライン化で消えるのはこの 1 往復ぶんだけ。報告される `118 ms` / `351 ms` は観測値であって
+スコアの入力ではない（simulated throttling では実リクエストは絞られない）。
+
+却下した案と理由:
+
+| 案 | 却下理由 |
+| --- | --- |
+| `"always"` + `style-src` に `'unsafe-inline'` を戻す | 文書化された強化の巻き戻し。`admin/test/unit/csp-contract.test.ts` と `admin/test/build/output.test.ts` が落ちる |
+| `"always"` + sha256 ハッシュを CDK の CSP に入れる | **致命的。** ハッシュは CDK（`cdk deploy`、人間が実行）に載り、CSS は `deploy.yml`（自動）で出る。**CSS を 1 バイト変えた次のデプロイで、人が `cdk deploy` を打つまで全ページが素のままになる。** CI で更新する道も無い — デプロイロールは S3 の 4 アクション + `cloudfront:CreateInvalidation` / `GetInvalidation` だけで、`cloudfront:Update*` を足すと **CI ロールが CDN のセキュリティ設定を書けるようになる** |
+| Astro の `security.csp`（6.0.0 で正式化。astro 7.2.9 が入っている） | 出力が `<meta http-equiv>` **のみ**で、このリポジトリが明文で禁じている形（`frame-ancestors` が meta では無視され、2 箇所でドリフトする）。加えて Astro 自身が *"Shiki isn't currently supported. By design, Shiki functions use inline styles that cannot work with Astro CSP implementation."* と書いている（`astro/dist/types/public/config.d.ts:751`）。そして **CSP は複数ポリシーの AND** なので、meta にハッシュを入れてもヘッダ側の `style-src 'self'` が別途ブロックする。**解決しない** |
+| 手書きの `<meta>` CSP | 同上（meta では配らない） |
+| viewer-response の CloudFront Function でハッシュを足す | ハッシュが関数コード（infra 側）に載るので sha256 案と同じ時限爆弾。origin-response の Lambda@Edge で本文から計算する案は、`test/distribution-behavior.test.ts` が「どのビヘイビアも Lambda@Edge を使っていない」を全走査で固定している |
+| CDK の custom header で `Link: </_astro/...css>; rel=preload` | ファイル名にハッシュが入るので同型（失敗は軽く、無駄な preload 1 本で描画は壊れない）。だが得られる時間は Lantern で 0 ms、実機でも `<link>` は HTML の先頭パケット（raw 2114 B）内で既に発見済み |
+
+### HTTP/3 を有効にする
+
+`httpVersion: HttpVersion.HTTP2_AND_3` を**明示**している。**既定は `http2`** で、しかも
+aws-cdk-lib 2.267.0 は `props.httpVersion ?? HttpVersion.HTTP2` と書くので、**この 1 行を消しても
+テンプレートからキーが消えるのではなく `"http2"` が描画される**（実測）。欠けたようには見えないまま
+HTTP/3 だけが無効に戻るため、`test/distribution-behavior.test.ts` が `'http2and3'` をリテラルで固定する。
+
+採った理由:
+
+- `cdk diff` の HTTP/3 のぶんは `DistributionConfig.HttpVersion` の **1 行**だけ（in-place。置換も
+  削除も 0。実測。同じデプロイに `/_astro/*` が同乗している — 全体の差分は上の「BlogSiteStack」）。
+  効くのは**ビューアとの接続だけ**で、CloudFront からオリジンへの接続には関係しない
+- QUIC は TCP の 3-way と TLS1.3 の握手を畳んで **2 RTT を 1 RTT** にする。実測の握手は
+  connect 34 ms / tls 56 ms なので、取れるのは握手 1 往復ぶん。転送そのものは速くならない
+- `HTTP3` 単独ではなく `HTTP2_AND_3` なので**退路が常にある**。CloudFront の HTTP/3 は TLS1.3 と
+  SNI を話せるビューアにだけ使われ、話せないビューアや UDP/443 が塞がれた経路は h2 のまま通る
+
+確かめ方: 有効なら応答に `alt-svc: h3=":443"; ma=86400` が付く。**有効化前の `blog.shutx.net` には
+無かった**ことを実測済みで、正の対照は h3 が有効な CloudFront である `d1.awsstatic.com`。
+
+```sh
+curl -sI https://blog.shutx.net/ | grep -i alt-svc
+# => alt-svc: h3=":443"; ma=86400
+```
+
+**ただし確認できたのは広告（`alt-svc`）までで、QUIC の実接続は未確認である。** 手元の curl 8.5.0 は
+HTTP/3 非対応（`curl -V` の Features に `HTTP3` が無い）なので、UDP/443 で実際に話せたかは
+**確かめていない。確かめるならブラウザが要る。**
+
+#### 反対側の実測（判断を見直す条件つき）
+
+**PSI mobile のスコアを作る Lighthouse の Lantern は h3 をモデル化していない。**
+`ConnectionPool.js:46` が `request.protocol === 'h2'` とリテラル比較しており、`'h3'` は
+**非多重化**（1 オリジン 6 本の HTTP/1.1 相当）として扱われる。同じ `TCPConnection` を
+rtt 150 ms / 1.6 Mbps で走らせた実測では、同一オリジン 2 本目の CSS 1846 B は **h2 なら 0 ms /
+h2 扱いされないと 150 ms**。**PSI が h3 を記録すると、シミュレートされる FCP / LCP が
+150 ms 悪化しうる。**（`modern-http-insight` は助けにならない。実装は `/HTTP\/[01][.\d]?/i` で
+**HTTP/1.x だけ**を指摘するので h2 も h3 も合格する。）
+
+有効化を決めたときの見込みは「PSI の初回接続は h2 のまま記録される」だった。根拠は 2 つで、
+(a) PSI は毎回クリーンプロファイルなので `alt-svc` のキャッシュを持たない、
+(b) CloudFront の DNS HTTPS(SVCB) RR が h3 を広告していない、だった。
+
+**(b) はもう成り立っていない。** 実測の推移（すべて 2026-10-03）:
+
+| 時点 | `dig +short -t HTTPS d8gsxbwzr6ft8.cloudfront.net` |
+| --- | --- |
+| デプロイ前 | `1 . alpn="h2"` |
+| デプロイ直後（23:35 頃） | `1 . alpn="h2"` |
+| その約 25 分後に再測定 | **`1 . alpn="h2,h3"`** |
+
+最後の行は既定リゾルバ / `@1.1.1.1` / `@8.8.8.8` の 3 つで一致し、RR の **TTL は 60 秒**
+（デプロイ直後にまだ古い値が見えたのはこれで説明がつく）。RR が付いているのは配信ドメイン
+`d8gsxbwzr6ft8.cloudfront.net` のほうで、**AWS がいつどういう条件でこれを書き換えるかは観測して
+いない**（有効化との因果は確かめていない。値そのものが上のとおりだという事実だけである）。
+
+**それでも結論は変わる。h3 が DNS で広告されている以上、対応ブラウザは `alt-svc` のキャッシュが
+無くても初回接続で QUIC を選びうる = 上の 150 ms が現実になりうる。**
+
+**したがって判断の見直し条件は満たされている。次にやるのは実測である:**
+
+1. PSI mobile を回して **FCP / LCP** を有効化前の値と比べる（スコアそのものではなく実数を見る。
+   `render-blocking-insight` / `network-dependency-tree-insight` / `cache-insight` は weight 0 なので
+   スコアは動かない）
+2. 悪化していれば `httpVersion` を `HttpVersion.HTTP2` に戻す。**直すのは 3 箇所**（`site-stack.ts` の
+   `httpVersion` の行とコメント / `test/distribution-behavior.test.ts` のリテラル / この節）
+3. 悪化していなければこの節に実測値を足して据え置く
+
+**「`alt-svc` が付いたから成功」で閉じないこと。** 得ているのは握手 1 往復ぶんで、失いうるのは
+Lantern 上の 150 ms である。
 
 ### OIDC プロバイダにサムプリントを書かない
 

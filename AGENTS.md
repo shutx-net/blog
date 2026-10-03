@@ -118,6 +118,16 @@ npx -w infra cdk deploy <Stack>
   影響しない**ので、CDN は DefaultTTL 86400 のままデプロイ時の invalidation で更新される
 - **`/media/*` は `immutable`。** キーが `media/<年>/<月>/<24 桁の乱数>.<拡張子>` で上書きされないため。
   **キーの作り方を変えるならこの宣言も変えること**
+- **`/_astro/*` も `immutable`。** vite が `_astro/<名前>.<内容ハッシュ>.<拡張子>` を出すため
+  （Astro の `build.assets` の既定が `_astro`。上書きしていない）。**もう 1 つの前提は
+  `site/astro.config.mjs` の `build.inlineStylesheets: "never"`** — 既定の `"auto"` に戻すと、
+  ビルド後の CSS が vite の 4096 B を割った日に全ページがインライン `<style>` になり
+  `style-src 'self'` に落とされる（実測: 3643 B で 13/13 の HTML がインライン化され
+  `dist/_astro/` が空になった。いまの余裕は 6741 - 4096 = 2645 B）。
+  **`/admin/assets/*` は含まれない**（`base: '/admin/'` なので `/_astro/*` に一致せず `no-cache` のまま）。
+  値は `/media/*` と同じだが**定数もポリシーも別に置く**（真である条件が違う。片方が崩れた日に
+  もう片方を道連れにしないため）。**存在しない `/_astro/*` の 404 は `immutable` ではなく
+  `no-cache` で返る**（エラーページはデフォルトビヘイビアのポリシーを取る。実測。詳細は `infra/README.md`）
 - Cache-Control が無いとブラウザは*ヒューリスティックキャッシュ*（`Last-Modified` からの経過の 10% 程度）を
   適用する。invalidation はブラウザには届かないので、**更新したのに反映されない**という事故になる（実際に踏んだ）
 
