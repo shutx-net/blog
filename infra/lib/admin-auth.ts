@@ -128,9 +128,10 @@ export class AdminAuth extends Construct {
         // **openid だけ。** aws.cognito.signin.user.admin を含めると、
         // アクセストークンでユーザ属性を書き換えられるようになる。
         scopes: [cognito.OAuthScope.OPENID],
-        // **許可リストの全件を並べる。** 順序は `SITE_ORIGINS` のまま（先頭が正のオリジン）。
-        // hosted-UI ドメイン（`LoginDomain`）はこれに影響されない —
-        // Managed Login は `<prefix>.auth.<region>.amazoncognito.com` のままである。
+        // **許可リストの全件を並べる。** 順序は `SITE_ORIGINS` のまま
+        // （追加順。先頭は正のオリジンではない — site-stack.ts の `SITE_ORIGINS` の JSDoc）。
+        // Managed Login のドメイン（`LoginDomain`）はこれに影響されない —
+        // `<prefix>.auth.<region>.amazoncognito.com` のままである。
         callbackUrls: props.siteOrigins.map((origin) => `${origin}/admin/`),
         logoutUrls: props.siteOrigins.map((origin) => `${origin}/admin/`),
       },

@@ -9,7 +9,8 @@ const site = new SiteStack(app, 'BlogSiteStack', {
 });
 
 // 参照は CicdStack -> SiteStack の一方向だけ。逆向きの参照を足すと
-// クロススタック参照が循環して synth が落ちる（README を参照）。
+// クロススタック参照が循環して synth が落ちる
+// （infra/docs/cdk-structure.md の「投稿 API も別 Stack にできない」を参照）。
 new CicdStack(app, 'BlogCicdStack', {
   description: 'shutx-net blog: GitHub Actions OIDC deploy role (least privilege)',
   siteBucket: site.siteBucket,

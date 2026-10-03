@@ -14,7 +14,7 @@ const template = Template.fromStack(new SiteStack(new App(), 'TestStack'));
 
 const one = (type: string): CfnResource => {
   const found = template.findResources(type) as Record<string, CfnResource>;
-  // 件数アサーションが非空ガードを兼ねる（infra/README.md の型 2）。
+  // 件数アサーションが非空ガードを兼ねる（infra/docs/test-patterns.md の型 2）。
   expect(Object.keys(found), `${type} はちょうど 1 個`).toHaveLength(1);
   return Object.values(found)[0] as CfnResource;
 };
@@ -157,7 +157,7 @@ describe('アプリクライアント', () => {
     // 実測: configureAuthFlows は
     //   props.refreshTokenRotationGracePeriod || authFlows.push('ALLOW_REFRESH_TOKEN_AUTH')
     // なので、rotation を有効にすると ALLOW_REFRESH_TOKEN_AUTH が **消える**。
-    // この相互作用を検証する余裕は本フェーズに無いので rotation は入れない。
+    // この相互作用を検証してから入れること（`infra/README.md` の TODO）。
     expect(client()['RefreshTokenRotation']).toBeUndefined();
   });
 
@@ -179,8 +179,8 @@ describe('アプリクライアント', () => {
    * ずれて**テストが緑のまま通る**（admin/test/support/site-renderer.ts と同じ規律）。
    * ここは「この 2 本である」という独立した宣言でなければならない。
    *
-   * 移行中は 2 本。**`startsWith(SITE_ORIGIN)` では書けない** — 正のオリジン以外も
-   * 載るのが本フェーズの目的なので、その形は 2 本目で必ず落ちる。
+   * いまは 2 本。**`startsWith(SITE_ORIGIN)` では書けない** — 正のオリジン以外も
+   * 載るので、その形は 2 本目で必ず落ちる。
    */
   const EXPECTED_REDIRECT_URLS = [
     'https://d8gsxbwzr6ft8.cloudfront.net/admin/',
@@ -277,7 +277,7 @@ describe('CfnOutput（admin と運用者がここから拾う）', () => {
     expect(outputNamed(name)).toBeDefined();
   });
 
-  it('Phase 4 で Output が 4 本増えている（既存 6 本 + 4 本）', () => {
+  it('Output がちょうど 10 本ある（既存 6 本 + 管理画面の 4 本）', () => {
     expect(Object.keys(outputs())).toHaveLength(10);
   });
 

@@ -11,9 +11,9 @@ import {
 /**
  * `.github/workflows/deploy.yml` が OIDC の契約を満たしていることを固定する。
  *
- * **このファイルが本フェーズで一番価値がある。** ここで捕まえる誤りはどれも YAML として
- * 完全に妥当で、lint も schema も通り、**実際にワークフローが走って
- * `Not authorized to perform sts:AssumeRoleWithWebIdentity` が出るまで誰も気づかない。**
+ * ここで捕まえる誤りはどれも YAML として完全に妥当で、lint も schema も通り、
+ * **実際にワークフローが走って `Not authorized to perform
+ * sts:AssumeRoleWithWebIdentity` が出るまで誰も気づかない。**
  * しかも失敗するのは main への push のとき、つまり本番デプロイのときだけである。
  *
  * 期待値は可能なかぎり `lib/cicd-stack.ts` の `DEPLOY_SUBJECT` から**導出**する。
@@ -99,7 +99,7 @@ const allRunsOf = (workflow: Workflow): string[] =>
  * configure-aws-credentials のステップと、それが属するジョブを特定する。
  *
  * **これは非空ガードである。** これが無いと以降の「そのジョブの permissions」系の
- * アサーションが 0 件で素通りする（Phase 1-2 で 7 件塞いだのと同じ形）。
+ * アサーションが 0 件で素通りする（同じ形の空振りを 7 件塞いである）。
  */
 const credentialsStepAndJob = (): { job: WorkflowJob; jobName: string; step: WorkflowStep } => {
   const found: { job: WorkflowJob; jobName: string; step: WorkflowStep }[] = [];
@@ -305,8 +305,8 @@ describe('パスフィルタ — infra だけの変更でサイトを再デプ�
   });
 
   it('infra/** を含まない', () => {
-    // 本フェーズの主題の 1 つ。infra だけの変更で再デプロイしても、同じ入力から
-    // 同じ出力をビルドして同じものを sync し、5 分待つだけで得るものが無い。
+    // infra だけの変更で再デプロイしても、同じ入力から同じ出力をビルドして
+    // 同じものを sync し、5 分待つだけで得るものが無い。
     for (const path of pushPaths()) {
       expect(path.startsWith('infra/'), `infra を対象にしている: ${path}`).toBe(false);
     }

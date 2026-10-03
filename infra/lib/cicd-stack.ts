@@ -54,8 +54,9 @@ export const GITHUB_REPOSITORY = `${GITHUB_OWNER}/${GITHUB_REPOSITORY_NAME}`;
  * deploy し直す）。
  *
  * **この文字列は GitHub 側の挙動と結合した契約で、ワークフロー YAML に制約が及ぶ**
- * （infra/README.md にも記載。test/workflow-deploy-oidc.test.ts がこの定数から期待値を
- * 導出して機械的に固定している）:
+ * （infra/docs/cicd-oidc.md の「`sub` の完全一致固定がワークフロー YAML に課す制約」にも
+ * 記載。test/workflow-deploy-oidc.test.ts がこの定数から期待値を導出して機械的に
+ * 固定している）:
  *
  * - トリガは main への push（または main を ref とする workflow_dispatch）。
  *   pull_request で走らせると sub は `...:pull_request` になり assume が失敗する
@@ -79,7 +80,8 @@ export interface CicdStackProps extends StackProps {
  *
  * SiteStack と分けてよいのは参照が一方向だから。CicdStack は SiteStack のバケット ARN と
  * ディストリビューションを読むだけで、SiteStack 側に何も書き込まない（MediaBucket を
- * 別 Stack にできなかったのとは対照的。README を参照）。
+ * 別 Stack にできなかったのとは対照的。infra/docs/cdk-structure.md の
+ * 「メディアバケットを別 Stack にできない」を参照）。
  *
  * env は意図的に指定しない（env-agnostic）。必要な ARN はすべて疑似パラメータで組める。
  */
@@ -126,7 +128,8 @@ export class CicdStack extends Stack {
     // s3:GetObject は入れない。ローカル -> S3 方向の aws s3 sync は ListObjectsV2
     // （s3:ListBucket）でリモートを列挙し、サイズと更新時刻で比較して PutObject するだけ。
     // AccessDenied が出たら s3:GetObject -> s3:ListBucketMultipartUploads ->
-    // s3:ListMultipartUploadParts の順に 1 つずつ足し、そのつど README と
+    // s3:ListMultipartUploadParts の順に 1 つずつ足し、そのつど
+    // infra/docs/cicd-oidc.md の「デプロイロールに S3 の grant メソッドを使わない」と
     // test/cicd-deploy-permissions.test.ts の EXPECTED_ACTIONS を更新する。
     // **まとめて s3:* にしないこと。**
     //
@@ -159,8 +162,7 @@ export class CicdStack extends Stack {
     props.distribution.grantCreateInvalidation(deployRole);
     props.distribution.grant(deployRole, 'cloudfront:GetInvalidation');
 
-    // roleName を指定していないので、ARN は人間がここから拾って
-    // GitHub Actions の変数（secret ではなく variable でよい）に一度だけ入れる。
+    // GitHub Actions の変数は secret ではなく variable でよい（ARN は秘密ではない）。
     new CfnOutput(this, 'DeployRoleArn', {
       value: deployRole.roleArn,
       description: 'GitHub Actions の変数に入れるデプロイロールの ARN',
