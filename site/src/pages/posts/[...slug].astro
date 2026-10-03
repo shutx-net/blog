@@ -3,6 +3,7 @@ import type { GetStaticPaths } from "astro";
 import { getCollection, render } from "astro:content";
 
 import Layout from "../../layouts/Layout.astro";
+import PostToc from "../../components/PostToc.astro";
 import { formatPubDate, isPublished } from "../../lib/posts.ts";
 
 export const getStaticPaths = (async () => {
@@ -19,7 +20,7 @@ export const getStaticPaths = (async () => {
 }) satisfies GetStaticPaths;
 
 const { post } = Astro.props;
-const { Content } = await render(post);
+const { Content, headings } = await render(post);
 ---
 
 {
@@ -35,7 +36,14 @@ const { Content } = await render(post);
      body, and that trailing ul. Anything else -- a <time>, a header wrapper, a
      class on the article -- breaks the proof rather than the layout, which is a
      much worse thing to break. Presentation is handled in global.css instead, via
-     the wrapper below and a :has() selector for the tag list. */
+     the wrapper below and a :has() selector for the tag list.
+
+     The contents bar is placed by the same rule: it can only be a sibling of
+     <article> inside div.post, because the proof finds <article> as a literal string
+     and then strips an exact prefix and suffix, so it may be carried neither by an
+     attribute on the tag nor by a child inside it. It goes BEFORE the body and not
+     after, because an index read after the thing it indexes has nothing left to
+     index -- which is the reading order, and the tab order with it. */
 }
 <Layout title={post.data.title} description={post.data.description}>
   <div class="post">
@@ -44,6 +52,7 @@ const { Content } = await render(post);
         {formatPubDate(post.data.pubDate)}
       </time>
     </p>
+    <PostToc headings={headings} />
     <article>
       <h1>{post.data.title}</h1>
       <Content />

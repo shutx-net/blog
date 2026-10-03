@@ -83,6 +83,20 @@
    * that same column to 39.5 with nothing here changing.
    */
   --measure: 48rem;
+
+  /*
+   * Two gaps out of one number: between main's border box and the left edge of
+   * the contents bar, and between the bar's right edge and the window. Widening
+   * the margin is one turn of this knob, and the two sides cannot drift apart.
+   */
+  --toc-gap: 1.5rem;
+  /*
+   * The widest the contents bar is ever drawn. It is reached at a 1312px
+   * viewport, and past that the extra room goes to the window edge rather than
+   * into the bar. The arithmetic, and the 1200px floor that falls out of the
+   * same two numbers, are with the rules in `post: furniture`.
+   */
+  --toc-width: 14rem;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -281,6 +295,147 @@ main {
 }
 
 .post__back a:hover {
+  text-decoration: underline;
+}
+
+/*
+ * The contents bar: the post's h2/h3 ladder, set in the margin to the right of
+ * the column. `position: fixed` is the whole reason it may exist here at all.
+ * An out-of-flow box takes no room in the flow, so nothing around it moves and
+ * main keeps the width and the position it has today -- which mattered more
+ * than usual: --measure and --leading were argued into place across the four
+ * releases before this one, both now sit at the tight end of their range, and
+ * the margin beside the column is the only space left on the page that can be
+ * spent without reopening either of them.
+ *
+ * It does not follow the scroll, and it does not mark the section being read.
+ * Both want an IntersectionObserver, and dist/ carries zero <script> tags
+ * today: `script-src 'self' 'wasm-unsafe-eval'` in infra/lib/response-headers.ts
+ * grants neither 'unsafe-inline' nor a nonce, so moving an underline would cost
+ * an external file fetched on every post page. PostToc.astro makes the same
+ * note from the markup side.
+ *
+ * Where it lands, against a 768px --measure:
+ *
+ *   main is centred, so its border box ends at 50% + 384px, and its
+ *   padding-inline: 1.25rem puts the last column of text at 50% + 364px.
+ *     left  = 50% + --measure / 2 + --toc-gap -- 20px of that padding plus the
+ *             24px gap, so 44px of white between the text and the rule
+ *     right = --toc-gap
+ *     width = W / 2 - 432px, until --toc-width stops it at 224px (W = 1312px)
+ *
+ * `50%` and `right` both resolve against the initial containing block, which is
+ * what `margin-inline: auto` centres main against as well, so the two edges
+ * agree exactly. The vw units would not: they count the classic scrollbar the
+ * containing block leaves out, so `50vw` here would sit half a scrollbar to the
+ * right of main's edge -- invisible where scrollbars are overlays, ~8px where
+ * they are not. (100vh below is safe for the matching reason: nothing on this
+ * page gives it a horizontal scrollbar; see the table rule further down.)
+ *
+ * left, right and max-width together over-constrain the box, and a left-to-
+ * right writing mode resolves that by dropping `right`. So once --toc-width
+ * bites, the slack goes to the window edge and the bar stays beside the text it
+ * indexes instead of drifting off across a wide monitor.
+ */
+.post__toc {
+  position: fixed;
+  top: 2.5rem;
+  left: calc(50% + var(--measure) / 2 + var(--toc-gap));
+  right: var(--toc-gap);
+  max-width: var(--toc-width);
+  /* A long post scrolls the bar rather than running it off the bottom of the
+     window. 5rem is the 2.5rem above it and the same again below. */
+  max-height: calc(100vh - 5rem);
+  overflow-y: auto;
+  padding-inline-start: 1rem;
+  border-inline-start: 1px solid var(--border);
+  /* No line-height beside it: --leading is inherited and is wanted here.
+     Entries wrap after eleven to sixteen full-width characters depending on the
+     window, and a wrapped entry leans on the leading rather more than a
+     one-line entry wants it tight. */
+  font-size: 0.8125rem;
+  /* Last, because the query below is the one line that undoes it. Hidden is the
+     default state and not the exception: being out of the flow is what keeps
+     main still, and a bar that is not out of the flow would sit between the
+     date and the title and push the whole post down the page. */
+  display: none;
+}
+
+/*
+ * 1200px is the arithmetic above read backwards: 768 + 2 x (24 + 168 + 24).
+ * 10.5rem (168px) is therefore the narrowest the bar is ever drawn -- 151px of
+ * that is text once the border and the padding come out, about eleven
+ * full-width Japanese characters -- and below it the bar is not drawn at all.
+ * There is no collapsed or inline fallback for a narrow window: a disclosure
+ * widget is a <script> again.
+ *
+ * `display: none` takes the bar out of the accessibility tree along with the
+ * picture, which is the right trade rather than an oversight. It is a visual
+ * shortcut to the headings, and a screen reader reaches the same headings with
+ * its own heading navigation whatever this box does.
+ *
+ * A media query's `width` counts the classic scrollbar that `50%` does not, so
+ * where one is present the bar at the breakpoint comes out half a scrollbar
+ * narrower than 168px -- around 8px -- and reaches --toc-width equally late.
+ *
+ * This is also why no `@media print` rule stands beside it. A page box is 794px
+ * across for A4 and 816px for Letter -- 1122px and 1056px turned sideways --
+ * all of them under 1200px, so the query is already false on paper and the bar
+ * stays hidden. A `position: fixed` box that survived into print would
+ * otherwise be stamped onto every sheet.
+ */
+@media (min-width: 1200px) {
+  .post__toc {
+    display: block;
+  }
+}
+
+.post__toc-title {
+  margin: 0 0 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+/*
+ * The bar sits outside <article>, so not one of the `article ul` rules below
+ * reaches it and the UA default arrives intact: discs, and 40px of
+ * padding-inline-start that would eat a quarter of the narrowest bar. Both have
+ * to be cleared here or nowhere.
+ */
+.post__toc ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Only the nested level is indented; the h2 entries are the bar's left edge. */
+.post__toc ul ul {
+  padding-inline-start: 0.9rem;
+}
+
+.post__toc li {
+  margin-block: 0.5rem;
+}
+
+/*
+ * Undecorated, the call `.post__back a`, `.pager a` and `.site-footer__nav a`
+ * have already made, and it is safe here for the reason it is safe there: every
+ * word in this box is a link, so there is no surrounding prose that colour
+ * alone would have to tell them apart from. --muted rather than --accent,
+ * because a dozen accent-coloured lines in the margin would compete with the
+ * post for attention -- the bar is for glancing at, not for reading. Hover puts
+ * the underline back, and :focus-visible is global, so keyboard use needs
+ * nothing from here.
+ */
+.post__toc a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.post__toc a:hover {
+  color: var(--accent);
   text-decoration: underline;
 }
 
