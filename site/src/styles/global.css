@@ -99,7 +99,17 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-body);
-  font-size: 1.0625rem;
+  /*
+   * 1rem -- the reader's own default. 1.0625rem (17px) read as slightly large
+   * for Japanese against --leading 1.9. Redundant with the inherited value, and
+   * kept anyway: this is the line to edit.
+   *
+   * Editing it moves the prose and nothing else. Every other size in this file
+   * is in rem, measured against the root rather than against this, so the
+   * headings, the listing titles, the code slab, the table and the footer stay
+   * where they are. The knob for the whole page is a font-size on `html`.
+   */
+  font-size: 1rem;
   line-height: var(--leading);
   /* Japanese line breaking: keep kinsoku rules strict, and let long unbroken
      Latin (URLs, hashes) wrap instead of widening the page. */
@@ -263,9 +273,21 @@ article {
   margin-block-start: 0.5rem;
 }
 
+/*
+ * The heading ladder, against a 16px body: 24-30 / 21 / 18 / 16. One step down
+ * from where it started (28-36 / 24 / 20 / 16) -- 36px of title over a 42rem
+ * column read as louder than the writing under it.
+ *
+ * h2 and h3 come down with the titles rather than staying put, and they have to:
+ * the h1 clamp bottoms out at its floor on a narrow phone, so a 24px floor over
+ * an unmoved 24px h2 would leave the page title no larger than the sections
+ * inside it. Lowering a title is therefore never a one-line change here.
+ */
 article > h1 {
   margin-block: 0.2em 1.5rem;
-  font-size: clamp(1.75rem, 1.35rem + 1.6vw, 2.25rem);
+  /* 24px up to a 400px viewport, 30px from 900px up, linear between. Those two
+     breakpoints are unchanged; only the endpoints moved. */
+  font-size: clamp(1.5rem, 1.2rem + 1.2vw, 1.875rem);
   line-height: 1.35;
   letter-spacing: 0.01em;
   font-weight: 700;
@@ -282,13 +304,13 @@ article h4 {
 }
 
 article h2 {
-  font-size: 1.5rem;
+  font-size: 1.3125rem;
   padding-bottom: 0.4rem;
   border-bottom: 1px solid var(--border);
 }
 
 article h3 {
-  font-size: 1.25rem;
+  font-size: 1.125rem;
 }
 
 /* h4 matches the body size, so weight and colour carry the distinction. */
@@ -490,9 +512,10 @@ article > ul:last-child:has(> li > a[href^="/tags/"]) > li > a:hover,
 
 /* ------------------------------------------------------- listing & 404 -- */
 
+/* Sized with `article > h1`'s floor, so the two kinds of page title agree. */
 main > h1 {
   margin-block: 0.5rem 2rem;
-  font-size: 1.75rem;
+  font-size: 1.5rem;
   line-height: 1.35;
 }
 
@@ -529,7 +552,7 @@ main > h1 {
 }
 
 .post-list__title {
-  font-size: 1.1875rem;
+  font-size: 1.0625rem;
   font-weight: 700;
   line-height: 1.5;
   text-decoration: none;
@@ -542,11 +565,16 @@ main > h1 {
 /*
  * Body colour, not --muted: this is the sentence the reader uses to decide, so
  * dimming it would work against the entry. The title carries the emphasis by
- * weight and size instead.
+ * weight and size instead -- and 14px is what keeps that step legible now the
+ * title is 17px, while holding the ratio to the body the entry already had
+ * (15/17 then, 14/16 now).
+ *
+ * Shrinking it and dimming it at once would be spending both; only one of the
+ * two is available here, and the colour is the one being kept.
  */
 .post-list__summary {
   margin: 0;
-  font-size: 0.9375rem;
+  font-size: 0.875rem;
   line-height: 1.8;
 }
 
