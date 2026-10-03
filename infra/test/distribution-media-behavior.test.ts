@@ -1,7 +1,12 @@
 import { App } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
-import { API_PATH_PATTERN, MEDIA_PATH_PATTERN, SiteStack } from '../lib/site-stack.ts';
+import {
+  API_PATH_PATTERN,
+  ASTRO_ASSETS_PATH_PATTERN,
+  MEDIA_PATH_PATTERN,
+  SiteStack,
+} from '../lib/site-stack.ts';
 
 interface CacheBehavior {
   PathPattern?: string;
@@ -63,13 +68,21 @@ describe('/media/* の追加ビヘイビア', () => {
     expect(distributionConfig().Origins).toHaveLength(3);
   });
 
-  it('CacheBehaviors がちょうど 2 件で、順序が /media/* -> /api/* である', () => {
+  it('CacheBehaviors がちょうど 3 件で、順序が /media/* -> /api/* -> /_astro/* である', () => {
     // **順序に意味がある。** CDK はキーの挿入順でオリジンに番号を振り、
     // OAC の論理 ID がその番号から作られる。/api/* を先に書くとメディア用 OAC が
     // 置換される（distribution-oac.test.ts が論理 ID 集合を固定している）。
+    //
+    // **/_astro/* は末尾に足してある。** デフォルトビヘイビアと同じ `IOrigin` インスタンスを
+    // 再利用するので、ビヘイビアは 1 本増えてもオリジンは増えず、**OAC の論理 ID は 3 本とも
+    // 1 文字も動かない（実測）。** 番号を動かすのは新しい `withOriginAccessControl` 呼び出しだけで、
+    // 配信用バケットに対して 2 回目を呼ぶと Origins も OAC も 4 本になる。そのとき落ちるのは
+    // 上の「Origins がちょうど 3 件」と distribution-oac.test.ts であって **ここは通る**
+    // （PathPattern の並びは変わらない）。だから両方を残しておく必要がある。
     expect(cacheBehaviors().map((behavior) => behavior.PathPattern)).toEqual([
       MEDIA_PATH_PATTERN,
       API_PATH_PATTERN,
+      ASTRO_ASSETS_PATH_PATTERN,
     ]);
   });
 

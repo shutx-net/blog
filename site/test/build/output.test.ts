@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -317,5 +317,87 @@ describe("listing order", () => {
     expect(newer).toBeGreaterThan(-1);
     expect(older).toBeGreaterThan(-1);
     expect(newer).toBeLessThan(older);
+  });
+});
+
+// **What CloudFront's `immutable` rests on.** `/_astro/*` is served with
+// `Cache-Control: public, max-age=31536000, immutable`
+// (ASTRO_ASSETS_CACHE_CONTROL in infra/lib/response-headers.ts), and that is true of
+// exactly one kind of URL: one that never comes back with different bytes. vite makes
+// it so by putting the content hash in the filename -- edit the stylesheet and the
+// next build emits a *different* URL, which the HTML (`no-cache`) is forced to
+// revalidate and therefore picks up.
+//
+// Lose the hash and the declaration becomes a lie that nothing reports. The CDN keeps
+// answering with a year either way; the infra tests see a path pattern and a header
+// value, both still correct. The day it surfaces is the day someone works out that
+// visitors have been looking at a stale stylesheet for weeks.
+//
+// The complementary guards are on the config: site/test/unit/stylesheets.test.ts pins
+// build.assets / build.assetsPrefix / inlineStylesheets as values, and
+// infra/test/distribution-assets-behavior.test.ts scans this config as text from the
+// CDN's side. Neither looks at a real filename, which is the one thing here that does.
+describe("/_astro/ assets carry a content hash", () => {
+  const ASSETS_DIR = "_astro";
+
+  // `<name>.<hash>.<ext>` -- the hash being vite's base64url digest, measured as
+  // Layout.3W-5Im-W.css. Eight characters is vite's default length; `{8,}` leaves
+  // room for a longer one while still refusing a bare `Layout.css`. The character
+  // class is deliberately narrow: a dot in the hash would also break
+  // infra/functions/rewrite-uri.js, which decides "static file" by looking for a dot
+  // after the last slash.
+  const HASHED = /\.[A-Za-z0-9_-]{8,}\.[a-z0-9]+$/;
+
+  const assetNames = (): string[] => readdirSync(join(distDir, ASSETS_DIR));
+
+  /** Every file under dist/, as a path relative to dist/. */
+  const distFiles = (dir = ""): string[] =>
+    readdirSync(join(distDir, dir), { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? distFiles(join(dir, entry.name)) : [join(dir, entry.name)],
+    );
+
+  it("emits at least one asset", () => {
+    // "every name carries a hash" is also true of no names at all -- and an empty
+    // dist/_astro/ is the exact shape `inlineStylesheets: "auto"` produces once the
+    // built stylesheet drops below vite's 4096 B assetsInlineLimit (measured at
+    // 3643 B: inline <style> in 13/13 pages, zero <link>, empty dist/_astro/).
+    expect(assetNames().length).toBeGreaterThan(0);
+  });
+
+  it("names every asset <name>.<hash>.<ext>", () => {
+    for (const name of assetNames()) {
+      expect(name, `${name} carries no content hash`).toMatch(HASHED);
+    }
+  });
+
+  it("emits exactly one stylesheet", () => {
+    // CSS has one entry point: the global.css that Layout.astro imports. Scoped
+    // <style> blocks are zero across the site, so a second file here means a new
+    // entry point or a new scoped block -- and the question to ask then is whether
+    // what used to be shared still is.
+    expect(assetNames().filter((name) => name.endsWith(".css"))).toHaveLength(1);
+  });
+
+  it("keeps every content-hashed file inside _astro/", () => {
+    // `_astro` is astro's `build.assets` default and the CloudFront behavior is
+    // written against that literal (`/_astro/*`). Renaming it would move the assets
+    // out from under the immutable header while everything kept building and
+    // rendering, which is why this walks the whole tree rather than _astro alone.
+    const hashed = distFiles().filter((file) => HASHED.test(file));
+
+    expect(hashed.length, "no content-hashed file anywhere in dist/").toBeGreaterThan(0);
+    for (const file of hashed) {
+      expect(file.startsWith(`${ASSETS_DIR}/`), `${file} sits outside ${ASSETS_DIR}/`).toBe(true);
+    }
+  });
+
+  it("recognises a hashed name and refuses an unhashed one", () => {
+    // The detection rule itself, checked rather than assumed: a regex that matched
+    // nothing would hand the assertion above an empty list and a free pass, and the
+    // `toBeGreaterThan(0)` guard only catches that once nothing matches at all.
+    expect(HASHED.test("Layout.3W-5Im-W.css")).toBe(true);
+    expect(HASHED.test("Layout.css"), "a name with no hash segment").toBe(false);
+    expect(HASHED.test("Layout.3W-5Im.css"), "a hash segment of only six characters").toBe(false);
+    expect(HASHED.test("index.html")).toBe(false);
   });
 });

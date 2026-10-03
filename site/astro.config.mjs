@@ -21,24 +21,48 @@ export default defineConfig({
   // decide. The defaults emit sitemap-index.xml plus sitemap-0.xml and drop the
   // status pages (404, 500).
   integrations: [sitemap()],
-  // No `build.inlineStylesheets` on purpose: the default "auto" inlines a
-  // stylesheet only while it stays under vite's 4KB assetsInlineLimit, and the
-  // /_astro/Layout.*.css this build emits is 6.0KB, so it always stays external
-  // (measured: inline <style> 0/13, one <link>). The limit is compared against
-  // the built file, not against global.css -- which is 15KB of source, most of
-  // the difference being comments that minification drops.
+  // `"never"` is a declaration, not an optimisation. This site is served under
+  // `style-src 'self'` (infra/lib/response-headers.ts), so an inline <style>
+  // block is refused outright and the page carrying it loses its styling with
+  // nothing else going red -- while under the default "auto" whether astro
+  // inlines is decided by the *size* of the built stylesheet against vite's
+  // 4096 B assetsInlineLimit (astro's own shouldInlineAsset: a strict
+  // `Buffer.byteLength(source) < limit` on the built file, not on global.css,
+  // and `"never"` short-circuits it before it is ever asked). A CSP invariant
+  // must not hang on a byte count that the next restyle moves, in either
+  // direction. So it is stated instead of inferred.
   //
-  // It was pinned to "always" for one release, when designing the post page
-  // pushed global.css past the threshold and the stylesheet silently went
-  // external -- taking the last inline <style> out of dist/ and tripping the
-  // assertion in admin/test/build/output.test.ts. Pinning kept the CSP out of a
-  // restyle. Dropping 'unsafe-inline' from style-src is the reason the pin is
-  // gone now, and both moved in the same commit.
+  // Measured 2026-10-03: the emitted /_astro/Layout.*.css is 6741 B, leaving
+  // 6741 - 4096 = 2645 B of headroom under the threshold that used to be the
+  // only thing keeping the stylesheet external. global.css is 25344 B of source,
+  // but that number never reaches the comparison: 16906 B of it are comments and
+  // 8438 B are rules, and those minify to the 6741 B above.
   //
-  // Same-origin CSS is covered by style-src 'self', so nothing here may put a
-  // <style> block back: the CSP would block it and the page would lose its
-  // styling. That direction is now watched by output.test.ts, which requires
-  // zero inline <style> rather than at least one.
+  // The failure mode is not hypothetical. Rebuilt with the stylesheet cut to
+  // 3643 B and no `build` block at all, "auto" put an inline <style> into 13/13
+  // HTML files, emitted zero <link rel="stylesheet"> and left dist/_astro/ empty
+  // -- in production that is every page blocked by style-src 'self' at once.
+  // With `"never"` the same 3643 B stylesheet stayed external
+  // (/_astro/Layout.DSUcKf8k.css, inline <style> 0/13, <link> 13/13).
+  //
+  // At today's size the setting changes no output at all: dist/ is byte-identical
+  // with and without it (`diff -r` against a build of the previous config). It
+  // buys the invariant, not bytes.
+  //
+  // `"always"` must not come back. It was pinned there for one release -- when
+  // designing the post page pushed the stylesheet past the threshold and it
+  // silently went external, taking the last inline <style> out of dist/ -- and
+  // it is what `style-src 'unsafe-inline'` existed for; dropping that directive
+  // and dropping the pin moved in the same commit. The guard on dist/ is
+  // admin/test/build/output.test.ts (it scans ../../../site/dist and requires
+  // *zero* inline <style>, the reverse of what it once asserted);
+  // site/test/build/output.test.ts makes no claim about <style>. The value on
+  // this line is pinned by test/unit/stylesheets.test.ts, which also pins
+  // build.assets and build.assetsPrefix as unset: CloudFront's immutable
+  // /_astro/* behavior is written against astro's default asset directory.
+  build: {
+    inlineStylesheets: "never",
+  },
   markdown: {
     processor: unified(),
   },
