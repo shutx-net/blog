@@ -565,11 +565,16 @@ main > h1 {
 /*
  * Body colour, not --muted: this is the sentence the reader uses to decide, so
  * dimming it would work against the entry. The title carries the emphasis by
- * weight and size instead.
+ * weight and size instead -- and 14px is what keeps that step legible now the
+ * title is 17px, while holding the ratio to the body the entry already had
+ * (15/17 then, 14/16 now).
+ *
+ * Shrinking it and dimming it at once would be spending both; only one of the
+ * two is available here, and the colour is the one being kept.
  */
 .post-list__summary {
   margin: 0;
-  font-size: 0.9375rem;
+  font-size: 0.875rem;
   line-height: 1.8;
 }
 
