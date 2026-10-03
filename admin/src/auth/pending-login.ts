@@ -126,16 +126,11 @@ const isPendingLogin = (value: unknown): value is PendingLogin =>
  * token 交換に進むので、**この順序が「code の再生」に対する防御そのもの**であり、
  * 認可サーバ側の code 単回使用に依存しない二重化になっている。
  *
- * 判定の順序（上から順に、当たったらそこで終わる）:
- *
- *   1. `state` が無い          -> `state_missing`。**レコードを消さない**
- *   2. レコードが無い / 壊れている -> `no_pending_login`
- *   3. TTL 超過                -> `expired`。**消す**（古い verifier を残さない）
- *   4. `state` 不一致           -> `state_mismatch`。**消さない**
- *   5. 成功                    -> **消してから**返す
- *
- * **4 で消さないのは意図的な非対称。** 攻撃者が誘導した callback で正規の利用者の pending
- * レコードを壊せると、それ自体が妨害になる。同じタブで正しく戻ればまだ完了できる。
+ * 消すのは TTL 超過（古い verifier を残さない）と成功のときだけ。**`state_mismatch` と
+ * `state_missing` で消さないのは意図的な非対称** — 攻撃者が誘導した callback で正規の
+ * 利用者の pending レコードを壊せると、それ自体が妨害になる。同じタブで正しく戻れば
+ * まだ完了できる（`test/unit/auth-callback.test.ts` の「pending レコードは壊されない
+ * （正規の利用者はまだ完了できる）」）。
  */
 export const consumePendingLogin = (
   store: SessionStore,

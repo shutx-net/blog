@@ -6,20 +6,17 @@ import type { DraftFields } from './model.ts';
  * 書きかけの記事を保存し、復元する。
  *
  * ログインは**全画面遷移**なので、押した瞬間にページが作り直され、保存していなければ
- * 書きかけは消える。**これがこのフェーズで最も守りたい 1 点**で、
- * `test/unit/draft-persistence.test.ts` の「攻撃 8」が偽 `redirect` の中から store を
- * 覗いて、順序ではなく**観測で**固定している。
+ * 書きかけは消える。`test/unit/draft-persistence.test.ts` の「攻撃 8」が偽 `redirect` の
+ * 中から store を覗いて、順序ではなく**観測で**固定している。
  *
- * 差し込み口は既に空いていた — `bind.ts` の `EditorPorts.onChange(fields)` が毎 input /
- * change で `DraftFields` ごと呼ばれるので、`app.ts` がそこに `saveDraft` を挿すだけ。
- * **この保存のために `bind.ts` を変えた箇所は無い。**
+ * 差し込み口は `bind.ts` の `EditorPorts.onChange(fields)` で、毎 input / change に
+ * `DraftFields` ごと呼ばれる。`app.ts` がそこに `saveDraft` を挿している。
  *
  * `beforeunload` も `sendBeacon` も使わない。`sendBeacon` は
  * `test/unit/no-raw-fetch.test.ts` が禁止しており、`beforeunload` は打鍵ごとの保存が
  * あれば不要で、頼ると「最後の 1 文字が入っていない」事故が起きる。
  * **打鍵ごとに保存するほうが単純で確実。** `setItem` は同期 I/O だが対象は数 KB の
  * JSON 1 個で、`bind.ts` は既に毎打鍵でプレビュー全体を再描画している。
- * **この保存が律速になることはない。**
  *
  * 保存先はタブ単位（`storage/session-store.ts`）なので、**下書きは「タブが生きている間」
  * だけ残る。端末をまたぐ保存は scope 外。**

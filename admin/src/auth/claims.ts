@@ -65,8 +65,7 @@ export const readIdTokenClaims = (jwt: string): IdTokenClaims | undefined => {
     const payloadSegment = segments[1];
     if (payloadSegment === undefined || payloadSegment.length === 0) return undefined;
 
-    // **`atob` の結果をそのまま JSON.parse すると UTF-8 が化ける。**
-    // バイト列に戻してから TextDecoder を通すこと。
+    // UTF-8 が化けないことは test/unit/auth-claims.test.ts が固定している。
     const text = new TextDecoder().decode(base64UrlDecodeToBytes(payloadSegment));
     const parsed: unknown = JSON.parse(text);
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;

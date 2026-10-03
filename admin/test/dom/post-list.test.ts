@@ -194,7 +194,7 @@ describe('一覧の読み込み', () => {
     );
   });
 
-  it('**ボタンの disabled に頼らずに重複を止める**（Phase 4 は直接呼ぶ）', async () => {
+  it('**ボタンの disabled に頼らずに重複を止める**', async () => {
     const root = mount();
     const calls: string[] = [];
     let resolveFirst: ((response: Response) => void) | undefined;
@@ -213,7 +213,7 @@ describe('一覧の読み込み', () => {
     // **`.click()` は disabled な要素では発火しない**ので、それだけでは
     // 「二重呼び出しを止めている」ことの証明にならない。`dispatchEvent` は
     // disabled でもリスナまで届くので、**中の見張り**を直接試せる。
-    // Phase 4 が編集後に一覧を呼ぶのは、まさにこの「ボタンを経由しない」経路。
+    // 削除の成功後に一覧を読み直す app.ts の経路が、まさにこの呼び方をする。
     expect(button?.disabled).toBe(true);
     button?.dispatchEvent(new Event('click', { bubbles: true }));
     button?.dispatchEvent(new Event('click', { bubbles: true }));

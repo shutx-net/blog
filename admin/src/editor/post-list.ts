@@ -24,10 +24,7 @@ export const EMPTY_POST_LIST_MESSAGE = 'まだ記事が無い';
 /** 下書きのバッジ。**色ではなく文字で示す。** */
 const DRAFT_BADGE = '下書き';
 
-/** 編集ボタンの文字。 */
 const EDIT_LABEL = '編集';
-
-/** 削除ボタンの文字。 */
 const DELETE_LABEL = '削除';
 
 /**

@@ -85,7 +85,7 @@ export interface AppDeps {
  * 依存を増やさないという判断に反する）。**代わりに綴りの一致を contract テストが見ている。**
  */
 export const AUTH_FAILURE_MESSAGES: Readonly<Record<string, string>> = {
-  // **「認証が未設定」の綴りを保つこと。** Phase 4 の test/dom/submit.test.ts が
+  // **「認証が未設定」の綴りを保つこと。** test/dom/submit.test.ts が
   // この語で固定している（既存アサーションを緩めない）。
   auth_not_configured: '認証が未設定（API が AUTH_MODE=deny-all で動いている）。infra を確認すること',
   unauthenticated: 'ログインしていないので送信できない。「ログイン」を押すこと',
@@ -109,14 +109,6 @@ class OverwriteDeclinedError extends Error {
 }
 
 /**
- * 409 のときの確認文。**失われるものを先に言う。**
- *
- * **ここに到達するのは同じ秒に 2 本投稿したときだけ。** slug は pubDate から
- * `YYYY/MM/DD/HHmmss` で導出されるので、秒が違えば衝突しない。
- * それでも経路と確認を残しているのは、**記事の編集機能の土台になる**から
- * （既存の記事を開いて直す操作は、まさに同じパスへの上書きである）。
- */
-/**
  * 削除の確認文。**失われるものと、失われないものを両方言う。**
  *
  * 「履歴には残る」を書くのは、取り消せないと誤解して手が止まるのを避けるため。
@@ -125,6 +117,13 @@ class OverwriteDeclinedError extends Error {
 export const deletePrompt = (slug: string, title: string): string =>
   `${title}（${slug}）を削除する。Git の履歴には残るが、サイトからは消える。削除するか？`;
 
+/**
+ * 409 のときの確認文。**失われるものを先に言う。**
+ *
+ * **ここに到達するのは新規投稿で同じ秒に 2 本出したときだけ。** slug は pubDate から
+ * `YYYY/MM/DD/HHmmss` で導出されるので、秒が違えば衝突しない。編集（`UPDATE_POST`）の
+ * 409 はこの確認を通さず、`UPDATE_CONFLICT_MESSAGES` が理由だけを伝える。
+ */
 export const slugConflictPrompt = (slug: string): string =>
   `${slug} には既に記事がある（同じ秒に投稿したか、pubDate が既存の記事と同じ）。上書きすると今の内容は置き換わる（Git の履歴には残る）。上書きするか？`;
 
@@ -172,7 +171,7 @@ const isSlugConflict = (error: unknown): boolean =>
  * **404 の扱いがこの関数の存在理由。** CloudFront は署名に失敗した 403 を
  * `CustomErrorResponses` で **404 の HTML** に化けさせる。素直に
  * 「見つかりません」と出すと、次に読む人が経路の問題だと誤解して何時間も溶かす
- * （Phase 3 で実際に踏んだ）。**その知識を UI に埋め込んでおく。**
+ * （実際に踏んだ）。**その知識を UI に埋め込んでおく。**
  */
 const describeFailure = (error: unknown): string => {
   if (error instanceof OverwriteDeclinedError) {
@@ -223,10 +222,8 @@ const describeCallback = (result: CallbackResult): string | undefined => {
 };
 
 /**
- * エディタの根を取り出す。**`main.ts` に条件分岐を書かせないためにここにある。**
- *
- * 無ければ投げる（黙って握りつぶさない）。`main.ts` に `if` を書くと、
- * ブラウザ無しでは実行できない領域に判断が 1 つ増える。
+ * エディタの根を取り出す。**`main.ts` に `if` を書かせないためにここにある**
+ * — ブラウザ無しでは実行できない領域に判断を 1 つも増やさない。無ければ投げる。
  */
 export const requireRoot = (doc: ParentNode): HTMLElement => {
   const root = doc.querySelector<HTMLElement>('#editor');
@@ -234,9 +231,6 @@ export const requireRoot = (doc: ParentNode): HTMLElement => {
   return root;
 };
 
-/**
- * すべての依存を引数で受け取る。**DOM テストは偽の client と偽の auth を刺せる。**
- */
 export const createApp = (deps: AppDeps): { destroy(): void } => {
   const client = createApiClient({
     ...(deps.origin === undefined ? {} : { origin: deps.origin }),
@@ -276,8 +270,6 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
 
   const editor = bindEditor(deps.root, {
     renderPreview: deps.renderPreview,
-    // **既存の差し込み口をそのまま使う。** 毎 input / change で呼ばれるので、
-    // 新しいイベント配線は要らない。
     onChange: (fields) => {
       // **編集中は保存しない。** 下書きストアは新規記事のためのもので、
       // 編集の打鍵を書き込むと、次に新規で開いたときに他人の記事が復活する。
@@ -405,13 +397,6 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
     editor.setBusy(inFlight || !signedIn);
   };
 
-  /**
-   * 一覧の読み込み。**エディタの状態には触らない。**
-   *
-   * 失敗は `#post-list-status` にだけ出す。`#problems`（入力の指摘）や
-   * `#status`（送信の結果）に混ぜると、一覧が読めないだけで「記事が書けない」と
-   * 読めてしまう。**一覧が読めなくても記事は書ける。**
-   */
   let listInFlight = false;
 
   /**
@@ -452,6 +437,13 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
     refreshPostList();
   };
 
+  /**
+   * 一覧の読み込み。**エディタの状態には触らない。**
+   *
+   * 失敗は `#post-list-status` にだけ出す。`#problems`（入力の指摘）や
+   * `#status`（送信の結果）に混ぜると、**一覧が読めないだけで「記事が書けない」と
+   * 読めてしまう。**
+   */
   const refreshPostList = (): void => {
     if (listInFlight) return;
     if (!deps.auth.isAuthenticated()) {
@@ -526,7 +518,7 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
     editor.setStatus('送信中…');
 
     /**
-     * **上書きの意思は 2 回目の送信でしか付かない。** 1 回目は必ず付けない。
+     * **上書きの意思は 2 回目の送信でしか付かない。**
      *
      * **slug は送らない**（`postRequestBody`）。api は付いていたら 400 にする。
      */
@@ -654,12 +646,10 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
 
   renderAuthState();
   renderEditState();
-  // **起動時に取りに行かない。** 押されるまで API を呼ばない。
+  // **押されるまで一覧を取りに行かない。**
   listStatus.textContent = POST_LIST_IDLE;
 
   // **起動時のメッセージ。** callback の結果があればそれを優先する。
-  // どちらも `setStatus`（`textContent`）を通すので、認可サーバが返した任意文字列が
-  // マークアップとして解釈されることはない。
   const callbackMessage =
     deps.callback === undefined ? undefined : describeCallback(deps.callback);
   if (callbackMessage !== undefined) {

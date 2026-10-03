@@ -11,14 +11,16 @@ import type { TokenResult } from './token-endpoint.ts';
  *
  * # 判定の順序（上から順に、1 つでも当たったらそこで終わる）
  *
- *   1. `code` も `error` も無い      -> `no_callback`。**副作用ゼロ**（URL も触らない）
- *   2. **URL から認可のパラメータを消す**（交換の前。理由は下）
- *   3. `error` がある                -> pending を削除して終了。**`code` を見ない**
- *   4. `state` が無い / 空            -> `state_missing`。**`code` があっても交換しない**
+ *   1. `code` も `error` も無い      -> `no_callback`
+ *   2. URL から認可のパラメータを消す（交換の前。理由は下）
+ *   3. `error` がある                -> pending を削除して終了
+ *   4. `state` が無い / 空            -> `state_missing`
  *   5. `consumePendingLogin` が失敗   -> その理由で終了
  *   6. ここで初めて `exchange` を呼ぶ
  *   7. 応答の ID トークンを健全性チェックに通す。落ちたら保存しない
  *   8. 成功時のみセッションを保存
+ *
+ * 各段を固定しているのは `test/unit/auth-callback.test.ts` の「攻撃 1」〜「攻撃 6」。
  *
  * 掃除が交換より前なのは、交換のネットワーク往復中にリロードされると `?code=` が
  * 再送されるから。**先に消しておけばリロードは「code 無しの通常訪問」になり二重交換が
@@ -32,7 +34,7 @@ import type { TokenResult } from './token-endpoint.ts';
  *   (b) 引数で受ければ node 環境の unit テストでも大半を検証できる。
  *
  * **遷移する手段をそもそも持たない。** 処理は同一ページ内で完結し、
- * `test/unit/auth-callback.test.ts` が綴りの走査でそれを固定している。
+ * 同テストが綴りの走査でそれを固定している。
  */
 
 /** 認可の往復で URL に載るパラメータ。**すべて消す。** */

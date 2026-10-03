@@ -217,7 +217,7 @@ describe('応答の読み替え', () => {
   });
 
   it('**404 のとき x-amz-content-sha256 の専用文言を出す**', async () => {
-    // Phase 3 で 1 度踏んだ罠。403（署名失敗）が CustomErrorResponses で
+    // 1 度踏んだ罠。403（署名失敗）が CustomErrorResponses で
     // 404 の HTML に化けるので、404 は「経路が無い」ではなく
     // 「署名が失敗した」と読む。UI にその知識を埋め込む。
     const root = mount();

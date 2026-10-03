@@ -228,8 +228,8 @@ describe('**CSP がサイトを壊さないことの静的確認（site/dist）*
   });
 
   it('**インライン <style> が 0 件**（style-src self がそれを禁じている）', () => {
-    // 以前は逆向きだった（「実在する」= 'unsafe-inline' が要る根拠）。その合図が
-    // 0 件になったので `style-src` から 'unsafe-inline' を外した。**いまは逆向きの見張り。**
+    // **逆向きの見張り。** 0 件になったからこそ `style-src` から
+    // 'unsafe-inline' を外せている。
     //
     // 1 件でも現れたら `style-src 'self'` がそれをブロックし、**そのページは見た目を失う。**
     // `build.inlineStylesheets: "always"` を戻す / `<style>` を直書きする、が典型的な経路。

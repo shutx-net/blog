@@ -213,19 +213,13 @@ describe('credentials が transport の値どおりに渡る', () => {
 });
 
 /**
- * **走査規則。Phase 5 で 1 本の許可リストから 4 本の規則に張り替えた。**
+ * **走査規則は綴りごとに 4 本ある。**
  *
- * Phase 4 までは「`Cognito` / `document.cookie` / `localStorage` / `sessionStorage` の
- * どれも `src/auth/session.ts` にしか現れない」という 1 本だった。実装が 1 ファイルに
+ * 「`Cognito` / `document.cookie` / `localStorage` / `sessionStorage` のどれも
+ * `src/auth/session.ts` にしか現れない」という 1 本から張り替えたもの。実装が 1 ファイルに
  * 収まらなくなったときに、**その形を守るために実装を 1 ファイルへ押し込むのは本末転倒**
- * なので、規則を分解した。**合計としては今より厳しい。**
- *
- *   | 綴り | Phase 4 の許可先 | Phase 5 の許可先 |
- *   | --- | --- | --- |
- *   | localStorage / sessionStorage | auth/session.ts（何にでも使えた） | **storage/session-store.ts の 1 本だけ** |
- *   | document.cookie | auth/session.ts | **どこにも無い（0 件）** |
- *   | Cognito | auth/session.ts | auth/ 配下（+ main.ts の import 行） |
- *   | authorization | api/client.ts, auth/session.ts | 同じ（`authorization_code` は別物として除外） |
+ * なので、規則を分解した。**合計としては 1 本だったときより厳しい。**
+ * 綴りごとの許可先は下の `SEAM_RULES` が持っている。
  *
  * **各規則について「違反サンプルを実際に検出できること」を先に主張する。**
  * 検出できない走査は、走査が無いのと同じどころか、守られているという誤った確信を
@@ -257,7 +251,7 @@ const SEAM_RULES: SeamRule[] = [
   },
   {
     name: 'document.cookie',
-    // **Phase 5 で 1 -> 0 に締めた。** Cookie 方式は採らないと決めた
+    // **許可先は 0 件。** Cookie 方式は採らないと決めた
     // （api/src/auth/transport.ts が理由を書いている）ので、綴りごと禁じる。
     pattern: /document\s*\.\s*cookie/,
     allows: () => false,
@@ -398,7 +392,7 @@ describe('**認証の知識が src/auth/ の外に漏れていない**', () => {
  * **`main.ts` は組み立てるだけ。**
  *
  * ブラウザが無いので `main.ts` 自体は実行して確かめられない。だから
- * **判断をそこに置かない**、というのが Phase 4 からの方針で、ここではそれを機械化する。
+ * **判断をそこに置かない。** ここではそれを機械化する。
  * 分岐は `app.ts` 側（DOM テストから駆動できる）に置く。
  */
 describe('**main.ts に判断を置かない**', () => {

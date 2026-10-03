@@ -32,8 +32,7 @@ export const API_OPERATIONS: readonly ApiOperation[] = [
 /**
  * API が返した非 2xx。
  *
- * **パラメータプロパティを使っていない。** `erasableSyntaxOnly` は
- * `constructor(readonly status: number)` を TS1294 で拒否する。
+ * **パラメータプロパティを使わない**（`erasableSyntaxOnly` が拒否する）。
  * api/src/posts/validate.ts の `PostValidationError` と同じ書き方に揃えている。
  *
  * **メッセージに入力値を含めない**（api 側と同じ規律）。
@@ -85,9 +84,8 @@ const withQuery = (path: string, query: Record<string, string> | undefined): str
  * **API に触る唯一の入口。**
  *
  * `x-amz-content-sha256` の付与をここ 1 箇所に閉じ込めているのが要点。
- * test/unit/no-raw-fetch.test.ts が「素の fetch は client.ts と upload.ts に
- * しか無い」ことを走査で固定しているので、**この関数を通らない API 呼び出しは
- * 書けない。**
+ * test/unit/no-raw-fetch.test.ts が「src/ の素の fetch は許可リストの 3 本だけ」を
+ * 走査で固定しているので、**この関数を通らない API 呼び出しは書けない。**
  */
 export const createApiClient = (deps: ApiClientDeps): ApiClient => {
   const origin = deps.origin ?? '';

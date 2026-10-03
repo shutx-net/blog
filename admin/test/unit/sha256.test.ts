@@ -8,7 +8,7 @@ import { EMPTY_PAYLOAD_SHA256, sha256Hex, utf8Bytes } from '../../src/api/sha256
  * CloudFront + OAC の `SigningBehavior: always` は届いたリクエストに SigV4 で
  * 署名するが、**ボディのハッシュだけは呼び出し側が付けないといけない**。
  * 付け忘れると Lambda が unsigned payload を拒んで 403 になり、それが
- * `CustomErrorResponses` によって **404 の HTML** に化ける（Phase 3 で実測）。
+ * `CustomErrorResponses` によって **404 の HTML** に化ける（実測）。
  *
  * ハッシュ計算にパッケージを入れていない。Web Crypto の
  * `crypto.subtle.digest('SHA-256', bytes)` は Node 24 でもブラウザでも

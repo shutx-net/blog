@@ -22,7 +22,8 @@ import { createSessionStore } from './storage/session-store.ts';
  * **jsdom で検証できない唯一の部分**でもある（jsdom の `location.assign()` は
  * 「Not implemented: navigation to another Document」を出して**何もしない** — 例外も投げず
  * URL も変わらないので、テストに書くと緑になるが何も検証しない）。よって遷移は必ず注入した
- * 関数で観測し、ここは人間の手動確認に送る（DEVELOPERS.md）。
+ * 関数で観測し、ここは人間の手動確認に送る
+ * （`docs/aws-ops.md` の「ブラウザでしか確かめられないこと」）。
  *
  * **`completeCallback` を `createApp` より先に `await` する。** 先に UI を立ち上げると
  * `?code=` の処理中に未認証の画面が一瞬出る。ただし **`await` が失敗しても `createApp` は

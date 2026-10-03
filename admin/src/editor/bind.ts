@@ -112,8 +112,7 @@ export const bindEditor = (root: HTMLElement, ports: EditorPorts): BoundEditor =
   };
 
   for (const element of [...inputs, draftInput]) {
-    // **input と change の両方を購読する。** checkbox は change しか
-    // 出さないブラウザがある。
+    // **input と change の両方を購読する。** checkbox は change しか出さない実装がある。
     element.addEventListener('input', update);
     element.addEventListener('change', update);
   }
