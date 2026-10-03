@@ -127,7 +127,7 @@ export const createPostReader = (deps: PostReaderDeps): PostReader => {
 
     // **切り詰めを「記事が無い」と読まない（fail closed）。**
     // 100,000 エントリ / 7 MB を超えると truncated: true で黙って削られる。
-    // 一覧が短くなるだけでなく、公開可能数の床（Phase 3）を誤らせる。
+    // 一覧が短くなるだけでなく、公開可能数の床を誤らせる。
     if (tree.truncated === true) {
       throw new Error('GitHub tree response is truncated; cannot list posts reliably');
     }
@@ -163,13 +163,13 @@ export const createPostReader = (deps: PostReaderDeps): PostReader => {
   };
 
   const read = async (slug: string): Promise<PostDetail> => {
-    // **GitHub を呼ぶ前に検証する。** publisher と同じ関数を使う（写しを作ると片方だけ緩む）。
+    // **GitHub を呼ぶ前に検証する。** publisher と同じ `pathForSlug` を通す。
     const path = pathForSlug(deps.postsPathPrefix, slug);
     const token = await deps.tokenProvider.getToken();
     const commitSha = await baseCommitSha(token);
 
     // **?ref に commit の sha を渡す。** ブランチ名で引くと、返した blob sha が
-    // 「どの木のものか」が曖昧になる。Phase 4 がこの sha を並行制御に使う。
+    // 「どの木のものか」が曖昧になる。この sha が編集・削除の楽観的並行制御のトークンになる。
     const response = await request(`${repoPath}/contents/${path}?ref=${commitSha}`, token);
     if (response.status === 404) throw new PostNotFoundError(slug);
     // **404 以外の失敗を「無い」と読まない（fail closed）。** 403 や 500 を不在と

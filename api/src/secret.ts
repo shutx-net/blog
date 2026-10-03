@@ -5,8 +5,8 @@ import type { Logger, SecretReader, SecretVersionOptions } from './deps.ts';
 /**
  * 鍵がまだ投入されていないときに投げる。
  *
- * **本フェーズの既定状態がこれである。** CDK は値の無い（バージョンが 1 つも無い）
- * シークレットを作るので、GetSecretValue は ResourceNotFoundException を返す。
+ * CDK は値の無い（バージョンが 1 つも無い）シークレットを作り、値は CLI かコンソールで
+ * 一度だけ入れる。入る前の GetSecretValue は ResourceNotFoundException を返す。
  * ルータはこれを 503 にマップする — 設定漏れであって、呼び出し側の誤りではない。
  */
 export class KeyNotProvisionedError extends Error {
@@ -28,15 +28,16 @@ export interface SecretReaderDeps {
 /**
  * 秘密鍵の読み出し器を作る。
  *
- * 設計判断9（保管するのは秘密鍵だけ）はここで完結する。PEM は実行環境のメモリに
- * だけ乗り、/tmp にも環境変数にも書かない。
+ * Secrets Manager に置くのは秘密鍵だけ（AGENTS.md の `### 認証情報`）。それはここで
+ * 完結する — PEM は実行環境のメモリにだけ乗り、/tmp にも環境変数にも書かない。
  */
 export const createSecretReader = (deps: SecretReaderDeps): SecretReader => {
   let cached: string | undefined;
 
   const readPrivateKey = async (options?: SecretVersionOptions): Promise<string> => {
     // **VersionStage を明示したときはキャッシュを使わない。** 鍵ローテーションの
-    // 検証（DEVELOPERS.md 手順 2）で古い値が返ると、検証したことにならない。
+    // 検証（`docs/aws-ops.md` の「GitHub App の秘密鍵」の手順 3）で古い値が返ると、
+    // 検証したことにならない。
     const versionStage = options?.versionStage;
     if (versionStage === undefined && cached !== undefined) return cached;
 
@@ -62,7 +63,7 @@ export const createSecretReader = (deps: SecretReaderDeps): SecretReader => {
 
     let pem: string | undefined;
     if (response.SecretBinary !== undefined) {
-      // DEVELOPERS.md の投入手順が --secret-binary なので、こちらが本線。
+      // `docs/aws-ops.md` の投入手順が --secret-binary なので、こちらが本線。
       try {
         pem = new TextDecoder('utf-8', { fatal: true }).decode(response.SecretBinary);
       } catch {

@@ -190,7 +190,7 @@ describe('署名鍵とアルゴリズムの差し替え', () => {
   });
 });
 
-describe('鍵対の生成コスト', () => {
+describe('鍵対の同一性', () => {
   it('モジュールスコープで 1 度だけ生成される（同じ鍵素材が返る）', () => {
     // 2048bit の生成は 100〜500ms かかる。it ごとに作ると積み上がったときに効く。
     const first = createHash('sha256').update(JSON.stringify(publicJwk)).digest('hex');

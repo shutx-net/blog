@@ -4,11 +4,10 @@ import { createHmac, createSign, generateKeyPairSync, randomUUID } from 'node:cr
  * **実鍵で Cognito 形式の ID トークンを署名するテストハーネス。**
  *
  * 検証器（aws-jwt-verify の CognitoJwtVerifier）を **モックしない** ための道具である。
- * Phase 3 の教訓: 検証器をモックすると、テストは「モックが false を返した」ことしか
- * 言わなくなり、本フェーズで一番価値のある主張（この攻撃はこの assertion で落ちる）が
- * 全部消える。
+ * モックすると、テストは「モックが false を返した」ことしか言わなくなり、
+ * 「この攻撃はこの assertion で落ちる」という一番価値のある主張が全部消える。
  *
- * node:crypto だけで書いてある（Phase 3 の api/src/github/jwt.ts と同じ手口）。
+ * node:crypto だけで書いてある（`api/src/github/jwt.ts` と同じ手口）。
  * 実測: publicKey.export({ format: 'jwk' }) は kty / n / e を返し、
  * createPublicKey({ key: jwk, format: 'jwk' }) で戻した鍵で
  * createVerify('RSA-SHA256') が true を返す（node v24.19.0）。

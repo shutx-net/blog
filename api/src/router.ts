@@ -15,7 +15,6 @@ import { KeyNotProvisionedError } from './secret.ts';
 
 export interface RouteContext {
   request: ApiRequest;
-  /** bodyKind: 'json' の経路だけ中身が入る。'none' の経路では空オブジェクト。 */
   body: Record<string, unknown>;
   deps: Deps;
 }
@@ -38,7 +37,8 @@ const health = async ({ deps }: RouteContext): Promise<ApiResponse> =>
   jsonResponse(200, { status: 'ok', authMode: deps.authMode });
 
 /**
- * 鍵ローテーションの検証用（DEVELOPERS.md の手順 2「動作を確認」の実体）。
+ * 鍵ローテーションの検証用。`docs/aws-ops.md` の「GitHub App の秘密鍵」の手順 3
+ * （昇格する前に新しい鍵で token が取れるか確かめる）がこれを呼ぶ。
  *
  * **秘密鍵も installation token も返さない。** 「その鍵でトークンが取れたか」の
  * 真偽だけを返す。?versionStage=AWSPENDING で投入直後の鍵を検証できる。
@@ -153,7 +153,7 @@ const createPost = async ({ body, deps }: RouteContext): Promise<ApiResponse> =>
  */
 const updatePost = async ({ body, deps }: RouteContext): Promise<ApiResponse> => {
   // **reader を呼ぶ前に形を確かめる。** 呼んでから弾くと、不正な入力でも
-  // installation token の交換と GitHub への往復が起きる（getPost と同じ立場）。
+  // installation token の交換と GitHub への往復が起きる。
   const targetSlug = body['targetSlug'];
   if (typeof targetSlug !== 'string' || !DATE_SLUG_PATTERN.test(targetSlug)) {
     return jsonResponse(400, { error: 'invalid_post', field: 'targetSlug' });
@@ -180,13 +180,9 @@ const updatePost = async ({ body, deps }: RouteContext): Promise<ApiResponse> =>
     throw error;
   }
 
-  // **公開記事が 0 本になる更新を拒む。** 下書きに戻す操作でも起きる。
-  //
-  // `deploy.yml` のスラッグ照合ガードが数えているのは**公開分**なので、
-  // 「総数」で判定すると許可したのにデプロイが落ちる。
-  // `UnknownSlugError` は**握り潰さない** — read が成功した直後に list に居ない
-  // のはリポジトリの不整合であり、推測で許可に倒すと「拒否されないのに
-  // デプロイが落ちる」状態になる。そのまま 500 として上げる。
+  // **公開記事が 0 本になる更新を拒む。** 下書きに戻す操作でも同じ状態になる。
+  // 「総数」ではなく公開可能数で数える理由は `posts/publishable-floor.ts`。
+  // `UnknownSlugError` は**握り潰さず、そのまま 500 として上げる**（リポジトリの不整合）。
   if (wouldStarveSite(await deps.reader.list(), { kind: 'update', slug: targetSlug, draft: update.post.draft })) {
     deps.logger.warn('update would leave the site with no published posts', { slug: targetSlug });
     return jsonResponse(409, { error: 'would_starve_site', field: 'draft' });
@@ -217,8 +213,7 @@ const updatePost = async ({ body, deps }: RouteContext): Promise<ApiResponse> =>
     throw error;
   }
 
-  // **ここから先は記事が既にコミットされている。** createPost と同じ規律で、
-  // 何が起きても成功を返し、update をやり直さない。
+  // **ここから先は記事が既にコミットされている**（createPost と同じ規律）。
   if (deps.deployDispatcher === undefined) return jsonResponse(200, result);
 
   try {
@@ -255,8 +250,7 @@ const listPosts = async ({ deps }: RouteContext): Promise<ApiResponse> => {
  */
 const getPost = async ({ request, deps }: RouteContext): Promise<ApiResponse> => {
   const slug = request.query['slug'];
-  // **reader を呼ぶ前に形を確かめる。** 呼んでから弾くと、不正な入力でも
-  // installation token の交換と GitHub への往復が起きる。
+  // **reader を呼ぶ前に形を確かめる**（理由は updatePost 参照）。
   if (slug === undefined || !DATE_SLUG_PATTERN.test(slug)) {
     // **入力値はエコーしない**（どのフィールドが悪いかだけ返す規律）。
     return jsonResponse(400, { error: 'invalid_post', field: 'slug' });
@@ -266,10 +260,9 @@ const getPost = async ({ request, deps }: RouteContext): Promise<ApiResponse> =>
     return jsonResponse(200, await deps.reader.read(slug));
   } catch (error) {
     if (error instanceof PostNotFoundError) {
-      // **404 を使ってよい。** auth.ts が 403/404 を禁じているのは *認可失敗* の
-      // 写像であって、リソースの不在は別。ただし CloudFront の CustomErrorResponses が
-      // origin の 404 を HTML に差し替えるので、admin にはこの JSON が届かず
-      // NON_JSON_RESPONSE として見える（client.ts が既にその扱いを持っている）。
+      // **404 を使ってよい** — auth.ts が 403/404 を禁じているのは *認可失敗* の
+      // 写像であって、リソースの不在は別（CloudFront に HTML へ化かされる件も含めて
+      // `PostNotFoundError` の JSDoc に書いてある）。
       deps.logger.warn('post not found', { slug: error.slug });
       return jsonResponse(404, { error: 'post_not_found' });
     }
@@ -290,8 +283,7 @@ const getPost = async ({ request, deps }: RouteContext): Promise<ApiResponse> =>
  */
 const deletePost = async ({ request, deps }: RouteContext): Promise<ApiResponse> => {
   const slug = request.query['slug'];
-  // **GitHub を呼ぶ前に形を確かめる。** 呼んでから弾くと、不正な入力でも
-  // installation token の交換が起きる（getPost / updatePost と同じ立場）。
+  // **GitHub を呼ぶ前に形を確かめる**（理由は updatePost 参照）。
   if (slug === undefined || !DATE_SLUG_PATTERN.test(slug)) {
     return jsonResponse(400, { error: 'invalid_post', field: 'slug' });
   }
@@ -313,11 +305,9 @@ const deletePost = async ({ request, deps }: RouteContext): Promise<ApiResponse>
     throw error;
   }
 
-  // **床の判定を書き込みの前に置く。** `deploy.yml` のスラッグ照合ガードが数えて
-  // いるのは**公開分**なので、「総数」で判定すると許可したのにデプロイが落ちる
-  // （公開 1 本 + 下書き 3 本でその公開を消す場合が実例）。
-  // `UnknownSlugError` は**握り潰さない** — read が成功した直後に list に居ないのは
-  // リポジトリの不整合であり、許可に倒すと「拒否されないのにデプロイが落ちる」。
+  // **床の判定を書き込みの前に置く。** 数えるのは「総数」ではなく公開可能数
+  // （公開 1 本 + 下書き 3 本でその公開を消す場合が実例。全文は `posts/publishable-floor.ts`）。
+  // `UnknownSlugError` は**握り潰さない** — 許可に倒すと「拒否されないのにデプロイが落ちる」。
   if (wouldStarveSite(await deps.reader.list(), { kind: 'delete', slug })) {
     deps.logger.warn('delete would leave the site with no published posts', { slug });
     return jsonResponse(409, { error: 'would_starve_site', field: 'slug' });
@@ -344,8 +334,7 @@ const deletePost = async ({ request, deps }: RouteContext): Promise<ApiResponse>
     throw error;
   }
 
-  // **ここから先は記事が既に消えている。** createPost / updatePost と同じ規律で、
-  // 何が起きても成功を返し、削除をやり直さない。
+  // **ここから先は記事が既に消えている**（createPost と同じ規律）。
   if (deps.deployDispatcher === undefined) return jsonResponse(200, result);
 
   try {
@@ -425,7 +414,7 @@ export const ROUTES: readonly Route[] = [
 /**
  * 経路解決 -> **認可** -> Content-Type -> ボディの順に閉じる。
  *
- * **認可がボディの検証より前にあることが本フェーズの核心。** 逆順にすると、
+ * **認可がボディの検証より前にあることが要点。** 逆順にすると、
  * 認可されないリクエストでもボディを parse することになり、
  * 「拒否時にコラボレータを一切呼ばない」という不変条件が保てなくなる。
  */
@@ -437,9 +426,7 @@ export const dispatch = async (request: ApiRequest, deps: Deps): Promise<ApiResp
     const result = await deps.authorizer.authorize(request);
     if (!result.ok) {
       // **写像表は auth.ts が持つ。ここで分岐を書かない。**
-      // 表は 401 と 503 しか持てない型になっており、**403 と 404 は書けない**。
-      // CloudFront の CustomErrorResponses が origin の 403/404 も HTML に差し替える
-      // ため、403 を使うと admin から「経路が無い」と区別が付かなくなる（auth.ts 参照）。
+      // 表は 401 と 503 しか持てない型になっており、**403 と 404 は書けない**（理由は auth.ts）。
       const failure = AUTH_FAILURE_RESPONSES[result.reason];
       return errorResponse(failure.statusCode, failure.error);
     }
@@ -461,7 +448,7 @@ export const dispatch = async (request: ApiRequest, deps: Deps): Promise<ApiResp
   } catch (error) {
     if (error instanceof KeyNotProvisionedError) {
       // 鍵がまだ Secrets Manager に入っていない。呼び出し側の誤りではなく設定漏れなので
-      // 4xx にしない。**本フェーズの既定状態がこれ**（CDK は空のシークレットを作る）。
+      // 4xx にしない（CDK が作るのは空のシークレットで、値は後から入れる）。
       deps.logger.error('GitHub App private key is not provisioned');
       return errorResponse(503, 'key_not_provisioned');
     }

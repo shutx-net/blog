@@ -17,8 +17,6 @@ import {
 } from '../helpers/cognito-tokens.ts';
 
 /**
- * **本フェーズの security-critical な成果物 1/2。**
- *
  * 14 種の JWT 攻撃を **実鍵で署名したトークン**で、**本物の CognitoJwtVerifier** に
  * 通す。vi.mock で検証器を差し替えたテストはこのファイルに 1 つも無い。
  * モックすると「モックが false を返した」ことしか言えなくなり、
@@ -76,7 +74,7 @@ const harness = (options: { allowedUsername?: string; jwks?: unknown[] } = {}): 
   return { authorize: (token) => authorizer.authorize(request(token)), log, verifySpy, request };
 };
 
-/** ログに渡った全引数を 1 本の文字列にする（Phase 3 の secret-in-logs 検査と同じ形）。 */
+/** ログに渡った全引数を 1 本の文字列にする（secret-in-logs 検査と同じ形）。 */
 const loggedText = (log: ReturnType<typeof logger>): string =>
   JSON.stringify([...log.info.mock.calls, ...log.warn.mock.calls, ...log.error.mock.calls]);
 
@@ -304,17 +302,15 @@ describe('JWT 攻撃', () => {
 describe('ライブラリの例外の判別方法（分岐の根拠を固定する）', () => {
   it('**例外クラスは name を設定しない** — name で分岐すると全部 invalid-token に落ちる', () => {
     // 実測（aws-jwt-verify 5.2.1）: error.js に this.name の代入が 1 箇所も無い。
-    // つまり FetchError でも .name は 'Error' のままである。
-    // ここを name で分岐すると **JWKS 取得失敗が全部 401 になり、サーバ側の障害を
-    // 「資格情報を出し直せ」と誤って伝える。**
+    // name で分岐したときの帰結は `api/src/auth/cognito.ts` の isJwksUnavailable。
     const error = new FetchError('https://example.invalid/jwks.json', 'boom');
     expect(error.name).toBe('Error');
     expect(error.name).not.toBe('FetchError');
   });
 
   it('instanceof なら判別できる（minify を通しても壊れない唯一の手段）', () => {
-    // constructor.name は esbuild の --minify でクラス名が潰れるため使えない。
-    // テスト（非 minify）では通り **本番だけが壊れる**という最悪の失敗の仕方になる。
+    // constructor.name は esbuild の --minify でクラス名が潰れるため使えない
+    // （テストは非 minify なので通り、**本番だけが壊れる**）。
     expect(new FetchError('https://example.invalid/', 'boom')).toBeInstanceOf(FetchError);
     expect(new NonRetryableFetchError('https://example.invalid/', 'boom')).toBeInstanceOf(FetchError);
   });

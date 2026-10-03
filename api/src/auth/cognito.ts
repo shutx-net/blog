@@ -46,7 +46,6 @@ export interface CognitoAuthorizerOptions {
  * 誤って伝える。**`constructor.name` でも分岐してはいけない** — バンドルは esbuild の
  * `--minify` を通るのでクラス名が潰れ、テスト（非 minify）では通って**本番だけが壊れる**。
  *
- * `instanceof` はクラスの同一性で判定するので minify を通しても壊れない。
  * `NonRetryableFetchError` は `FetchError` を継承しているのでこの表に要らない。
  */
 const isJwksUnavailable = (error: unknown): boolean =>

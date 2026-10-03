@@ -204,7 +204,6 @@ describe('AUTH_MODE=cognito で結線されている', () => {
 
   it('**GET /api/health が 200 で authMode が cognito**（無認証で確認できることが要件）', async () => {
     // 運用者がデプロイ後に「いまどちらのモードで動いているか」を確認できること自体が要件。
-    // 4.13 の受け入れ確認の一番外側の輪になる。
     const response = await (await handler())(event());
     expect(response.statusCode).toBe(200);
     expect(JSON.parse(response.body ?? '')['authMode']).toBe('cognito');

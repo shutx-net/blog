@@ -126,7 +126,7 @@ describe('installation id の解決とトークン交換', () => {
   it('access_tokens のボディで権限をスコープダウンしている', async () => {
     // docs: "If permissions is not specified, the installation access token will
     // have all of the permissions that were granted to the app."
-    // 本 API は site/src/content/posts/ しか書かないので contents: write だけでよい
+    // 記事の経路は記事リポジトリに markdown を書くだけなので contents: write で足りる
     // （.github/workflows/ を書くときだけ workflows: write が要る）。
     const { calls } = installFetch(defaultResponder);
     await provider().getToken();
@@ -419,7 +419,8 @@ describe('トークンを永続化しない', () => {
   });
 
   it('一時ディレクトリにファイルを作らない', async () => {
-    // 「保管しない」（設計判断9）を実際のファイルシステムで確認する。
+    // AGENTS.md の `### 認証情報` は installation access token を保管しないと定めている。
+    // それを実際のファイルシステムで確認する。
     const { readdirSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const before = readdirSync(tmpdir()).sort().join('\n');

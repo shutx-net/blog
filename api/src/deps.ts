@@ -87,7 +87,7 @@ export interface UpdateInput {
 export interface DeleteInput {
   /** 消す記事のスラッグ。**`UpdateInput.slug` と同じく、読んだときのパス。** */
   slug: string;
-  /** コミットメッセージ。削除は 1 種類なので 1 本だけ受ける。 */
+  /** コミットメッセージ。 */
   message: string;
   /** 呼び出し側が読んだときの blob sha。**省略不可。** */
   sha: string;
@@ -100,10 +100,8 @@ export interface PostPublisher {
 }
 
 /**
- * 一覧に出す 1 記事。**body を含まない。**
- *
- * 一覧は記事数ぶんの blob 取得になるので、本文まで返すと転送量が記事の長さに比例する。
- * 編集のために本文が要るのは 1 本だけなので、そこは `PostDetail` が担う。
+ * 一覧に出す 1 記事。**body を含まない**（本文が要る 1 本は `PostDetail`。
+ * 転送量の理由は `router.ts` の `listPosts`）。
  */
 export interface PostSummary {
   /** `DATE_SLUG_PATTERN` に合致する日付パス。ファイル名から復元した値。 */
@@ -157,7 +155,10 @@ export interface MediaPresigner {
 }
 
 export interface SecretVersionOptions {
-  /** 'AWSPENDING' を指すと鍵ローテーションの検証ができる（DEVELOPERS.md）。 */
+  /**
+   * 'AWSPENDING' を指すと鍵ローテーションの検証ができる
+   * （`docs/aws-ops.md` の「GitHub App の秘密鍵」）。
+   */
   versionStage?: string;
 }
 
@@ -170,10 +171,7 @@ export interface InstallationTokenProvider {
 }
 
 /**
- * デプロイのワークフローを起動する。
- *
- * 記事が別リポジトリに移ると code repo には push が起きないので、
- * `on: push` では発火しない。これが唯一の起動経路になる。
+ * デプロイのワークフローを起動する。**唯一のデプロイ起動経路**（理由は `github/dispatch.ts`）。
  */
 export interface DeployDispatcher {
   dispatch(): Promise<void>;
@@ -211,9 +209,8 @@ export interface Deps {
   /**
    * デプロイの起動器。**未設定なら dispatch しない。**
    *
-   * オプショナルにしているのが opt-in の実体である。記事がまだ code repo に
-   * あるあいだは push でデプロイが走るので、ここで起動すると同じコミットに
-   * 対してデプロイが 2 本走る。
+   * オプショナルにしているのが opt-in の実体である
+   * （`DEPLOY_WORKFLOW_FILE` の有無で決まる。`config.ts` 参照）。
    */
   deployDispatcher?: DeployDispatcher;
   /** 注入するクロック（ミリ秒）。Date.now() を関数内で読むと時計依存のテストになる。 */

@@ -59,16 +59,15 @@ export interface Config {
   /**
    * 記事リポジトリ内のディレクトリ。末尾のスラッシュを含む。
    *
-   * 分離前は 'site/src/content/posts/'、分離後は 'posts/'。
    * **site/src/content.config.ts の glob base と意味を揃えること。**
    */
   postsPathPrefix: string;
   /**
    * 起動するワークフローのファイル名。**未設定なら dispatch しない。**
    *
-   * opt-in にしているのは、push 起点のデプロイが動いている間に dispatch すると
-   * 同じコミットに対してデプロイが 2 本走るため。記事リポジトリを切り替える
-   * PR で初めて設定する。
+   * 記事は blog-content にあり code repo には push が起きないので、**これが唯一の
+   * デプロイ起動経路**（`github/dispatch.ts`）。本番では `infra/lib/site-stack.ts` が
+   * `'deploy.yml'` を渡している。
    */
   deployWorkflowFile?: string;
   /** Secrets Manager の ARN か名前。CDK の CfnOutput から運用者が拾う。 */
@@ -148,8 +147,7 @@ const loadAuth = (env: Env): AuthConfig => {
 /**
  * 環境変数から設定を組み立てる。**不正なら投げる。**
  *
- * 投げるとコールドスタートで Lambda が落ち、CloudFront には 502 が返る。
- * 環境変数の打ち間違いが「黙って全許可」になるより、目に見えて壊れるほうが良い。
+ * **コールドスタートで落ちて 502 になるのが正しい失敗の仕方**（理由は `index.ts`）。
  */
 export const loadConfig = (env: Env): Config => ({
   auth: loadAuth(env),

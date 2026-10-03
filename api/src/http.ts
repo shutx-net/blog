@@ -25,10 +25,8 @@ export interface ApiResponse {
 /**
  * ボディが JSON として壊れているときに投げる。
  *
- * **メッセージにボディの中身を含めない。** 本文に誤って貼られた資格情報が
- * ログや 500 応答に出る事故を防ぐ。JSON.parse の SyntaxError は
- * 'Unexpected token } in JSON at position 42' のように **入力の断片を含む**ので、
- * そのまま伝播させてはいけない。
+ * **メッセージにボディの中身を含めない。** `JSON.parse` の SyntaxError は入力の断片を
+ * 含むので、そのまま伝播させると本文に誤って貼られた資格情報がログや 500 応答に出る。
  */
 export class InvalidJsonBodyError extends Error {
   constructor() {
@@ -79,7 +77,6 @@ export const parseJsonObject = (rawBody: string | undefined): Record<string, unk
   try {
     parsed = JSON.parse(rawBody);
   } catch {
-    // SyntaxError は入力の断片をメッセージに含むので握りつぶす。
     throw new InvalidJsonBodyError();
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {

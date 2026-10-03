@@ -4,9 +4,8 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { Logger, MediaPresigner, PresignInput, PresignResult } from '../deps.ts';
 import { ALLOWED_CONTENT_TYPES, EXTENSIONS, MAX_UPLOAD_BYTES, MEDIA_KEY_PREFIX, PRESIGN_EXPIRES_IN_SECONDS } from './limits.ts';
 
-// 既存の import 元を壊さないための再 export。実体は limits.ts にある。
+// limits.ts から再 export（既存の import 元を壊さないため。消すと api/test/unit/media-presign.test.ts が落ちる）。
 export { ALLOWED_CONTENT_TYPES, MAX_UPLOAD_BYTES, MEDIA_KEY_PREFIX, PRESIGN_EXPIRES_IN_SECONDS };
-
 
 export class MediaValidationError extends Error {
   readonly field: string;

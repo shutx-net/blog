@@ -39,9 +39,9 @@ export const toApiRequest = (event: LambdaFunctionURLEvent): ApiRequest => {
 /**
  * Lambda に返す形。
  *
- * LambdaFunctionURLResult は「構造化レスポンス | 文字列 | void」の union なので、
- * そのまま戻り値の型にするとテストが statusCode を読めない。ここで具体形を宣言し、
- * **Lambda の契約から外れていないことは下の型レベルの表明で固定する。**
+ * `LambdaFunctionURLResult` は union なので、そのまま戻り値の型にするとテストが
+ * statusCode を読めない。ここで具体形を宣言し、**Lambda の契約から外れていないことは
+ * 下の型レベルの表明で固定する。**
  */
 export interface FunctionUrlResponse {
   statusCode: number;
@@ -49,7 +49,7 @@ export interface FunctionUrlResponse {
   body: string;
 }
 
-/** FunctionUrlResponse が Lambda の受け付ける形であることの静的表明（実行時コード無し）。 */
+/** FunctionUrlResponse が Lambda の受け付ける形であることの静的表明。 */
 type AssertResponseMatchesLambdaContract =
   FunctionUrlResponse extends LambdaFunctionURLResult ? true : never;
 export type _FunctionUrlResponseIsValid = AssertResponseMatchesLambdaContract;
