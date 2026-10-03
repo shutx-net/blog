@@ -58,17 +58,18 @@
     monospace;
 
   /*
-   * 1.8 rather than the ~1.5 a Latin-only page would take. Japanese sets solid
+   * 1.7 rather than the ~1.5 a Latin-only page would take. Japanese sets solid
    * blocks of full-width glyphs with no ascender/descender rhythm to separate
    * the lines visually, so it needs the leading to stay readable.
    *
-   * It was 1.9, which read as airy. 1.8 stays inside the range Japanese body
-   * text wants (1.7-2.0), and that range is a floor here rather than a target:
-   * --measure is at its widest, and a 45-character line leans on the leading to
-   * find its way back to the left edge. The two tokens pull against each other,
-   * so tightening this one further means narrowing that one.
+   * It came down 1.9 -> 1.8 -> 1.7, and 1.7 is the bottom of the range Japanese
+   * body text wants (1.7-2.0). It sits at that bottom while --measure sits at
+   * its widest, which is the one combination the two tokens disagree about: a
+   * 45-character line leans on the leading to find its way back to the left
+   * edge. Both are at their tight end now, so anything further has to come out
+   * of --measure rather than out of here.
    */
-  --leading: 1.8;
+  --leading: 1.7;
   /*
    * The border box of all three columns -- header, main, footer -- so the inner
    * width is 40px less than this: 768 - 2x20 = 728px. At a 16px body that is
