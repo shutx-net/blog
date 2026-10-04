@@ -83,8 +83,7 @@
       // **規約: ブラウザにも載るコードは node の組み込みに触らない。**
       //
       // `admin/` がここから直接 import する。node の組み込みを読んだ瞬間に
-      // admin のビルドが壊れる。これまでこの規約は**コメントにしか書かれておらず**、
-      // `media/limits.ts` にだけテストがあった（`api/src/posts/**` は無防備だった）。
+      // admin のビルドが壊れる。
       //
       // `patterns` は `paths` と違い**動的 import も捕まえる**（実測）。
       // bare specifier（`from 'fs'`）も塞ぐため両方を列挙する。

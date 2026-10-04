@@ -6,9 +6,8 @@ import { describe, expect, it } from "vitest";
 
 import { resolveSiteUrl } from "../../src/site-url.ts";
 
-// The machine-readable outputs -- rss.xml, sitemap-*.xml, robots.txt -- all of
-// which are built from astro's `site`. dist/ is produced once by
-// test/setup/build-site.ts (globalSetup); nothing here triggers a build.
+// The machine-readable outputs -- rss.xml, sitemap-*.xml, robots.txt -- all built
+// from astro's `site`. Reads dist/, built once by test/setup/build-site.ts.
 const distDir = fileURLToPath(new URL("../../dist/", import.meta.url));
 
 const readDist = (relativePath: string): string =>
@@ -130,7 +129,7 @@ describe("robots.txt", () => {
   });
 });
 
-describe("robots.txt keeps the admin UI out of search results", () => {
+describe("robots.txt asks crawlers to skip /admin/", () => {
   const robots = (): string => readFileSync(join(distDir, "robots.txt"), "utf8");
 
   it("disallows /admin/", () => {
@@ -143,7 +142,10 @@ describe("robots.txt keeps the admin UI out of search results", () => {
     expect(robots()).toContain("Allow: /");
   });
 
-  it("puts Disallow before Allow so the more specific rule is not shadowed", () => {
+  it("puts Disallow before Allow", () => {
+    // Defensive, not required: RFC 9309 section 2.2.2 has a conforming crawler
+    // pick the longest match rather than the first, so the order does not change
+    // what a conforming crawler does. It is pinned for parsers that read in order.
     const text = robots();
     expect(text.indexOf("Disallow: /admin/")).toBeLessThan(text.indexOf("Allow: /"));
   });

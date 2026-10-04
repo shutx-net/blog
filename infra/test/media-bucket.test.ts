@@ -94,7 +94,7 @@ describe('メディア用バケット固有の主張（論理 ID で名指しす
   };
 
   it('バージョニングが有効（Git から再生成できない唯一の資産だから）', () => {
-    // Phase 1 が配信用バケットで versioning を見送った理由（sync --delete のたびに
+    // 配信用バケットで versioning を見送った理由（sync --delete のたびに
     // 削除マーカーが溜まる）はメディアには当てはまらない。メディアは管理画面からの
     // presigned PUT で上がってきて sync --delete の対象にならない。
     expect(mediaBucket().Properties?.['VersioningConfiguration']).toEqual({ Status: 'Enabled' });
@@ -117,11 +117,9 @@ describe('メディア用バケット固有の主張（論理 ID で名指しす
   });
 
   /**
-   * **修復 6（finding 3）。**
-   *
    * このファイルにはメディアバケットの Properties に対する **キー集合の等価
    * アサーションが無かった**。実測で `CorsConfiguration` を足しても 1 件も
-   * 赤くならなかった — つまり本フェーズの変更を検出する能力がゼロだった。
+   * 赤くならなかった — つまり**プロパティの追加を検出する能力がゼロだった**。
    *
    * posting-api.test.ts が Secret に対してやっているのと同じ形（キー集合の等価）で
    * 締める。**プロパティの追加も削除もここで赤くなる。**

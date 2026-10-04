@@ -136,7 +136,7 @@ describe('list: 記事の一覧', () => {
     expect((await reader().list()).map((post) => post.title)).toEqual(['新しい', '途中', '古い']);
   });
 
-  it('**返り値に blob の sha が入る**（Phase 4 の並行制御トークン）', async () => {
+  it('**返り値に blob の sha が入る**（楽観的並行制御のトークン）', async () => {
     fakeGitHub({ files: new Map([['posts/2026/09/27/142621.md', markdown('t')]]) });
     expect((await reader().list())[0]?.sha).toBe('blob-posts/2026/09/27/142621.md');
   });
@@ -250,7 +250,7 @@ describe('read: 1 記事の取得', () => {
 
   it.each([403, 500, 502])('**%i を「無い」と読まない（fail closed）**', async (status) => {
     // 権限が落ちた日に「記事が消えた」と表示するのは、消えたと誤認させるだけでなく
-    // Phase 5 の削除判定（公開可能数の床）を誤らせる。
+    // 削除判定（公開可能数の床）を誤らせる。
     fakeGitHub({ files: new Map([[FILE, markdown('t')]]), contentsStatus: status });
     const promise = reader().read('2026/09/27/142621');
     await expect(promise).rejects.toThrow(new RegExp(String(status)));

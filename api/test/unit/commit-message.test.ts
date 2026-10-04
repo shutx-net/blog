@@ -60,7 +60,7 @@ describe('commitMessages', () => {
     (title) => {
       for (const message of Object.values(commitMessages(title))) {
         expect(message).not.toMatch(/[\r\n]/);
-        // AGENTS.md「1 行目は 50 字程度に収める」。
+        // AGENTS.md「1 行目は 50 字程度」。
         expect([...message].length).toBeLessThanOrEqual(SUBJECT_MAX_LENGTH);
       }
     },

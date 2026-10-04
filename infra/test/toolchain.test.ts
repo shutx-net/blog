@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -185,7 +185,7 @@ describe('infra/tsconfig.json の erasableSyntaxOnly', () => {
     // cdk.json の app が `node bin/blog.ts` で、node 24 のフラグ無し型ストリップに
     // 依存している。enum / namespace / パラメータプロパティ / decorators を書くと
     // 「剥がすだけでは動かない」構文になり、**`cdk synth` だけが実行時に落ちる。**
-    // 理由の全文は README.md の「### ツールチェーン」にある。
+    // 理由の全文は infra/docs/cdk-structure.md の「ツールチェーン」にある。
     //
     // **api と admin には前から同じアサーションがあり、infra にだけ無かった。**
     // 3 つのうち事故が一番静かに起きるのが infra なので、その非対称を埋める。
@@ -216,9 +216,47 @@ describe('infra/tsconfig.json の erasableSyntaxOnly', () => {
   });
 });
 
-describe('infra/README.md が実装に追いついている', () => {
+describe('infra のドキュメントが実装に追いついている', () => {
+  /**
+   * `infra/README.md` は索引になったので、**ここが読むのは `## TODO` だけ**である
+   * （`todoSection()`）。設計上の約束ごとは `infra/docs/*.md` に移った。
+   */
   const readme = (): string =>
     readFileSync(fileURLToPath(new URL('../README.md', import.meta.url)), 'utf8');
+
+  /**
+   * 分割した doc を**名指しで**読むリーダ。
+   *
+   * **全文走査だと、節の本文が嘘になってもテストは他の節に当たって緑のまま通る**
+   * （`hstsSection()` の JSDoc と同じ理由）。節が別ファイルになったので、
+   * ファイルを名指しすることがそのまま節の名指しになり、**アサーションが強くなる**
+   * — 切り出しを書かずに「その節だけ」を対象にできる。
+   *
+   * **ただし「ファイル = 節」になったのは `custom-domain.md` だけである。** 残りは
+   * 1 ファイルに H3 が複数並ぶので、ファイルの名指しは**範囲を狭めるだけ**で節を
+   * 固定しない。needle が同じファイルの別の節にも出るなら切り出しが要る
+   * （`hstsSection()` / `divergenceSection()`）。
+   */
+  const stacksDoc = (): string =>
+    readFileSync(fileURLToPath(new URL('../docs/stacks.md', import.meta.url)), 'utf8');
+  const deployDoc = (): string =>
+    readFileSync(fileURLToPath(new URL('../docs/deploy.md', import.meta.url)), 'utf8');
+  const validationDoc = (): string =>
+    readFileSync(fileURLToPath(new URL('../docs/validation.md', import.meta.url)), 'utf8');
+  const securityDoc = (): string =>
+    readFileSync(fileURLToPath(new URL('../docs/security-headers.md', import.meta.url)), 'utf8');
+  const apiAuthDoc = (): string =>
+    readFileSync(fileURLToPath(new URL('../docs/api-auth.md', import.meta.url)), 'utf8');
+  const cdkStructureDoc = (): string =>
+    readFileSync(fileURLToPath(new URL('../docs/cdk-structure.md', import.meta.url)), 'utf8');
+  const cachingDoc = (): string =>
+    readFileSync(fileURLToPath(new URL('../docs/cloudfront-caching.md', import.meta.url)), 'utf8');
+  const routingDoc = (): string =>
+    readFileSync(fileURLToPath(new URL('../docs/cloudfront-routing.md', import.meta.url)), 'utf8');
+  const cicdOidcDoc = (): string =>
+    readFileSync(fileURLToPath(new URL('../docs/cicd-oidc.md', import.meta.url)), 'utf8');
+  const testPatternsDoc = (): string =>
+    readFileSync(fileURLToPath(new URL('../docs/test-patterns.md', import.meta.url)), 'utf8');
 
   /** '## TODO' 見出しから次の '## ' 見出しまでを切り出す。 */
   const todoSection = (): string => {
@@ -231,76 +269,124 @@ describe('infra/README.md が実装に追いついている', () => {
   };
 
   /**
-   * '### HSTS に' の節だけを切り出す（次の見出しの直前まで）。
+   * '### HSTS に' の節だけを切り出す（次の見出しの直前まで）。読み元は
+   * `infra/docs/security-headers.md`。
    *
-   * **README 全体を対象にしてはいけない。** HSTS の理由を機械的に固定していたのは
-   * かつて `toContain('cloudfront.net')` だったが、あの語は受け入れ確認の `curl` 例など
-   * **別の節に何度も出る。** 全体を見る形だと、節の本文が嘘になってもテストは
-   * 他の節に当たって緑のまま通る — **理由を固定しているつもりで何も固定していない。**
+   * **ファイル全体を対象にしてはいけない。** HSTS の理由を機械的に固定していたのは
+   * かつて `toContain('cloudfront.net')` だったが、あの語は**同じファイルの別の節**
+   * （`#### 手動確認の結果` のコンソール出力。README を読んでいた頃は受け入れ確認の
+   * `curl` 例にも出ていた）**にも出る。** 全体を見る形だと、節の本文が嘘になっても
+   * テストは他の節に当たって緑のまま通る — **理由を固定しているつもりで何も固定して
+   * いない。**
+   *
+   * **節が専用ファイルへ移っても切り出しは要る** — security-headers.md には H3 が
+   * 8 本と H4 が 1 本並ぶので、ファイルを名指ししただけでは節を名指ししたことに
+   * ならない。**`customDomainSection()` が切り出しを捨てたのと非対称だが、意図的である**
+   * （あちらはファイルがその節そのものなので、探す境界が無い）。
    */
   const hstsSection = (): string => {
-    const text = readme();
+    const text = securityDoc();
     // 見出しは荷重がかかっている。変えるならこの行も一緒に直すこと。
     const start = text.indexOf('\n### HSTS に');
-    expect(start, 'README に HSTS の節が必要（見出しを変えたらここも直す）').toBeGreaterThan(-1);
+    expect(
+      start,
+      'security-headers.md に HSTS の節が必要（見出しを変えたらここも直す）',
+    ).toBeGreaterThan(-1);
     const rest = text.slice(start + 1);
     const end = rest.search(/\n#{2,4} /);
     return end === -1 ? rest : rest.slice(0, end);
   };
 
   /**
-   * '## カスタムドメイン' の節（手順書）だけを切り出す。次の `## ` 見出しの直前まで。
+   * カスタムドメインの手順書（`infra/docs/custom-domain.md`）。
    *
    * **`hstsSection()` と同じ理由で、README 全体を対象にしてはいけない。**
    * `blog.shutx.net` も `--region us-east-1` も `grey cloud` も **別の節に出る**ので、
    * 全体を `toContain` で見る形だと**手順書を丸ごと削っても緑のまま通る。**
    *
-   * 切り方は `todoSection()` と同じ（`'\n## '` は `###` に当たらない — 3 文字目が
-   * 空白ではないため。したがって中の `### 0.` 〜 `### 9.` は節の中に残る）。
+   * **手順書が専用ファイルになったので、ファイル全体を読むことがそのまま節を名指しする
+   * ことになる** — README を読んでいた頃の `'\n## '` までの切り出しは要らなくなった
+   * （見出しは H1 の `# カスタムドメイン blog.shutx.net` 1 本で、中の `### 0.` 〜
+   * `### 9.` はすべてこのファイルの中にある）。**切り出していた 10073 文字との差は
+   * 1 文字だけ** — `## TODO` の前にあった区切りの空行を、分割した他の doc と同じに
+   * ファイル末尾から落としてある。
+   *
+   * 境界探索と一緒に落ちた `indexOf('\n## カスタムドメイン') > -1` の代わりに、
+   * **見出しが荷重であることは下の非空ガードが `toMatch` で主張している。**
    */
-  const customDomainSection = (): string => {
-    const text = readme();
-    // 見出しは荷重がかかっている。変えるならこの行も一緒に直すこと。
-    const start = text.indexOf('\n## カスタムドメイン');
-    expect(
-      start,
-      'README にカスタムドメインの手順書が必要（見出しを変えたらここも直す）',
-    ).toBeGreaterThan(-1);
-    const rest = text.slice(start + 1);
-    const end = rest.indexOf('\n## ', 1);
-    return end === -1 ? rest : rest.slice(0, end);
-  };
+  const customDomainSection = (): string =>
+    readFileSync(fileURLToPath(new URL('../docs/custom-domain.md', import.meta.url)), 'utf8');
 
   /**
-   * '### cdk_best_practices との既知の乖離' の節だけを切り出す。
+   * '### cdk_best_practices との既知の乖離' の節だけを切り出す。読み元は
+   * `infra/docs/cdk-structure.md`。
    *
-   * ここも全体走査にしない。`env` という語は README の至るところに出るので、
-   * **乖離の節の本文が嘘になっても他の節に当たって緑になる。**
+   * **`customDomainSection()` のように「ファイル全体を読む」へ単純化してはいけない。**
+   * cdk-structure.md には H3 が 5 本あり（メディアバケット / 投稿 API / `SITE_ORIGIN` /
+   * この節 / ツールチェーン）、ファイルの名指しは節の名指しにならない。
+   * **実測: `帯域外` は `SITE_ORIGIN` の節のコード例（`CUSTOM_DOMAIN_NAME` の JSDoc）
+   * にも出る**ので、全体走査だとこの節を丸ごと削っても緑のまま通る。
+   *
+   * 3 つめの型である。`hstsSection()` は最初から切り出し、`customDomainSection()` は
+   * ファイルが節そのものになったので切り出しを捨てた。こちらは**節が複数節のファイルへ
+   * 移ったので切り出しが残り、理由だけが README 全体から同一ファイル内の別節へ変わった。**
    */
   const divergenceSection = (): string => {
-    const text = readme();
+    const text = cdkStructureDoc();
     // 見出しは荷重がかかっている。変えるならこの行も一緒に直すこと。
     const start = text.indexOf('\n### cdk_best_practices との既知の乖離');
-    expect(start, 'README に乖離の節が必要（見出しを変えたらここも直す）').toBeGreaterThan(-1);
+    expect(
+      start,
+      'cdk-structure.md に乖離の節が必要（見出しを変えたらここも直す）',
+    ).toBeGreaterThan(-1);
     const rest = text.slice(start + 1);
     const end = rest.search(/\n#{2,4} /);
     return end === -1 ? rest : rest.slice(0, end);
   };
 
-  it('TODO セクションが残っているが、そこに 403 の宿題は無い（step 2.2 で閉じた）', () => {
+  it('分割した doc が空でない（`toContain` が空振りで緑になる経路を塞ぐ）', () => {
+    // いまは `toContain` しか無いので、空ファイルでもパス違いでもテストは落ちる。
+    // **塞いでいるのは将来のほうである** — `not.toContain` 系を 1 本足した日に、
+    // 空ファイルが「含まれていない」を満たして緑になる。
+    // `infra/docs/test-patterns.md` の型 1 と同じ形（集合を主張する前に母数が 0 でない
+    // ことを主張する）。**対象は分割した 11 ファイル全部**で、まだアサーションが
+    // `toContain` 1 本も向いていないファイルもここで非空を要求する。
+    expect(stacksDoc().length, 'infra/docs/stacks.md が空').toBeGreaterThan(0);
+    expect(deployDoc().length, 'infra/docs/deploy.md が空').toBeGreaterThan(0);
+    expect(validationDoc().length, 'infra/docs/validation.md が空').toBeGreaterThan(0);
+    expect(securityDoc().length, 'infra/docs/security-headers.md が空').toBeGreaterThan(0);
+    expect(apiAuthDoc().length, 'infra/docs/api-auth.md が空').toBeGreaterThan(0);
+    expect(cdkStructureDoc().length, 'infra/docs/cdk-structure.md が空').toBeGreaterThan(0);
+    expect(cachingDoc().length, 'infra/docs/cloudfront-caching.md が空').toBeGreaterThan(0);
+    expect(routingDoc().length, 'infra/docs/cloudfront-routing.md が空').toBeGreaterThan(0);
+    expect(cicdOidcDoc().length, 'infra/docs/cicd-oidc.md が空').toBeGreaterThan(0);
+    expect(testPatternsDoc().length, 'infra/docs/test-patterns.md が空').toBeGreaterThan(0);
+    // **`customDomainSection()` は切り出しをやめてファイル全体を返す**（ファイルが
+    // その節そのものなので、探す境界が無い）。境界探索と一緒に落ちた
+    // `indexOf('\n## カスタムドメイン') > -1` の代わりに、**見出しがこのファイルの
+    // 1 行目であること**をここで主張する。
+    const customDomain = customDomainSection();
+    expect(customDomain.length, 'infra/docs/custom-domain.md が空').toBeGreaterThan(0);
+    expect(
+      customDomain,
+      'custom-domain.md は手順書そのものである（見出しを変えたらここも直す）',
+    ).toMatch(/^# カスタムドメイン blog\.shutx\.net\n/);
+  });
+
+  it('TODO セクションが残っているが、そこに 403 の宿題は無い', () => {
     const todo = todoSection();
     expect(todo.length).toBeGreaterThan(0);
     expect(todo).not.toContain('403');
   });
 
-  it('構成表が Phase 2 のリソースを網羅している', () => {
-    const text = readme();
+  it('構成表にメディアバケットとデプロイロールが載っている', () => {
+    const text = stacksDoc();
     expect(text).toContain('MediaBucketE52FC6E4');
     expect(text).toContain('GitHubActionsDeployRole');
   });
 
-  it('構成表が Phase 3 のリソースを網羅している', () => {
-    const text = readme();
+  it('構成表に投稿 API の一式が載っている', () => {
+    const text = stacksDoc();
     for (const needle of [
       'PostingApi',
       'AWS::Lambda::Url',
@@ -308,12 +394,12 @@ describe('infra/README.md が実装に追いついている', () => {
       'AWS::Lambda::Permission',
       'SiteDistributionOrigin3FunctionUrlOriginAccessControl1ACDDE31',
     ]) {
-      expect(text, `README に ${needle} の記述が無い`).toContain(needle);
+      expect(text, `stacks.md に ${needle} の記述が無い`).toContain(needle);
     }
   });
 
-  it('構成表が Phase 4 のリソースを網羅している', () => {
-    const text = readme();
+  it('構成表に Cognito の 3 リソースと論理 ID が載っている', () => {
+    const text = stacksDoc();
     for (const needle of [
       'AWS::Cognito::UserPool',
       'AWS::Cognito::UserPoolDomain',
@@ -321,26 +407,33 @@ describe('infra/README.md が実装に追いついている', () => {
       'AdminAuthUserPoolBFAE8287',
       'AdminAuthUserPoolAdminClient7A4B432D',
       'AdminAuthUserPoolLoginDomain53790831',
-      'CorsConfiguration',
     ]) {
-      expect(text, `README に ${needle} の記述が無い`).toContain(needle);
+      expect(text, `stacks.md に ${needle} の記述が無い`).toContain(needle);
     }
   });
 
-  it('**Phase 4 で増えた CfnOutput 4 本が README に載っている**', () => {
-    const text = readme();
+  it('**メディアバケットの `CorsConfiguration` が `SITE_ORIGIN` の節で説明されている**', () => {
+    // 構成表には無い。全文走査では別の節に当たって緑になっていたので、説明している節を
+    // 名指しする（文字列が実在するのは「`SITE_ORIGIN` 定数」の循環参照の説明）。
+    expect(cdkStructureDoc(), 'cdk-structure.md に CorsConfiguration の記述が無い').toContain(
+      'CorsConfiguration',
+    );
+  });
+
+  it('**管理画面用の CfnOutput 4 本が deploy.md に載っている**', () => {
+    const text = deployDoc();
     for (const output of [
       'AdminUserPoolId',
       'AdminUserPoolClientId',
       'AdminLoginDomain',
       'AdminUserPoolIssuerUrl',
     ]) {
-      expect(text, `README に Output 名 ${output} の記載が必要`).toContain(output);
+      expect(text, `deploy.md に Output 名 ${output} の記載が必要`).toContain(output);
     }
   });
 
   it('**デプロイ手順に cdk diff・受け入れ確認・切り戻しが揃っている**', () => {
-    const text = readme();
+    const text = deployDoc();
     // AGENTS.md の規約: infra を変えたら先に差分を見る。
     expect(text).toContain('cdk diff');
     // **ユーザ作成が CDK ではなく CLI であること**（public リポジトリに個人情報を書かない）。
@@ -362,11 +455,11 @@ describe('infra/README.md が実装に追いついている', () => {
   it('**デプロイ手順が「1 回の cdk deploy で完結する」と書いてある**', () => {
     // AUTH_MODE=cognito の Lambda はユーザプールへの Ref を持つので、
     // CloudFormation は Cognito を先に作る。2 段階に割る必要は無い。
-    expect(readme()).toMatch(/1 回[^\n]*deploy|deploy[^\n]*1 回/);
+    expect(deployDoc()).toMatch(/1 回[^\n]*deploy|deploy[^\n]*1 回/);
   });
 
   it('検証結果に W3005 と cfn-guard の記述があり、Phase 3 の件数が明記されている', () => {
-    const text = readme();
+    const text = validationDoc();
     expect(text).toContain('W3005');
     expect(text).toContain('cfn-guard');
     // 「6 件のまま」「新規 0 件」が読み取れること。次に誰かが同じ検証をしたとき、
@@ -375,7 +468,7 @@ describe('infra/README.md が実装に追いついている', () => {
   });
 
   it('**cfn-guard の節に Phase 4 の行が追記されている**', () => {
-    const text = readme();
+    const text = validationDoc();
     expect(text).toMatch(/Phase 4[^\n]*0 件|0 件[^\n]*Phase 4/);
     // Cognito の 3 リソースが 1 件も指摘を生まなかったことが列挙されていること。
     for (const needle of [
@@ -388,15 +481,19 @@ describe('infra/README.md が実装に追いついている', () => {
   });
 
   it('**cfn-guard の節に Phase 5 の行が追記されている**', () => {
-    const text = readme();
+    const text = validationDoc();
     expect(text).toMatch(/Phase 5[^\n]*0 件|0 件[^\n]*Phase 5/);
-    // Phase 5 で追加したリソース種別が列挙されていること。
+    // Phase 5 の行に列挙されたリソース種別が実在すること。
     // 「6 件のまま＝ツールが動いていない」と誤解されないための既存の規律。
     expect(text).toContain('AWS::CloudFront::ResponseHeadersPolicy');
   });
 
   it('**CSP の記述があり、script-src に unsafe-inline を入れない理由が書かれている**', () => {
-    const text = readme();
+    // **README 全文から security-headers.md の名指しへ。** `'unsafe-inline'` は
+    // 「CSS をインライン化しない」の却下案の表にも出るので、全文走査では CSP の節を
+    // 丸ごと削ってもそちらに当たって緑になりうる（`script-src` と
+    // `Content-Security-Policy` のほうは README に 1 件も残っていない）。
+    const text = securityDoc();
     expect(text).toContain('Content-Security-Policy');
     expect(text).toContain("script-src");
     expect(text).toContain("'unsafe-inline'");
@@ -405,7 +502,8 @@ describe('infra/README.md が実装に追いついている', () => {
   it("**'wasm-unsafe-eval' が必要な理由（shiki の wasm）が書かれている**", () => {
     // これが無いと、次に CSP を締めようとした人が「不要な緩和」だと思って消し、
     // **プレビューのハイライトだけが静かに壊れる。**
-    const text = readme();
+    // 3 語とも README には 1 件も残っていないので、読み元は security-headers.md。
+    const text = securityDoc();
     expect(text).toContain("'wasm-unsafe-eval'");
     expect(text).toContain('shiki');
     expect(text).toContain('WebAssembly');
@@ -413,7 +511,10 @@ describe('infra/README.md が実装に追いついている', () => {
 
   it('**meta では frame-ancestors が無視されることが書かれている**', () => {
     // 配り方をヘッダにした根拠。次の人が meta に移そうとしたときの歯止め。
-    const text = readme();
+    // **名指しへ変えたのは強化である** — `frame-ancestors` も /meta…無視/ も
+    // 「CSS をインライン化しない」の表の 1 行に両方当たるので、全文走査だと
+    // この節を丸ごと削っても緑のまま通った。
+    const text = securityDoc();
     expect(text).toContain('frame-ancestors');
     expect(text).toMatch(/meta[^\n]*無視|無視[^\n]*meta/);
   });
@@ -438,51 +539,57 @@ describe('infra/README.md が実装に追いついている', () => {
 
   it('**cfn-lint の E3004（循環参照）についての記述がある**', () => {
     // メディアバケットの CORS で最も踏みやすい罠。cdk synth は素通しするので、
-    // 「cfn-lint を回す理由」が README に書かれていないと次の人が省略する。
-    expect(readme()).toContain('E3004');
+    // 「cfn-lint を回す理由」が doc に書かれていないと次の人が省略する。
+    expect(validationDoc()).toContain('E3004');
   });
 
   it('**AUTH_MODE の記述があり、cognito と deny-all の両方が書かれている**', () => {
     // deny-all は切り戻し先として残っているので、両方が書かれている必要がある。
-    const text = readme();
+    const text = deployDoc();
     expect(text).toContain('AUTH_MODE');
     expect(text).toContain('deny-all');
     expect(text).toContain('cognito');
   });
 
   it('x-amz-content-sha256 の記述がある（POST の必須ヘッダという運用上の落とし穴）', () => {
-    expect(readme()).toContain('x-amz-content-sha256');
+    expect(apiAuthDoc()).toContain('x-amz-content-sha256');
   });
 
   it('Authorization ヘッダが上書きされる制約の記述がある', () => {
     // OAC の SigningBehavior が always なので、Cognito のトークンを
     // Authorization: Bearer で送る一般的な設計がそのままでは使えない。
-    expect(readme()).toContain('Authorization');
+    expect(apiAuthDoc()).toContain('Authorization');
   });
 
-  it('**トークン輸送の契約 x-blog-authorization が README に実在する**', () => {
+  it('**トークン輸送の契約 x-blog-authorization が api-auth.md に実在する**', () => {
     // admin を作る側がこの 1 行に対して実装する。ドキュメントの腐敗を機械的に防ぐ。
-    expect(readme()).toContain('x-blog-authorization');
+    expect(apiAuthDoc()).toContain('x-blog-authorization');
   });
 
   it('**403 と 404 を認証に使わない理由が書かれている**', () => {
     // 書かないと次の人が「認可失敗は 403 が素直だ」と直してしまう。
-    const text = readme();
+    const text = apiAuthDoc();
     expect(text).toContain('CustomErrorResponses');
     expect(text).toMatch(/403 と 404 を使わない|403 と 404 は/);
     for (const code of ['auth_not_configured', 'unauthenticated', 'invalid_token', 'not_authorized', 'auth_unavailable']) {
-      expect(text, `README に error コード ${code} の記載が無い`).toContain(code);
+      expect(text, `api-auth.md に error コード ${code} の記載が無い`).toContain(code);
     }
   });
 
   it('**Cognito の feature plan に Essentials を選んだ理由が書かれている**', () => {
-    const text = readme();
-    expect(text).toContain('ESSENTIALS');
-    expect(text).toContain('Managed Login');
+    // **テンプレート上の値と、選んだ理由は別のファイルに居る。**
+    // `UserPoolTier: ESSENTIALS` はリソース表（stacks.md）にあり、
+    // 「Lite ではなく Essentials。理由は Managed Login」は api-auth.md の節にある。
+    // 全文走査だと片方が消えてももう片方に当たって緑のまま通るので、**両方を名指しする。**
+    expect(stacksDoc(), 'stacks.md のリソース表に UserPoolTier の値が無い').toContain('ESSENTIALS');
+    // **強化。** `ESSENTIALS`（大文字）はこれまで構成表にしか無く、選択を説明している
+    // 節には無かった。節のほうにもテンプレート上の値を書いたので、ここで名指しできる。
+    expect(apiAuthDoc(), 'api-auth.md の節にテンプレート上の値が無い').toContain('ESSENTIALS');
+    expect(apiAuthDoc(), 'api-auth.md に Essentials を選んだ理由が無い').toContain('Managed Login');
   });
 
   it('**SITE_ORIGIN 定数の節がある**（循環参照と差し替え手順）', () => {
-    const text = readme();
+    const text = cdkStructureDoc();
     expect(text).toContain('SITE_ORIGIN');
     expect(text).toContain('DistributionDomainName');
   });
@@ -577,7 +684,9 @@ describe('infra/README.md が実装に追いついている', () => {
 
   it('**手順 0〜4 と 7 を人間が実行すると明記されている**', () => {
     // 既存の「初回デプロイの手順（人間が実行する）」と同じ扱い。
-    // **`cdk deploy` はエージェントに実行させない**（AGENTS.md）。
+    // **`cdk deploy` はエージェントに実行させない。** 「エージェント」という語は
+    // AGENTS.md に 1 度も出てこない — 書いているのはこの手順書自身で、
+    // 下の toContain がそれを固定している。
     const section = customDomainSection();
     expect(section).toContain('人間が実行する');
     expect(section).toContain('エージェントには実行させない');
@@ -587,9 +696,8 @@ describe('infra/README.md が実装に追いついている', () => {
   });
 
   it('**TODO から「Cognito が入っていない」と「CORS は admin フェーズで」が消えている**', () => {
-    // **反転済み。** Phase 3 までは「意図的に開けたまま残した穴」だったが、
-    // Phase 4 が両方とも閉じた。宿題として残し続けると次に読む人が
-    // 「まだ入っていない」と誤解する。
+    // **反転済み。** どちらも「意図的に開けたまま残した穴」だったが閉じた。
+    // 宿題として残し続けると次に読む人が「まだ入っていない」と誤解する。
     const todo = todoSection();
     expect(todo.length).toBeGreaterThan(0);
     expect(todo).not.toContain('エンドユーザ認証（Cognito）が入っていない');
@@ -597,7 +705,7 @@ describe('infra/README.md が実装に追いついている', () => {
   });
 
   it('**TODO から「TLS 最低バージョン」「カスタムドメインと ACM」「env」が消えている**', () => {
-    // **反転済み。** 3 つとも結果が出た（上の「カスタムドメイン blog.shutx.net」の
+    // **反転済み。** 3 つとも結果が出た（`infra/docs/custom-domain.md` の
     // 「付随して閉じた宿題」）。TLS は明示できるようになり、alias と証明書は付き、
     // env は**要らないと分かった**。宿題として残し続けると次に読む人が
     // 「まだ出来ていない」と誤解する。
@@ -616,7 +724,8 @@ describe('infra/README.md が実装に追いついている', () => {
     // 証明書を帯域外で us-east-1 に作って ARN で参照する形にしたので、
     // カスタムドメインのフェーズでも env は要らなかった。
     // `test/site-stack.test.ts` が env-agnostic を固定し続けるので、
-    // **README がここで「いずれ入れる」と言っているとテストと食い違う。**
+    // **`infra/docs/cdk-structure.md` がここで「いずれ入れる」と言っていると
+    // テストと食い違う。**
     const section = divergenceSection();
     expect(section, '帯域外で作ったことが理由として書かれていること').toContain('帯域外');
     expect(section).toContain('env を入れる予定はもう無い');
@@ -635,7 +744,7 @@ describe('infra/README.md が実装に追いついている', () => {
   it('解決した宿題は結果と確かめ方つきで記録されている', () => {
     // 結論だけ書いて消すと、次に同じ疑問を持った人が同じ調査をやり直す。
     // **ローカルでは原理的に確かめられなかった項目なので、確かめ方こそが価値である。**
-    const text = readme();
+    const text = deployDoc();
     expect(text).toContain('実デプロイで解決した宿題');
     expect(text).toContain('Assuming role with OIDC');
     for (const needle of ['s3:GetObject', 'lambda:InvokeFunction', 'workflow_dispatch']) {
@@ -645,39 +754,115 @@ describe('infra/README.md が実装に追いついている', () => {
 
   it('GitHub Actions の変数 3 つと、その値の取得元が書かれている', () => {
     // ワークフローは vars.* を読むだけで、未設定でも空文字に展開される。
-    // 「どこから値を持ってくるか」が README に無いと、preflight ガードが
+    // 「どこから値を持ってくるか」が doc に無いと、preflight ガードが
     // 落ちたときに次の一手が分からない。
-    const text = readme();
+    const text = stacksDoc();
     for (const name of ['AWS_DEPLOY_ROLE_ARN', 'SITE_BUCKET', 'CLOUDFRONT_DISTRIBUTION_ID']) {
-      expect(text, `README に ${name} の記載が必要`).toContain(name);
+      expect(text, `stacks.md に ${name} の記載が必要`).toContain(name);
     }
     // 値は CloudFormation の Output からしか取れない（デプロイロールには
     // cloudformation:DescribeStacks が無いので、実行時に読むことはできない）。
     expect(text).toContain('describe-stacks');
     for (const output of ['DeployRoleArn', 'SiteBucketName', 'DistributionId']) {
-      expect(text, `README に Output 名 ${output} の記載が必要`).toContain(output);
+      expect(text, `stacks.md に Output 名 ${output} の記載が必要`).toContain(output);
     }
   });
 });
 
-describe('DEVELOPERS.md が実装に追いついている', () => {
-  const developers = (): string =>
-    readFileSync(fileURLToPath(new URL('../../DEVELOPERS.md', import.meta.url)), 'utf8');
+// ---- ルート直下の doc（`DEVELOPERS.md` は索引で、実体は `docs/*.md`） ----
 
+/**
+ * `DEVELOPERS.md`。**残っているのは索引だけ**で、手順は `docs/*.md` に移った
+ * （`## ドキュメント` のリンク表が入口）。このリーダを使うアサーションは
+ * **索引に残すと決めたものに限る** — いまはワークスペース表の `api/` の行の 2 本。
+ */
+const developers = (): string =>
+  readFileSync(fileURLToPath(new URL('../../DEVELOPERS.md', import.meta.url)), 'utf8');
+
+/**
+ * 分割した doc を**名指しで**読むリーダ。
+ *
+ * **全文走査より強い。** 以前は 59180 B / 1041 行の `DEVELOPERS.md` 1 本に
+ * `toContain` を当てていたので、needle が別の節にも出ていれば節を丸ごと消しても
+ * 緑のまま通った。**実測: `AUTH_MODE` と `ID トークン` はワークスペース表の
+ * `api/` の行にも出る**ので、AWS の節を全部消しても下の 2 本は通った
+ * （実際、分割だけ先に当てた時点で 14 本のうち 10 本が落ち、
+ * `ID トークン` の 1 本は表に当たって緑のまま残った）。
+ * 節が別ファイルになったので、**ファイルの名指しがそのまま節の名指しになる**
+ * — `stacksDoc()` の JSDoc と同じ理由。
+ */
+const awsOpsDoc = (): string =>
+  readFileSync(fileURLToPath(new URL('../../docs/aws-ops.md', import.meta.url)), 'utf8');
+const typescriptDoc = (): string =>
+  readFileSync(fileURLToPath(new URL('../../docs/typescript.md', import.meta.url)), 'utf8');
+
+/**
+ * `DEVELOPERS.md` と `docs/*.md` を全部読む。**不在の主張専用。**
+ *
+ * `blog/github-app-private-key` が無いことは **1 ファイルを見ても言えない。**
+ * 手順が `docs/aws-ops.md` に移ったあと `DEVELOPERS.md` だけを見る形にすると
+ * 「索引には無い」しか主張できず、**別の doc に物理名が書かれた日に緑で通る**
+ * （分割前の主張をそのまま残すと、実際に空振りで緑になった）。
+ * `readdirSync` で列挙してあるので、`docs/` に増えたファイルも自動で対象に入る。
+ */
+const rootDocs = (): { name: string; text: string }[] => {
+  const dir = fileURLToPath(new URL('../../docs/', import.meta.url));
+  const names = readdirSync(dir)
+    .filter((name) => name.endsWith('.md'))
+    .sort();
+  return [
+    { name: 'DEVELOPERS.md', text: developers() },
+    ...names.map((name) => ({
+      name: `docs/${name}`,
+      text: readFileSync(`${dir}${name}`, 'utf8'),
+    })),
+  ];
+};
+
+describe('DEVELOPERS.md と docs/*.md が実装に追いついている', () => {
   it('**シークレットの物理名がハードコードされていない**', () => {
     // CDK は物理名を付けない方針なので、手順書に blog/github-app-private-key と
     // 書いてあっても **その名前のシークレットは存在しない**（手順が実行不能だった）。
     // CfnOutput GitHubAppSecretName から取る形に置き換わっていること。
-    expect(developers()).not.toContain('blog/github-app-private-key');
+    // **不在の主張なので対象は 1 ファイルではない**（`rootDocs()` の JSDoc）。
+    for (const { name, text } of rootDocs()) {
+      expect(text, `${name} に物理名が書かれている`).not.toContain(
+        'blog/github-app-private-key',
+      );
+    }
+  });
+
+  it('分割した doc が空でない（`not.toContain` が空振りで緑になる経路を塞ぐ）', () => {
+    // **上の不在の主張は空ファイルでも満たされる。** パスを間違えた・ファイルが
+    // 消えた・中身が空になった、のどれでも緑になる。`infra のドキュメントが
+    // 実装に追いついている` の同名の it と同じ形（`infra/docs/test-patterns.md`
+    // の型 1 — 集合を主張する前に母数が 0 でないことを主張する）。
+    const docs = rootDocs();
+    for (const { name, text } of docs) {
+      expect(text.length, `${name} が空`).toBeGreaterThan(0);
+    }
+    // 列挙そのものが空振りしていないことを名指しで固定する。
+    const names = docs.map((doc) => doc.name);
+    for (const name of [
+      'DEVELOPERS.md',
+      'docs/aws-ops.md',
+      'docs/content-repo.md',
+      'docs/dependencies.md',
+      'docs/github-actions.md',
+      'docs/oxlint.md',
+      'docs/typescript.md',
+    ]) {
+      expect(names, `${name} が列挙に無い`).toContain(name);
+    }
   });
 
   it('CfnOutput の GitHubAppSecretName を参照している', () => {
-    expect(developers()).toContain('GitHubAppSecretName');
+    expect(awsOpsDoc()).toContain('GitHubAppSecretName');
   });
 
   it('鍵ローテーションの検証手順が実行可能な形になっている', () => {
     // 「AWSPENDING で投入し、動作を確認」の **確認手段** が存在すること。
-    const text = developers();
+    const text = awsOpsDoc();
     expect(text).toContain('AWSPENDING');
     expect(text).toContain('versionStage=AWSPENDING');
     expect(text).toContain('/api/health/github-app');
@@ -687,6 +872,7 @@ describe('DEVELOPERS.md が実装に追いついている', () => {
     // **`includes('`api/`')` だけで探してはいけない。** ツールチェーン表の
     // 「`api/` のデプロイ先が Lambda の nodejs24.x」という行が先に一致してしまい、
     // ワークスペース表を 1 行も見ないまま緑になる（実測）。行頭で名指しする。
+    // **表は索引に残したので、分割後もここは `DEVELOPERS.md` を読む。**
     const rows = developers()
       .split('\n')
       .filter((line) => line.trimStart().startsWith('| `api/` |'));
@@ -695,12 +881,9 @@ describe('DEVELOPERS.md が実装に追いついている', () => {
   });
 });
 
-describe('DEVELOPERS.md が Phase 4 に追いついている', () => {
-  const developers = (): string =>
-    readFileSync(fileURLToPath(new URL('../../DEVELOPERS.md', import.meta.url)), 'utf8');
-
+describe('docs/aws-ops.md と索引が Cognito の運用に追いついている', () => {
   it('**Cognito ユーザを帯域外で作る手順がある**（CDK には書かない）', () => {
-    const text = developers();
+    const text = awsOpsDoc();
     expect(text).toContain('aws cognito-idp admin-create-user');
     expect(text).toContain('admin-set-user-password');
     // 物理値ではなく CfnOutput から拾う形になっていること。
@@ -709,15 +892,15 @@ describe('DEVELOPERS.md が Phase 4 に追いついている', () => {
   });
 
   it('**鍵ローテーションの手順が Cognito のトークンを付ける形になっている**', () => {
-    // Phase 3 の注記は「AUTH_MODE が deny-all の間は 503 が返るのでコンソールから」だった。
-    // Cognito が入った以上、実行可能な手順に置き換わっていなければならない。
-    const text = developers();
+    // Cognito が入っている以上、鍵ローテーションの手順は実行可能な形
+    // （トークンを付けて叩く）でなければならない。
+    const text = awsOpsDoc();
     expect(text).toContain('x-blog-authorization: Bearer');
     expect(text).toContain('versionStage=AWSPENDING');
   });
 
   it('**AUTH_MODE の運用手順（切り戻し）がある**', () => {
-    const text = developers();
+    const text = awsOpsDoc();
     expect(text).toContain('AUTH_MODE');
     expect(text).toContain("{ mode: 'deny-all' }");
     // 「いま何で動いているか」を無認証で確認できることが書かれていること。
@@ -734,45 +917,45 @@ describe('DEVELOPERS.md が Phase 4 に追いついている', () => {
   });
 
   it('**ID トークンであって access トークンではないことが書かれている**', () => {
-    expect(developers()).toContain('ID トークン');
+    // **分割前はワークスペース表の `api/` の行に当たって緑だった**（実測）。
+    // 運用手順の節を名指しすることで、この 1 本は初めて本題を見るようになった。
+    expect(awsOpsDoc()).toContain('ID トークン');
   });
 });
 
-describe('DEVELOPERS.md が TypeScript 7 に追いついている', () => {
-  const developers = (): string =>
-    readFileSync(fileURLToPath(new URL('../../DEVELOPERS.md', import.meta.url)), 'utf8');
-
+describe('docs/typescript.md が TypeScript 7 に追いついている', () => {
   it('**tsc の実体がネイティブバイナリの別パッケージであることが書いてある**', () => {
     // 5.x では「typescript を入れれば tsc が動く」で済んだ。7.x は
     // `@typescript/typescript-<os>-<arch>` を optionalDependency として引くので、
     // 入れ方によっては**コンパイラだけが入らない**。手順書に無いと原因に辿り着けない。
-    const text = developers();
+    const text = typescriptDoc();
     expect(text).toContain('@typescript/typescript-');
     expect(text, 'optionalDependencies である旨').toContain('optionalDependencies');
   });
 
   it('**`npm ci --omit=optional` を使わないことが書いてある**', () => {
     // 付けると tsc が起動しない。CI は赤くなるが、メッセージから原因が読み取りにくい。
-    expect(developers()).toContain('--omit=optional');
+    expect(typescriptDoc()).toContain('--omit=optional');
   });
 
   it('**WSL から Windows 版 npm を使わないことが書いてある**', () => {
     // 5.x の tsc は純 JS でどの npm で入れても動いた。7.x は os/cpu でバイナリを選ぶので、
     // Windows の npm で入れると win32 バイナリが Linux ツリーに入り実行不能になる。
-    const text = developers();
+    // **`/nix/store` は索引の「困ったとき」にも出る**ので、全文走査では本題を外す。
+    const text = typescriptDoc();
     expect(text).toContain('which npm');
     expect(text).toContain('/nix/store');
   });
 
   it('**tsserver が無くなり `tsc --lsp` になったことが書いてある**', () => {
-    expect(developers()).toContain('tsc --lsp');
+    expect(typescriptDoc()).toContain('tsc --lsp');
   });
 
   it('**「テストが全部緑でも型が正しいことにはならない」と書いてある**', () => {
-    // **このフェーズで一番大事な注意書き。** Vitest は esbuild で型を剥がすため、
-    // 型が壊れていてもテストは通る。実測で 5.9.3 -> 7.0.2 の変更は 1988 件中 1987 件を
-    // そのまま通した。ここが消えると、次の人が緑を見て「移行できた」と誤解する。
-    const text = developers();
+    // Vitest は esbuild で型を剥がすため、型が壊れていてもテストは通る。実測で
+    // 5.9.3 -> 7.0.2 の変更は 1988 件中 1987 件をそのまま通した。ここが消えると、
+    // 次の人が緑を見て「移行できた」と誤解する。
+    const text = typescriptDoc();
     expect(text).toContain('esbuild で型を剥がして');
     expect(text, '型を見ているのは tsc --noEmit だけ').toContain('tsc --noEmit');
     expect(text, '実測値（1987 件が素通りしたこと）').toContain('1987 件');

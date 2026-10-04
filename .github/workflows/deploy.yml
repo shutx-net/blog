@@ -72,7 +72,7 @@ jobs:
       # 「role-to-assume が空」や「s3://（バケット名なし）」という読みにくい形で落ちる。
       # 変数が無いなら 10 秒で落とす。checkout すら要らない。
       #
-      # 値の入れ方は infra/README.md と DEVELOPERS.md を参照（CloudFormation の
+      # 値の入れ方は infra/docs/stacks.md と docs/github-actions.md を参照（CloudFormation の
       # Output から取る。デプロイロールには DescribeStacks が無いので実行時には読めない）。
       - name: Require the deploy variables to be set
         env:

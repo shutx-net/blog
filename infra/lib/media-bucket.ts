@@ -31,9 +31,8 @@ export interface MediaBucketProps {
  * 消すため（AGENTS.md「画像を Git に入れない」）。
  *
  * Stack ではなく Construct なのは、別 Stack にすると cdk synth が DependencyCycle で落ちるから
- * （README「MediaBucket を別 Stack にできない理由」）。`withOriginAccessControl()` は
- * バケットポリシーに Distribution の Ref を埋め込む一方、Distribution のオリジンはバケットの
- * RegionalDomainName を参照する。別スタックだとこの 2 本が逆向きのクロススタック参照になる。
+ * （依存が双方向になる機構と実際のエラーは infra/docs/cdk-structure.md の
+ * 「メディアバケットを別 Stack にできない」）。
  *
  * **構築子 ID `MediaBucket` を動かさないこと。** 論理 ID が変わるとバケットが作り直される。
  * メディアは「画像を Git に入れない」方針により、このシステムで唯一 Git から再生成できない

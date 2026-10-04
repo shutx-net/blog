@@ -6,8 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { POSTS_PER_PAGE } from "../../src/lib/posts.ts";
 
-// dist/ is produced once by test/setup/build-site.ts (globalSetup). These tests
-// only read it -- they never trigger a build of their own.
+// Reads dist/, built once by test/setup/build-site.ts (globalSetup).
 const distDir = fileURLToPath(new URL("../../dist/", import.meta.url));
 
 const readDist = (relativePath: string): string =>
@@ -27,8 +26,8 @@ describe("listing page", () => {
 });
 
 describe("listing entries", () => {
-  // The listing used to print nothing but the title, which is not enough to pick
-  // a post out of a list. These four assertions are the contract of an entry.
+  // The contract of a listing entry. A title on its own is not enough to pick a
+  // post out of a list.
   const listing = (): string => readDist("index.html");
 
   it("prints the published date as a machine-readable <time>", () => {
@@ -121,7 +120,7 @@ describe("post page furniture", () => {
     expect(time).toBeLessThan(article);
   });
 
-  it("offers a way back to the listing", () => {
+  it("offers a way back to the listing from a post page", () => {
     expect(readDist("posts/2026/08/01/090000/index.html")).toContain(
       '<nav class="post__back"><a href="/">',
     );
@@ -186,12 +185,10 @@ describe("post page table of contents", () => {
     );
   });
 
-  // **Where the bar sits is the visible half of the <article> seal.** It is a
-  // sibling of that element rather than a child because
-  // admin/test/parity/published-html.test.ts byte-compares the inner HTML of
-  // <article> against the admin preview, finding the element as a literal string and
-  // then stripping exactly the <h1> and exactly the tag <ul>; a contents inside it,
-  // or an attribute on the tag naming it, breaks that proof rather than the layout.
+  // **The bar is a sibling of <article>, not a child** -- the same seal the
+  // furniture suite above is written against. A contents inside that element, or an
+  // attribute on the tag list naming it, breaks
+  // admin/test/parity/published-html.test.ts rather than the layout.
   //
   // Ahead of <article> and not after it, because an index read after the thing it
   // indexes has nothing left to index. That is the reading order and the tab order
@@ -216,12 +213,9 @@ describe("post page table of contents", () => {
   // because the fixture quietly lost it: a `not.toContain` over material that is not
   // there is green and means nothing.
   //
-  // depth 1 is out because <article> already opens with the post title as its h1, so
-  // a body h1 is the title's sibling and not one of its sections. Not hypothetical:
-  // the published post at /posts/2026/09/27/142621/ carries one. depth 4 is out
-  // because it is no longer a landmark a reader navigates by -- global.css leaves
-  // `article h4` at the body font size -- and in a bar a fraction of the body's
-  // width those headings wrap to three lines each.
+  // Why these two depths and no others: rule 1 of src/lib/toc.ts, pinned by
+  // test/unit/toc.test.ts's "takes only h2 and h3". depth 1 is not hypothetical --
+  // the published post at /posts/2026/09/27/142621/ carries a body h1.
   it.each([
     { depth: 1, slug: "body-heading-one" },
     { depth: 4, slug: "depth-four" },

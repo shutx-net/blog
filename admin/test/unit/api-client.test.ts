@@ -188,7 +188,7 @@ describe('クエリ文字列', () => {
     expect(await callWith({})).toBe('https://example.invalid/api/posts/detail');
   });
 
-  it('複数の値を組み立てられる（Phase 5 の削除が slug と sha を送る）', async () => {
+  it('複数の値を組み立てられる（削除が slug と sha を送る）', async () => {
     const url = await callWith({ slug: '2026/09/27/142621', sha: 'abc123' });
     expect(url).toContain('slug=2026%2F09%2F27%2F142621');
     expect(url).toContain('sha=abc123');

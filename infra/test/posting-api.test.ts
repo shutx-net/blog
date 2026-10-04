@@ -90,9 +90,9 @@ describe('GitHub App の秘密鍵シークレット', () => {
     //   generateSecretString: props.generateSecretString ?? (secretString ? void 0 : {})
     // としているため、素の new Secret() は GenerateSecretString: {} を描画し、
     // デプロイ時に **32 文字のランダムパスワードが AWSCURRENT に入る**。
-    // 設計判断8（CDK に秘密の値を書かない / 空のシークレットを作る）が静かに破れる。
+    // AGENTS.md「CDK に秘密の値を書かない」（空のシークレットを作る）が静かに破れる。
     //
-    // 実測: この状態でも Phase 2 までの 121 件は 1 つも赤くならなかった。
+    // 実測: この状態でも既存の 121 件は 1 つも赤くならなかった。
     // このアサーションが唯一の検出手段である。
     expect(Object.keys(only('AWS::SecretsManager::Secret')).sort()).toEqual(['Description']);
   });
@@ -109,7 +109,7 @@ describe('GitHub App の秘密鍵シークレット', () => {
     // **修復 1**: 以前は secrets[0] というガード無しの添字だった。0 件でも
     // `undefined?.DeletionPolicy` が undefined になるだけ…ではなく toBe で落ちるが、
     // **2 件目が増えたときに 1 件目だけ見て通ってしまう**。件数を先に主張し、
-    // 全件ループに変える（infra/README.md の型 2）。
+    // 全件ループに変える（infra/docs/test-patterns.md の型 2）。
     const secrets = Object.entries(template.findResources('AWS::SecretsManager::Secret')) as Array<
       [string, { DeletionPolicy?: string; UpdateReplacePolicy?: string }]
     >;
@@ -158,7 +158,7 @@ describe('実行ロール', () => {
     // **修復 2**: 以前は hasResourceProperties で、**1 件でも一致すれば通った**。
     // 現在ロールは 1 個だが、Cognito が SMS ロール等を持ち込むと
     // 「どれか 1 つが lambda を assume する」に静かに退化する。
-    // findResources を全件走査する形に変える（infra/README.md の型 1/4）。
+    // findResources を全件走査する形に変える（infra/docs/test-patterns.md の型 1/4）。
     const roles = Object.entries(template.findResources('AWS::IAM::Role')) as Array<
       [string, { Properties?: Record<string, unknown> }]
     >;
@@ -266,7 +266,7 @@ describe('Lambda 関数', () => {
   });
 
   it('ReservedConcurrentExecutions が設定されている', () => {
-    // **本フェーズ唯一の流量防御。** /api/* は匿名で到達できるので、deny-all でも
+    // **唯一の流量防御。** /api/* は匿名で到達できるので、認証で拒否する場合でも
     // Lambda は起動する。予約同時実行が暴走時の上限として働く。
     const reserved = only('AWS::Lambda::Function')['ReservedConcurrentExecutions'];
     expect(typeof reserved).toBe('number');
@@ -475,10 +475,9 @@ describe('カスタムリソースを引き込んでいない', () => {
 /**
  * GitHub App の client ID。
  *
- * Phase 3〜5 は App が存在しなかったので `'not-configured'` を入れていた。
- * **`AUTH_MODE=deny-all` の間は GitHub を呼ぶ経路に到達しないので安全だった**が、
- * 認証が通るようになった今は、プレースホルダのままだと
- * 「鍵は読めているのに GitHub が 401 を返す」という紛らわしい壊れ方をする。
+ * **プレースホルダを入れない。** 認証が通る今、値が実在の App を指していないと
+ * 「鍵は読めているのに GitHub 呼び出しだけ失敗する」という紛らわしい壊れ方をする
+ * （`site-stack.ts` の `GITHUB_APP_CLIENT_ID` の JSDoc に症状を書いてある）。
  */
 describe('GitHub App の client ID', () => {
   const env = (): Record<string, unknown> => {

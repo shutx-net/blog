@@ -17,13 +17,7 @@ export const SESSION_KEY = 'session';
 export interface StoredSession {
   /** api に送る ID トークン。**access トークンは保存しない**（送る先が無い）。 */
   idToken: string;
-  /**
-   * refresh トークン。
-   *
-   * **寿命はクライアントから観測できない。** 不透明文字列で `exp` を持たないので、
-   * 24 時間という設定値はトークン自体からは読めない。**失効は `invalid_grant` を
-   * 受け取って初めて分かる。**
-   */
+  /** refresh トークン。**寿命はクライアントから観測できない**（`THREAT-MODEL.md`）。 */
   refreshToken: string | undefined;
   /**
    * ID トークンの期限（ミリ秒）。

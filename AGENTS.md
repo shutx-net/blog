@@ -1,8 +1,7 @@
 # blog
 
 shutx-net の個人ブログ。Markdown を Git で管理し、静的サイトとして AWS から配信する。
-
-**本番稼働中。** 管理画面からの投稿がデプロイまで自動で通る状態にある。
+**本番稼働中** — 管理画面からの投稿がデプロイまで自動で通る。
 
 ## アーキテクチャ
 
@@ -11,7 +10,16 @@ Amplify Hosting は使わない（CloudFront の 1TB/月 永年無料枠に収�
 
 ## 開発環境
 
-Nix flake で固定している。**セットアップ手順は `DEVELOPERS.md` を読むこと**（このファイルには取り込まない — 毎セッション読み込む必要がないため）。
+Nix flake で固定している。**セットアップ手順は `DEVELOPERS.md` を読むこと**（毎セッション読む必要が無いので取り込まない）。
+
+## ドキュメント
+
+| 入口 | 中身 |
+| --- | --- |
+| `DEVELOPERS.md` | 開発環境の索引（必要なもの・dev shell・ワークスペース・困ったとき） |
+| `docs/` | トピック別。記事リポジトリ・AWS の運用・GitHub Actions・oxlint・TypeScript・依存の測り方 |
+| `infra/README.md` | AWS の索引（構成・デプロイ・配信と CSP の判断は `infra/docs/`） |
+| `admin/src/auth/THREAT-MODEL.md` | 管理画面のトークン保持方式の根拠（脅威モデル） |
 
 ## コマンド
 
@@ -21,8 +29,7 @@ npm run -w site build            # site/dist/ に静的サイトを出力
 npm run -w admin build
 npm run -w api build             # esbuild で Lambda をバンドル
 
-npm run lint                     # oxlint。**素の `oxlint` は warning があっても exit 0**
-                                 # なので、`--deny-warnings` 込みのこのスクリプトで呼ぶ
+npm run lint                     # oxlint。素の `oxlint` は warning でも exit 0 なので --deny-warnings 込みのこれで呼ぶ
 
 npx -w infra cdk diff            # ★ deploy の前に必ず差分を見る
 npx -w infra cdk deploy <Stack>
@@ -37,13 +44,11 @@ npx -w infra cdk deploy <Stack>
 - **このリポジトリに記事を置かない。** `site/src/content/posts/` は `.gitignore` 済み。
   `.gitkeep` も置かないこと。`site/test/fixtures/posts/*.md` はテスト用フィクスチャで本番には出ない
 - **固定ページ（プロフィール・プライバシーポリシー）は例外で、このリポジトリの
-  `site/src/content/pages/*.md` に置く**（`pages` コレクション）。公開前提で更新も稀なので、
-  記事を分けた 2 つの理由（下書きの秘匿・コード履歴の保護）が当てはまらず、
-  プライバシーポリシーは改定履歴が公開されているほうがよい。**`posts` には入れないこと**
-  （RSS に配信され、スラッグ照合のガードと記事 API の一覧が落ちる）。
-  **ルートは `site/src/pages/*.astro` が持ち、`getEntry` が空なら throw する。**
-  コレクションからルートを生成すると、md が消えたとき空のままビルドが緑になり、
-  `s3 sync --delete` が本番のページを消す
+  `site/src/content/pages/*.md` に置く**（`pages` コレクション）。公開前提で更新も稀で、記事を分けた
+  理由が当てはまらない（プライバシーポリシーは改定履歴が公開されているほうがよい）。
+  **`posts` には入れないこと**（RSS に配信され、スラッグ照合のガードと
+  記事 API の一覧が落ちる）。**ルートは `site/src/pages/*.astro` が持ち、`getEntry` が空なら throw する** —
+  コレクションから生成すると、md が消えたとき空のままビルドが緑になり `s3 sync --delete` が本番のページを消す
 - **content repo を `site/src/content/posts` へ直接 checkout しない。**
   `actions/checkout` はリポジトリの**ルート**を `path` に置くので、`README.md` が
   コレクションに混ざり、記事が 1 階層深くなって `entry.id` が `posts/2026/09/27/142621` になる。
@@ -57,8 +62,8 @@ npx -w infra cdk deploy <Stack>
   その `PUBLISHABLE_MINIMUM` が `deploy.yml` の `minimum` と同値であることをテストが固定している。
   **削除だけでなく、最後の公開記事を `draft: true` にする更新も同じ状態を作る**
 - **記事のスラッグは `pubDate` から導出する日付パスだけ**（`YYYY/MM/DD/HHmmss`、Asia/Tokyo）。
-  平坦スラッグは撤廃した。**既存の URL を変えないこと**（上と同じ理由で取り消せない）。
-  したがって **`pubDate` は編集で変えられない**（400 になる）。日付を直すには削除して再投稿する
+  **既存の URL を変えないこと**（上と同じ理由で取り消せない）。したがって
+  **`pubDate` は編集で変えられない**（400 になる）。日付を直すには削除して再投稿する
 - **`deploy.yml` はスラッグが日付パスの形であることを直接主張する。** 数と集合の一致では
   入れ子を検出できない — corpus も dist も同じだけ深くなるため。シェルは POSIX ERE で `(?:` が
   書けないので `DATE_SLUG_PATTERN` と**同義の別表現**になっており、一致はテストが両方走らせて固定している
@@ -120,14 +125,12 @@ npx -w infra cdk deploy <Stack>
   **キーの作り方を変えるならこの宣言も変えること**
 - **`/_astro/*` も `immutable`。** vite が `_astro/<名前>.<内容ハッシュ>.<拡張子>` を出すため
   （Astro の `build.assets` の既定が `_astro`。上書きしていない）。**もう 1 つの前提は
-  `site/astro.config.mjs` の `build.inlineStylesheets: "never"`** — 既定の `"auto"` に戻すと、
-  ビルド後の CSS が vite の 4096 B を割った日に全ページがインライン `<style>` になり
-  `style-src 'self'` に落とされる（実測: 3643 B で 13/13 の HTML がインライン化され
-  `dist/_astro/` が空になった。いまの余裕は 6741 - 4096 = 2645 B）。
+  `site/astro.config.mjs` の `build.inlineStylesheets: "never"`** — 既定の `"auto"` に戻すと、ビルド後の
+  CSS が vite の 4096 B を割った日に全ページがインライン `<style>` になり `style-src 'self'` に落とされる。
   **`/admin/assets/*` は含まれない**（`base: '/admin/'` なので `/_astro/*` に一致せず `no-cache` のまま）。
-  値は `/media/*` と同じだが**定数もポリシーも別に置く**（真である条件が違う。片方が崩れた日に
-  もう片方を道連れにしないため）。**存在しない `/_astro/*` の 404 は `immutable` ではなく
-  `no-cache` で返る**（エラーページはデフォルトビヘイビアのポリシーを取る。実測。詳細は `infra/README.md`）
+  値は `/media/*` と同じだが**定数もポリシーも別に置く**（真である条件が違う）。**存在しない
+  `/_astro/*` の 404 は `immutable` ではなく `no-cache` で返る。**
+  実測値は `site/astro.config.mjs` のコメントと `infra/docs/cloudfront-caching.md`
 - Cache-Control が無いとブラウザは*ヒューリスティックキャッシュ*（`Last-Modified` からの経過の 10% 程度）を
   適用する。invalidation はブラウザには届かないので、**更新したのに反映されない**という事故になる（実際に踏んだ）
 
@@ -184,31 +187,18 @@ npx -w infra cdk deploy <Stack>
   フォーマッタではなく、`indent` ルール自体が存在しない。フォーマッタは入れていない
 - **機械検査できる規約は `.oxlintrc.json` に書く**（jsonc なので理由もそこに書ける）。
   文章で書くだけの規約を増やさない。**ただし oxlint で表現できないものは多い** —
-  何が無理かは `DEVELOPERS.md`。**検査されていないものを「検査されている」と書かないこと**
+  何が無理かは `docs/oxlint.md`。**検査されていないものを「検査されている」と書かないこと**
 - Astro のコンテンツスキーマは `site/src/content.config.ts` に Zod で定義する。
   フロントマターの書き間違いをビルドで落とすため
 
 ## 外部ライブラリを足すとき
 
 **最重要の基準は「継続的にメンテナンスされているか」。** 機能・性能・書き味・人気より上位に置く。
-
 このリポジトリは public で、`api/` は GitHub App の秘密鍵を Secrets Manager から読んで
 JWT に署名し、`admin/` は投稿の全権限を持つ。**依存が乗っ取られる／放棄されると、
 被害が本番の資格情報と書き込み経路に直結する。**
 
-### 主張ではなく実測すること
-
-```sh
-npm view <pkg> time.modified time.created dist-tags --json    # 最終公開日
-npm view <pkg> deprecated maintainers license --json          # 非推奨・メンテナ数
-npm view <pkg> dependencies --json                            # 推移依存の表面積
-gh api repos/<owner>/<repo> --jq '{archived, pushed_at, open_issues_count}'
-```
-
-判断の根拠は数値で `toolchain.rationale`（計画）と PR 本文に残す。
-**「広く使われているから」「人気があるから」は理由にならない。**
-
-### 不採用にする条件
+不採用にする条件:
 
 - リポジトリが archived
 - `deprecated` フィールドが立っている
@@ -219,17 +209,12 @@ gh api repos/<owner>/<repo> --jq '{archived, pushed_at, open_issues_count}'
 - メンテナが実質 1 人で後継がいない
 - 推移依存が多い。**同じ用途なら依存の少ない候補を優先する**
 
-### 依存を足さない選択を先に検討する
+**バージョンは完全固定。** キャレットもチルダも付けない。`^1.2.3` は「次に誰かが `npm install` した日に
+別のコードが入る」という意味であり、固定の目的を失う。更新は意図的な PR で行う。
 
-- **標準ライブラリで足りないか。** `node:crypto` の枯れたプリミティブで済むなら、依存ゼロが最も安全
-- **既にある依存を再利用できないか。** 別系統の同種ライブラリを持ち込まない
-  （Markdown は remark 系に統一する。プレビューと本番の一致という要件からも同じものを使う）
-- **`<textarea>` で足りるものにリッチエディタを入れない**
-
-### バージョンは完全固定
-
-キャレットもチルダも付けない。`^1.2.3` は「次に誰かが `npm install` した日に別の
-コードが入る」という意味であり、固定の目的を失う。更新は意図的な PR で行う。
+判断の根拠は数値で `toolchain.rationale`（計画）と PR 本文に残す。
+**「広く使われているから」「人気があるから」は理由にならない。**
+**依存を足さない選択を先に検討する。** 測り方とその検討手順は `docs/dependencies.md`。
 
 ## リポジトリ運用
 

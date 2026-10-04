@@ -104,12 +104,8 @@ export interface PostPublisherDeps {
  * slug からファイルパスを組み立てる。
  *
  * **posts ディレクトリの外に出られないことをここでも検査する**（入力側の検証と二重化）。
- * 「安全な形だけを通す」allowlist で行う — '../' を除去する blocklist 方式は、除去後に
- * 再び '../' が現れる入力（'....//'）で破れる。
- *
- * 日付パス（`2026/09/08/054001`）はスラッシュを含むが封じ込めは弱まっていない。
- * `DATE_SLUG_PATTERN` は **strict allowlist**（文字クラスは `[0-9]` だけ、桁数も階層も固定）
- * で `..` も `\` も表現できない。**スラッシュを許したことと traversal を許したことは別である。**
+ * **封じ込めは `DATE_SLUG_PATTERN` の strict allowlist だけに頼っている** — 日付パスが
+ * スラッシュを含んでも `..` を表現できない根拠は `api/src/posts/slug.ts` の同定数の JSDoc。
  *
  * **export しているのは reader.ts が同じ検査を使うため。** 写しを作ると片方だけ緩む。
  */
@@ -200,7 +196,7 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
       return { token, baseCommitSha, path, existingSha: undefined };
     }
 
-    // **sha を読む。** 更新の楽観的並行制御はこの値との一致で行う。
+    // 更新と削除の楽観的並行制御は、この値との一致で行う。
     const existingSha = ((await lookupResponse.json()) as { sha?: string }).sha;
     if (typeof existingSha !== 'string') throw new Error('GitHub content response has no sha');
     return { token, baseCommitSha, path, existingSha };
@@ -332,7 +328,6 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
     });
 
     deps.logger.info('updated post', { path, commitSha });
-    // **replaced は常に true。** 上で存在を確かめているので、作成になる経路が無い。
     return { commitSha, path, replaced: true };
   };
 
@@ -365,8 +360,7 @@ export const createPostPublisher = (deps: PostPublisherDeps): PostPublisher => {
     });
 
     deps.logger.info('deleted post', { path, commitSha });
-    // **replaced は true。** 「既にあったものに手を入れた」という意味で、
-    // 呼び出し側が作成と区別できる形を揃えている。
+    // 削除も「既にあったものに手を入れた」ので true（意味は deps.ts の `PublishResult`）。
     return { commitSha, path, replaced: true };
   };
 

@@ -97,7 +97,8 @@ describe('ViewerCertificate', () => {
 
   it('**ARN にアカウント ID のリテラルが載っていない**（`Ref: AWS::AccountId` で組んである）', () => {
     // **このリポジトリは public。** 同じ規律が deploy.yml（role ARN を variable に逃がす）、
-    // ADMIN_LOGIN_DOMAIN_PREFIX の JSDoc、infra/README.md の 3 箇所に明文で書かれている。
+    // ADMIN_LOGIN_DOMAIN_PREFIX の JSDoc、infra/docs/custom-domain.md の 3 箇所に
+    // 明文で書かれている。
     const arn = certificateArnJson();
     expect(arn).toContain('AWS::AccountId');
     // 12 桁連続の数字はアカウント ID 以外にこの ARN には現れない

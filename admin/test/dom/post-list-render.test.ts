@@ -71,7 +71,7 @@ describe('一覧の描画', () => {
     expect(items[1]?.textContent).not.toContain('下書き');
   });
 
-  it('各行に data-slug が付く（Phase 4 が記事を特定する手がかり）', () => {
+  it('各行に data-slug が付く', () => {
     const ul = list();
     renderPostList(ul, [entry()]);
 

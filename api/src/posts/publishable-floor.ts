@@ -23,7 +23,8 @@
  *
  * 読むと「下限が 0 になったとき床も 0 になる」空振りを作る。`deploy.yml` 側も
  * 同じ理由で整数リテラルにしてある。**両者が一致することは
- * `infra/test/publishable-floor-matches-guard.test.ts` が突き合わせる。**
+ * `infra/test/workflow-deploy-steps.test.ts` の
+ * `describe('api の床と deploy.yml のガードの一致')` が突き合わせる。**
  */
 
 /** 床の判定に要る最小の形。`PostSummary` はこれを満たす。 */

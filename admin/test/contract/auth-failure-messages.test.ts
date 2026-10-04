@@ -11,7 +11,7 @@ import { AUTH_FAILURE_MESSAGES } from '../../src/editor/app.ts';
  * `app.ts` から `@blog/api/src/auth.ts` を import すれば綴りを書き写さずに済むが、
  * **あのモジュールは `./auth/cognito.ts` 経由で `aws-jwt-verify` を引き込む。**
  * import するとそれがブラウザのバンドルに入り、「ブラウザに配る依存を増やさない」
- * という Phase 4 からの判断に反する（`test/unit/toolchain.test.ts` が
+ * という判断に反する（`test/unit/toolchain.test.ts` が
  * dependencies を 1 本に固定しているのも同じ理由）。
  *
  * **そこで実行時の結合は作らず、テストだけが両方を読む。** これは

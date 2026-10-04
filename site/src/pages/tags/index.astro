@@ -20,8 +20,8 @@ const tags = countByTag(posts);
 <Layout title="タグ" description="記事に付けられているタグの一覧。">
   <h1>タグ</h1>
   {
-    /* Reachable only by URL until now: the post page and the listing both link
-       into /tags/<name>/, but nothing told the reader which tags exist. */
+    /* The post page and the listing both link into /tags/<name>/; this index is
+       what tells the reader which tags exist. */
     tags.length > 0 ? (
       <ul class="tag-list tag-list--index">
         {tags.map(({ tag, count }) => (

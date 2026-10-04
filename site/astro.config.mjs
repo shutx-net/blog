@@ -6,7 +6,7 @@ import { resolveSiteUrl } from "./src/site-url.ts";
 
 // Astro 7 defaults to the Satteri (Rust) processor. This project pins the
 // remark/rehype pipeline instead so the admin preview and production render
-// Markdown identically -- see AGENTS.md, non-negotiable decision 1.
+// Markdown identically -- see the "### Markdown" rule in AGENTS.md.
 // test/unit/markdown.test.ts asserts this at the config level; deleting the
 // `processor` line below is not detectable from the generated HTML.
 export default defineConfig({
@@ -16,10 +16,9 @@ export default defineConfig({
   // yet. Removing this line does NOT fail loudly in both directions: RSS fails
   // the build, but sitemap only logs a warning and emits nothing at exit code 0.
   site: resolveSiteUrl(process.env),
-  // No options on purpose. changefreq, priority and lastmod would all be
-  // invented values, and a filter would only duplicate what the routes already
-  // decide. The defaults emit sitemap-index.xml plus sitemap-0.xml and drop the
-  // status pages (404, 500).
+  // No options on purpose. changefreq, priority and lastmod would all be invented
+  // values, and a filter would only duplicate what the routes already decide.
+  // What the defaults then emit is pinned by test/build/feeds.test.ts.
   integrations: [sitemap()],
   // `"never"` is a declaration, not an optimisation. This site is served under
   // `style-src 'self'` (infra/lib/response-headers.ts), so an inline <style>
@@ -32,11 +31,13 @@ export default defineConfig({
   // must not hang on a byte count that the next restyle moves, in either
   // direction. So it is stated instead of inferred.
   //
-  // Measured 2026-10-03: the emitted /_astro/Layout.*.css is 6741 B, leaving
+  // Measured 2026-10-04: the emitted /_astro/Layout.*.css is 6741 B, leaving
   // 6741 - 4096 = 2645 B of headroom under the threshold that used to be the
-  // only thing keeping the stylesheet external. global.css is 25344 B of source,
-  // but that number never reaches the comparison: 16906 B of it are comments and
-  // 8438 B are rules, and those minify to the 6741 B above.
+  // only thing keeping the stylesheet external. global.css's *source* size never
+  // reaches that comparison -- most of the file is comments, and it is the 8438 B
+  // of rules that minify to the 6741 B above. So trimming the comments there
+  // cannot move this number, and the source size is deliberately not recorded
+  // here: it would go stale on every comment edit.
   //
   // The failure mode is not hypothetical. Rebuilt with the stylesheet cut to
   // 3643 B and no `build` block at all, "auto" put an inline <style> into 13/13
@@ -46,19 +47,15 @@ export default defineConfig({
   // (/_astro/Layout.DSUcKf8k.css, inline <style> 0/13, <link> 13/13).
   //
   // At today's size the setting changes no output at all: dist/ is byte-identical
-  // with and without it (`diff -r` against a build of the previous config). It
-  // buys the invariant, not bytes.
+  // with and without it (`diff -r` against a build of the previous config).
   //
-  // `"always"` must not come back. It was pinned there for one release -- when
-  // designing the post page pushed the stylesheet past the threshold and it
-  // silently went external, taking the last inline <style> out of dist/ -- and
-  // it is what `style-src 'unsafe-inline'` existed for; dropping that directive
-  // and dropping the pin moved in the same commit. The guard on dist/ is
-  // admin/test/build/output.test.ts (it scans ../../../site/dist and requires
-  // *zero* inline <style>, the reverse of what it once asserted);
-  // site/test/build/output.test.ts makes no claim about <style>. The value on
-  // this line is pinned by test/unit/stylesheets.test.ts, which also pins
-  // build.assets and build.assetsPrefix as unset: CloudFront's immutable
+  // `"always"` must not come back: it is what `style-src 'unsafe-inline'` existed
+  // for, and that directive is gone. The guard on dist/ is
+  // admin/test/build/output.test.ts, which scans ../../../site/dist and requires
+  // *zero* inline <style>; site/test/build/output.test.ts makes no claim about it.
+  //
+  // The value below is pinned by test/unit/stylesheets.test.ts, which also
+  // pins build.assets and build.assetsPrefix as unset: CloudFront's immutable
   // /_astro/* behavior is written against astro's default asset directory.
   build: {
     inlineStylesheets: "never",

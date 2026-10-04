@@ -33,8 +33,8 @@ class ResourceNotFoundException extends Error {
 
 describe('SecretBinary を優先して読む', () => {
   it('SecretBinary があれば UTF-8 デコードして PEM 文字列にする', () => {
-    // DEVELOPERS.md の投入手順が `--secret-binary fileb://blog-app.private-key.pem`
-    // なので、AWSCURRENT に入るのは SecretString ではなく SecretBinary。
+    // 投入手順（`docs/aws-ops.md` の「GitHub App の秘密鍵」）が
+    // `--secret-binary fileb://...` なので、AWSCURRENT に入るのは SecretBinary。
     const { reader } = readerWith(() => ({ SecretBinary: binary(PEM) }));
     return expect(reader.readPrivateKey()).resolves.toBe(PEM);
   });
@@ -72,8 +72,8 @@ describe('SecretBinary を優先して読む', () => {
 
 describe('空のシークレット（CDK が作った直後の状態）', () => {
   it('ResourceNotFoundException を KeyNotProvisionedError に変換する', async () => {
-    // **本フェーズの状態で実際に起きる唯一のパス。** CDK は値の無いシークレットを
-    // 作るので、バージョンが 1 つも無く GetSecretValue は ResourceNotFoundException になる。
+    // CDK は値の無いシークレットを作るので、バージョンが 1 つも無く
+    // GetSecretValue は ResourceNotFoundException になる。
     const { reader } = readerWith(() => {
       throw new ResourceNotFoundException('Secrets Manager can not find the specified secret.');
     });
@@ -115,8 +115,8 @@ describe('GetSecretValue の入力', () => {
   });
 
   it('VersionStage を明示指定できる', async () => {
-    // DEVELOPERS.md の鍵ローテーション手順 2「AWSPENDING で投入し、動作を確認」を
-    // **実行可能にする**ための経路。
+    // 鍵ローテーション手順 2「AWSPENDING で投入し、動作を確認」
+    // （`docs/aws-ops.md` の「GitHub App の秘密鍵」）を**実行可能にする**ための経路。
     const { reader, send } = readerWith(() => ({ SecretBinary: binary(PEM) }));
     await reader.readPrivateKey({ versionStage: 'AWSPENDING' });
     const [command] = send.mock.calls[0] ?? [];

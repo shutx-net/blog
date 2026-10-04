@@ -13,7 +13,7 @@ import type { BuildOptions } from 'esbuild';
  * **ディスク上の成果物をそのまま固める**。ビルドの定義が package.json の
  * スクリプトと infra の 2 箇所にあると、片方だけ変えた日に「テストが検証した
  * バンドル」と「本番に載るバンドル」が別物になる。**それを型でもテストでも
- * 検出できない**のは、この工事で実際に起きた事故と同じ形である。
+ * 検出できない。**
  *
  * 事故の記録: 変異テストが pretest 経由で dist を汚し、ソースだけ復旧したため、
  * ソースと本番の Lambda が 6 バイト食い違ったままデプロイされた
@@ -140,8 +140,8 @@ const alreadyWritten = (outfile: string, expected: Uint8Array): boolean => {
 /**
  * バンドルを作り、`outfile` の内容がそれと一致していることを保証して、そのパスを返す。
  *
- * **既にあるかどうかではなく、内容が一致しているかで判断する。** 「成果物が存在する」
- * だけを条件にすると、まさに事故の状況（古い成果物が居座っている）を通してしまう。
+ * **存在ではなく内容の一致で判断する。** 「成果物がある」だけを条件にすると、
+ * まさに事故の状況（古い成果物が居座っている）を通してしまう。
  */
 export const buildApiBundle = (options: BuildApiBundleOptions = {}): string => {
   const entry = options.entry ?? API_ENTRY;

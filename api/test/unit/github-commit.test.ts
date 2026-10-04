@@ -350,8 +350,8 @@ describe('ref の更新', () => {
 
 describe('パスの封じ込め', () => {
   it('SITE_POSTS_PATH_PREFIX が site/src/content/posts/ である', () => {
-    // **記事リポジトリを分離する前の値。** infra はこの定数を渡し、
-    // 切り替えのときだけ 'posts/' に変える。
+    // **記事リポジトリを分離する前の値で、infra はもう渡さない**（渡すのは
+    // CONTENT_POSTS_PATH_PREFIX）。切り替えが後戻りしていないことの錨として残す。
     expect(SITE_POSTS_PATH_PREFIX).toBe('site/src/content/posts/');
   });
 

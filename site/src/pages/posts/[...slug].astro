@@ -39,11 +39,10 @@ const { Content, headings } = await render(post);
      the wrapper below and a :has() selector for the tag list.
 
      The contents bar is placed by the same rule: it can only be a sibling of
-     <article> inside div.post, because the proof finds <article> as a literal string
-     and then strips an exact prefix and suffix, so it may be carried neither by an
-     attribute on the tag nor by a child inside it. It goes BEFORE the body and not
-     after, because an index read after the thing it indexes has nothing left to
-     index -- which is the reading order, and the tab order with it. */
+     <article> inside div.post, carried neither by an attribute on the tag nor by a
+     child inside it. It goes BEFORE the body and not after, because an index read
+     after the thing it indexes has nothing left to index -- which is the reading
+     order, and the tab order with it. */
 }
 <Layout title={post.data.title} description={post.data.description}>
   <div class="post">

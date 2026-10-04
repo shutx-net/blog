@@ -1,7 +1,7 @@
 # 管理画面の認証 — 脅威モデル
 
-**この文書はトークン保持方式の根拠である。** 「なぜ `localStorage` ではないのか」を
-後から再議論しないための唯一の出典なので、保持方式を変えたくなったらまずここを読むこと。
+**この文書はトークン保持方式の唯一の出典である。**
+保持方式を変えたくなったらまずここを読むこと。
 
 計測はすべて 2026-08-31 に実環境に対して行ったもので、主張ではない。
 
@@ -26,8 +26,8 @@ Cognito の **ID トークン（有効 60 分）** と **refresh トークン（
 - 他ユーザへの昇格（単一著者プールで `cognito:username` の完全一致。`selfSignUpEnabled: false`）
 - 投稿の隠蔽（Git がすべて記録し、revert できる）
 
-**被害は可視・可逆である**（記事リポジトリは private だが、投稿はコミットとして残り、
-公開サイトに出るので気づける）。これが「保持方式の選択に過剰な代償を払わない」判断の土台になる。
+**被害は可視・可逆である**（記事リポジトリは private だが、公開サイトに出るので気づける）。
+これが「保持方式の選択に過剰な代償を払わない」判断の土台になる。
 
 ## 攻撃者 A: admin オリジンでの XSS（**主敵。仮想の話ではない**）
 
@@ -55,7 +55,7 @@ XSS に効く唯一の対策は **CSP** である。`script-src` に `'unsafe-in
 インライン属性ハンドラ（`onerror` / `onload`）は無効化され、`javascript:` URL も動かない。
 `script-src-attr 'none'` でさらに明示的に閉じる。
 
-**Phase 5 でこれを CloudFront の `ResponseHeadersPolicy` として実装した**
+**これは CloudFront の `ResponseHeadersPolicy` として実装してある**
 （`infra/lib/response-headers.ts`）。**サニタイズは採らない** — パイプラインで消毒すると
 `admin/test/parity/published-html.test.ts` のバイト一致が壊れ、`bind.ts` の `innerHTML`
 境界だけで消毒すると「プレビューは安全・公開ページは危険」という乖離が生まれて
@@ -68,11 +68,13 @@ XSS に効く唯一の対策は **CSP** である。`script-src` に `'unsafe-in
 
 - `<meta http-equiv="refresh">` によるリダイレクト（CSP に該当ディレクティブが無い）
 - プレビュー枠内の表示なりすまし
-- CSS による情報抜き出し（`style-src 'unsafe-inline'` を許す以上ゼロにはできない）
+- CSS による情報抜き出し（`style-src-attr 'unsafe-inline'` を許す以上ゼロにはできない。
+  `<style>` ブロックは `style-src 'self'` が禁じるので、経路は `style` 属性だけに狭まった）
 
 いずれも**スクリプト実行を伴わないので、守っている資産（トークン）には届かない。**
 CSS の送出口は `img-src 'self'` と `connect-src` の限定で塞がっており、
-`'unsafe-inline'` は外部 URL を許可しないので `@import url(https://evil/...)` も弾かれる。
+`'unsafe-inline'` は外部 URL を許可しないので `@import url(https://evil/...)` も弾かれる
+（そもそも `@import` は `style` 属性には書けない）。
 
 ## 攻撃者 B: 他オリジンの JavaScript
 
@@ -112,7 +114,7 @@ https + HSTS。実測で Cognito 側は `strict-transport-security: max-age=3153
 ### 受け入れている trade-off
 
 **ブラウザを閉じるたびに再ログインが要る。**「毎日 1 回パスワードを打つ」体験になる。
-24 時間有効な refresh トークンがディスクに残り続けることと天秤にかけて後者を選んでいる。
+24 時間有効な refresh トークンがディスクに残り続けることと天秤にかけて、**この不便を選んでいる。**
 
 不便を理由に `localStorage` へ変えたくなる圧力は構造的にかかる。
 **変えるなら、この表の「採らない理由」に反論してから変えること。**

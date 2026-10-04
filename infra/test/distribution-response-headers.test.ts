@@ -46,8 +46,8 @@ const distributionConfig = (): DistributionConfig => {
  *
  * `Object.values(...)[0]` は「ポリシーが 1 本しかない」ことに暗黙に依存していた。
  * 2 本になった時点で、どちらが返るかはテンプレートのキー順という**主張していない性質**で
- * 決まる。`distribution-media-behavior.test.ts:33` が同じ理由で名指しに直っている
- * （Phase 3 で /api/* が増えて「ちょうど 1 件」の形が 6 件まとめて赤くなった）。
+ * 決まる。`distribution-media-behavior.test.ts` の `mediaBehavior()` が同じ理由で名指しである
+ * （/api/* が増えた時点で「ちょうど 1 件」の形が 6 件まとめて赤くなった）。
  *
  * 接尾辞で照合するのはスタック名を前提にしないため。`${stackName}-security-headers` の
  * 前半は呼び出し側が決める。
@@ -569,7 +569,8 @@ describe('**HSTS は includeSubDomains も preload も付けない**', () => {
     //
     // **旧い理由（「*.cloudfront.net は他人と共有するドメイン」）に戻さないこと。**
     // alias を足した時点で決定を支えなくなる。理由の本体は `HSTS_MAX_AGE_SECONDS` の
-    // JSDoc と `infra/README.md` の同名の節にあり、後者は toolchain.test.ts が固定している。
+    // JSDoc と `infra/docs/security-headers.md` の同名の節にあり、後者は
+    // toolchain.test.ts が固定している。
     expect(
       (securityHeaders()['StrictTransportSecurity'] as Record<string, unknown>)[
         'IncludeSubdomains'

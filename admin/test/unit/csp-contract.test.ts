@@ -73,7 +73,6 @@ describe('**CSP が admin の通信先を全部許可している**', () => {
   });
 
   it('**S3 の regional domain 形が connect-src に含まれる**（presigned PUT）', () => {
-    // Phase 4 の画像アップロードが CSP で死んでいないことの確認。
     const s3Origins = directive('connect-src').filter((value) =>
       /^https:\/\/[^/]+\.s3\.[a-z0-9-]+\.amazonaws\.com$/.test(value),
     );
@@ -114,7 +113,7 @@ describe('**CSP が admin の通信先を全部許可している**', () => {
   });
 });
 
-describe('**admin は blob: も data: も使っていない**（使い始めたらここが赤くなる）', () => {
+describe('**admin は blob: も data: も使っていない**', () => {
   const files = sourceFiles(SRC_DIR);
 
   it('走査対象が空でない', () => {

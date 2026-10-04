@@ -14,12 +14,10 @@
 /**
  * バイト列。`ArrayBuffer` 裏付けであることまで型で言う。
  *
- * admin の tsconfig は `lib: ["ES2023","DOM","DOM.Iterable"]` と
- * `types: ["node"]` を両方持つ（前者はブラウザのコード、後者はテストと
- * scripts/smoke.ts のため）。この 2 つの宣言が重なる場所で
- * **node の `TextEncoder#encode` は `Uint8Array<ArrayBufferLike>` を返すのに、
- * DOM の `crypto.subtle.digest` と `BodyInit` は `ArrayBuffer` 裏付けを要求する**
- * というずれが出る（`SharedArrayBuffer` 裏付けを排除できないため）。
+ * admin の tsconfig は DOM の lib と node の types を両方持つ（ブラウザのコードと、
+ * テスト / `scripts/smoke.ts` のため）ので、**node の `TextEncoder#encode` が返す
+ * `Uint8Array<ArrayBufferLike>` と、DOM の `crypto.subtle.digest` / `BodyInit` が
+ * 要求する `ArrayBuffer` 裏付けがぶつかる。**
  */
 export type Bytes = Uint8Array<ArrayBuffer>;
 

@@ -82,8 +82,8 @@ describe('CloudFront Distribution と OAC の結線', () => {
   });
 
   it('オリジンの内訳が S3 2 本 + 非 S3 1 本である', () => {
-    // Phase 3 で Function URL オリジンが増えた。**総数と内訳の両方を主張する**ことで、
-    // 「S3 だけ見て非 S3 を無視する」形にせず、分類漏れが出たら落ちるようにする。
+    // **総数と内訳の両方を主張する。** 「S3 だけ見て非 S3 を無視する」形にせず、
+    // 分類漏れが出たら落ちるようにする。
     const { all, s3, nonS3 } = originsByKind();
     expect(all).toHaveLength(3);
     expect(s3).toHaveLength(2);
@@ -207,7 +207,7 @@ describe('CloudFront Distribution と OAC の結線', () => {
     // メディア用 OAC の論理 ID が SiteDistributionOrigin2S3OriginAccessControlE0FE6FAA から
     // SiteDistributionOrigin3S3OriginAccessControl4BE73D82 に変わり、デプロイ時に
     // OAC の置換とバケットポリシーの書き換えが起きる。
-    // 既存 2 本が Phase 2 から 1 文字も変わっていないこと自体が「置換なし」の証拠になる。
+    // 既存 2 本の論理 ID が 1 文字も変わっていないこと自体が「置換なし」の証拠になる。
     expect(Object.keys(template.findResources('AWS::CloudFront::OriginAccessControl')).sort()).toEqual([
       'SiteDistributionOrigin1S3OriginAccessControl7D960FE6',
       'SiteDistributionOrigin2S3OriginAccessControlE0FE6FAA',

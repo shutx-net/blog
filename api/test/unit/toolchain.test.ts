@@ -39,11 +39,10 @@ const AWS_SDK_DEPENDENCIES = [
 /**
  * Lambda バンドルに入る依存の **全集合**。これ以外を dependencies に置かない。
  *
- * **AWS_SDK_DEPENDENCIES と分けてあるのは意図的である。** Phase 3 まではこの 2 つが
- * 同じ集合だったので 1 つの定数が「実行時依存の全集合」と「バージョンをロックステップ
- * させる集合」の 2 つの意味を兼ねていた。aws-jwt-verify を足すと両者が分岐する。
- * ここで割らずにバージョン検査のほうを緩めると、**AWS SDK 間のバージョンずれを
- * 検出する能力を失う**（Phase 3 が意図的に入れた検査なので殺してはいけない）。
+ * **AWS_SDK_DEPENDENCIES と分けてあるのは意図的である。** 1 つの定数で
+ * 「実行時依存の全集合」と「バージョンをロックステップさせる集合」を兼ねると、
+ * aws-jwt-verify のような別系統の依存を足した日に両者が分岐する。ここで割らずに
+ * バージョン検査のほうを緩めると、**AWS SDK 間のバージョンずれを検出する能力を失う。**
  */
 const RUNTIME_DEPENDENCIES = [...AWS_SDK_DEPENDENCIES, 'aws-jwt-verify'].sort();
 
@@ -155,10 +154,8 @@ describe('api の実行時依存', () => {
   });
 
   it('3 つの AWS SDK のバージョンが互いに一致する', () => {
-    // @aws-sdk/* は同日リリースのロックステップ。ずらすと共有される @smithy 層で
-    // 不整合が起きうる（2 バージョンの @smithy がバンドルに同居する）。
-    // **aws-jwt-verify はこのループに入れない** — 別系統なので必ず不一致になり、
-    // 素朴に足すと検査そのものを緩めるしかなくなる。
+    // ずらすと共有される @smithy 層で不整合が起きうる
+    // （2 バージョンの @smithy がバンドルに同居する）。
     const deps = apiPkg().dependencies ?? {};
     expect(AWS_SDK_DEPENDENCIES).toHaveLength(3);
     const versions = new Set(AWS_SDK_DEPENDENCIES.map((name) => deps[name]));
@@ -201,14 +198,6 @@ describe('api の開発依存', () => {
     //
     // **速度は採否の理由ではない**（AGENTS.md は保守を最上位に置く）。副次的な
     // 実測値として api 4610ms -> 779ms、infra 6822ms -> 396ms、admin 2468ms -> 337ms。
-    //
-    // # 上げるときに実際に効いた差分は 1 行だけだった
-    //
-    // `noUncheckedSideEffectImports` の既定が TS 6.0 で true になり、admin の
-    // `import './styles.css'` が TS2882 で落ちた（`admin/src/assets.d.ts` で解決済み）。
-    // それ以外は api / infra / admin とも無修正で `tsc --noEmit` が exit 0。
-    // **JS コンパイラ API（`import ts from 'typescript'`）は 7.x で落ちたが、
-    // このツリーは typescript を tsc CLI としてしか使っていない**ので影響が無い。
     const apiTs = apiPkg().devDependencies?.['typescript'];
     expect(apiTs).toBe('7.0.2');
     expect(apiTs).toBe(infraPkg().devDependencies?.['typescript']);
@@ -291,10 +280,6 @@ describe('api/tsconfig.json', () => {
     // **型検査はもうこの値を見ていない**（変異で確認済み: ["node","chai"] に広げても
     // tsc は rc=0 のまま。赤くなるのは 3 ワークスペースのこのテストだけ）。
     // **「緑だから守られている」ではなく「テストだけが見ている」と読むこと。**
-    //
-    // **@types/aws-lambda はこの設定の影響を受けない** — types が制御するのは
-    // 「グローバルとして自動で読み込む @types」だけで、明示的な
-    // `import type { ... } from 'aws-lambda'` は通常のモジュール解決で解決される。
     expect(apiTsConfig().compilerOptions?.['types']).toEqual(['node']);
   });
 
@@ -325,8 +310,8 @@ describe('api/tsconfig.json', () => {
     // しか使っていないので実害は無いが、astro を上げたときに再発しうる。
     //
     // **lib に "DOM" を足して解決してはいけない。** api は Lambda のコードで、
-    // window や HTMLElement が型として見えてよい理由が無い。skipLibCheck が
-    // 飛ばすのは .d.ts 自身の検査だけで、api 自身のコードの検査は一切緩まない。
+    // window や HTMLElement が型として見えてよい理由が無い（skipLibCheck が飛ばすのは
+    // .d.ts 自身の検査だけなので、api 自身のコードの検査は緩まない）。
     expect(apiTsConfig().compilerOptions?.['skipLibCheck']).toBe(true);
     expect(apiTsConfig().compilerOptions?.['lib'], 'DOM を足さない').toEqual(['ES2023']);
   });
@@ -340,7 +325,7 @@ describe('api/tsconfig.json', () => {
   });
 });
 
-describe('**実際に走るコンパイラ**（package.json のピンではなく実行結果を見る）', () => {
+describe('**実際に走るコンパイラ**', () => {
   const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
   const adminPkg = (): PackageJson => readJson<PackageJson>('../../../admin/package.json');
 
@@ -374,7 +359,7 @@ describe('**実際に走るコンパイラ**（package.json のピンではな�
     //
     // (a) **WSL から Windows 版 npm を使う。** win32 バイナリが Linux ツリーに入り、
     //     node_modules/.bin/tsc が実行できなくなる（`which npm` が /nix/store 配下で
-    //     あることを DEVELOPERS.md が要求している理由）
+    //     あることを docs/typescript.md が要求している理由）
     // (b) `npm ci --omit=optional` を付けた CI。node_modules/@typescript が作られず
     //     tsc が起動しない（ci.yml は素の `npm ci` を使っている）
     // (c) lock がプラットフォームを取りこぼす

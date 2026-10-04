@@ -78,7 +78,7 @@ const deps = (): Deps => ({
 });
 
 /**
- * **slug は送らない。** 導出値なので、送ると 400 になる（Phase 3）。
+ * **slug は送らない。** 導出値なので、送ると 400 になる。
  * 書き込み先を決めたいときは `pubDate` を渡す。
  */
 const post = (extra: Record<string, unknown> = {}) =>

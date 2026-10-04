@@ -5,7 +5,7 @@ import type { TokenVerifier } from './auth/cognito.ts';
 import type { Logger } from './deps.ts';
 import type { ApiRequest } from './http.ts';
 
-/** deny-all のときの唯一の拒否理由。Phase 3 から不変。 */
+/** deny-all のときの唯一の拒否理由。 */
 export const AUTH_NOT_CONFIGURED = 'auth-not-configured';
 
 /**
@@ -47,23 +47,15 @@ export interface AuthFailureResponse {
 /**
  * 拒否理由を HTTP に写す表。**403 と 404 は絶対に使わない。**
  *
- * CloudFront の `CustomErrorResponses` は DistributionConfig 直下にあり、**ビヘイビア単位では
- * 外せない**。origin が返した 403 / 404 も /404.html の HTML に差し替えられる。実測:
+ * CloudFront の `CustomErrorResponses` は DistributionConfig 直下にあり**ビヘイビア単位では
+ * 外せない**ので、origin が返した 403 / 404 も /404.html の HTML に差し替えられる。403 を
+ * 使うと admin からは「トークンを出し直せ」「あなたは別のユーザだ」「経路が無い」が
+ * **全部同じ HTML 404** になる。実測と全文は `infra/docs/api-auth.md` の
+ * 「認証の拒否に 403 と 404 を使わない」。
  *
- *     GET /api/nope   -> 404 / content-type: text/html / x-cache: Error from cloudfront
- *     GET /api/health -> 200 / content-type: application/json / x-cache: Miss from cloudfront
- *
- * Lambda のルータは `/api/nope` に `404 {"error":"not_found"}` を返しているのに、
- * 閲覧者には HTML が届く。
- * 403 も同じ表に載るので、認可失敗に 403 を使うと admin からは「トークンを出し直せ」
- * 「あなたは別のユーザだ」「経路が無い」が**全部同じ HTML 404** になる。
- * `CustomErrorResponses` を外すと OAC + S3 REST オリジンで存在しないキーが 403 のまま
- * 閲覧者に見える（Phase 2 の判断）。**直すべきは CloudFront ではなく API 側のステータス。**
- *
- * 401 と 503 はこの表に無いので**素通しで JSON のまま届く**（503 は実測済み）。Phase 3 の
- * router は deny-all に対し「401 は資格情報を出し直せば通るという意味だが、通る資格情報が存在しない」
- * として 503 を選んだ。**cognito モードではその前提が変わり、通る資格情報が実在する。**
- * よって 401。deny-all の 503 はそのまま残す。
+ * 401 と 503 はこの表に無いので**素通しで JSON のまま届く**。deny-all が 503 なのは
+ * 「401 は資格情報を出し直せば通るという意味だが、通る資格情報が存在しない」から。
+ * **cognito モードではその前提が変わり、通る資格情報が実在する**ので 401 にする。
  *
  * `not-authorized`（正当なトークンだが別ユーザ）に 401 を使うのは意味論的には妥協で本来は
  * 403。代わりに機械可読な `error` コードで区別できるようにした。
@@ -123,8 +115,6 @@ export const createAuthorizer = (auth: AuthConfig, deps: AuthorizerDeps): Author
         logger: deps.logger,
       });
     default:
-      // loadConfig が先に弾くので通常ここには来ないが、「既定で通す」ことに
-      // ならないよう、ランタイムでも閉じる。
       return exhaustive(auth);
   }
 };

@@ -33,8 +33,8 @@ const MEDIA_KEY_PREFIX = 'media/';
 /**
  * 予約同時実行数。**現状で唯一の流量防御。**
  *
- * /api/* は CloudFront 経由で匿名でも到達でき、AUTH_MODE=deny-all で 503 を返す場合でも
- * Lambda 自体は起動する（＝課金される）。
+ * /api/* は CloudFront 経由で匿名でも到達でき、**認証で弾く場合でも Lambda 自体は起動する**
+ * （＝課金される）。
  *
  * 実測でこのアカウントの ConcurrentExecutions クォータは 400（既定の 1000 ではない）。
  * 2 を予約しても未予約分は 398 残り、AWS が要求する下限 100 を割らない。
@@ -63,9 +63,15 @@ export type PostingApiAuth =
     };
 
 export interface PostingApiProps {
-  /** presigned PUT の宛先。**この 1 本の参照が ApiStack を別スタックにできない理由**（README）。 */
+  /**
+   * presigned PUT の宛先。**この 1 本の参照が ApiStack を別スタックにできない理由**
+   * （infra/docs/cdk-structure.md の「投稿 API も別 Stack にできない」）。
+   */
   mediaBucket: s3.Bucket;
-  /** エンドユーザ認証の設定。**deny-all に戻すのが切り戻し手段**（README の手順）。 */
+  /**
+   * エンドユーザ認証の設定。**deny-all に戻すのが切り戻し手段**
+   * （手順は infra/docs/deploy.md の「4. 切り戻し」）。
+   */
   auth: PostingApiAuth;
   githubOwner: string;
   /**
@@ -83,8 +89,9 @@ export interface PostingApiProps {
   /**
    * 起動するワークフローのファイル名。**省略すると Lambda は dispatch しない。**
    *
-   * 記事が code repo にあるあいだは push でデプロイが走るので、設定すると
-   * 同じコミットに対してデプロイが 2 本走る。切り替えの PR で初めて設定する。
+   * 記事は blog-content にあり code repo には push が起きないので、**これが唯一の
+   * デプロイ起動経路**（`api/src/github/dispatch.ts`）。本番は `'deploy.yml'` を渡す
+   * （test/posting-api.test.ts が `DEPLOY_WORKFLOW_FILE` の値を固定している）。
    */
   deployWorkflowFile?: string;
   /**
@@ -100,9 +107,7 @@ export interface PostingApiProps {
   bundleDir?: string;
   /**
    * GitHub App の client ID。**秘密ではない**（秘密鍵が無ければ何もできない）。
-   *
-   * App はまだ存在しないので既定はプレースホルダ。AUTH_MODE=deny-all の間は
-   * GitHub を呼ぶ経路に到達しないので、この値が使われることはない。
+   * 値の出所は `site-stack.ts` の `GITHUB_APP_CLIENT_ID`（間違っていたときの症状もそちら）。
    */
   githubAppClientId: string;
 }
@@ -112,7 +117,8 @@ export interface PostingApiProps {
  *
  * Stack ではなく Construct にしているのは、Distribution が Function URL を参照し
  * （SiteStack -> Api）、Lambda がメディアバケットの名前と ARN を参照する（Api -> SiteStack）ため、
- * 別スタックだとクロススタック参照が循環して synth が落ちるから（infra/README.md に実測エラー）。
+ * 別スタックだとクロススタック参照が循環して synth が落ちるから
+ * （infra/docs/cdk-structure.md の「投稿 API も別 Stack にできない」に実測エラー）。
  * **「OAC だから循環する」ではない** — 循環させているのは presigned URL 側の要件である。
  */
 export class PostingApi extends Construct {
@@ -124,7 +130,7 @@ export class PostingApi extends Construct {
   constructor(scope: Construct, id: string, props: PostingApiProps) {
     super(scope, id);
 
-    // ---- 空のシークレット（設計判断8） ----
+    // ---- 空のシークレット（AGENTS.md「CDK に秘密の値を書かない」） ----
     const secret = new secretsmanager.Secret(this, 'GitHubAppPrivateKey', {
       description: 'GitHub App private key (PEM). Populated out of band; never written by CDK.',
       // **RETAIN。** GitHub App の秘密鍵は Web UI で生成した瞬間に 1 度しか表示されず
@@ -248,9 +254,9 @@ export class PostingApi extends Construct {
       memorySize: 512,
       reservedConcurrentExecutions: RESERVED_CONCURRENCY,
       environment: {
-        // **ここを緩めた瞬間、/api/* に到達できる誰もが書き込み経路に到達できる。**
-        // 緩めるなら Cognito の実装と**同一 PR**でなければならない（test/posting-api.test.ts が
-        // 「cognito なら COGNITO_* が 3 つ揃っている」を条件付き不変条件として固定している）。
+        // **認証を外した瞬間、/api/* に到達できる誰もが書き込み経路に到達できる。**
+        // test/posting-api.test.ts が値が `cognito` であることと、「cognito なら COGNITO_* が
+        // 3 つ揃っている」を条件付き不変条件として固定している。
         ...authEnvironment,
         GITHUB_OWNER: props.githubOwner,
         GITHUB_CONTENT_REPO: props.githubContentRepo,
@@ -280,7 +286,7 @@ export class PostingApi extends Construct {
     });
 
     // **物理名をハードコードしない方針なので、運用者はここから名前を取る。**
-    // DEVELOPERS.md の put-secret-value 手順がこの出力を参照している。
+    // `docs/aws-ops.md` の「GitHub App の秘密鍵」の手順がこの出力を参照している。
     new CfnOutput(this, 'GitHubAppSecretName', {
       value: secret.secretName,
       description: 'aws secretsmanager put-secret-value --secret-id に渡す名前',

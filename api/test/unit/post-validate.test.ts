@@ -115,7 +115,7 @@ describe('title と description', () => {
     expectRejected(valid({ description }), 'description');
   });
 
-  it('空白のみを弾くのは postSchema の min(1) と揃えるため', () => {
+  it('空白のみの title を弾く', () => {
     // Zod の min(1) は ' ' を通すが、それは site 側の穴であって api が広げる理由にはならない。
     // **api の検証は site と同等かより厳しい**という関係を保つ。
     expectRejected(valid({ title: ' ' }), 'title');

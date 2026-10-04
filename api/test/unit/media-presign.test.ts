@@ -41,7 +41,7 @@ const queryOf = async (
   overrides: Partial<{ contentType: string; size: number; filename: string }> = {},
 ): Promise<URLSearchParams> => new URL((await presign(overrides)).url).searchParams;
 
-describe('署名対象のヘッダ（本 step の核心）', () => {
+describe('署名対象のヘッダ', () => {
   it('**X-Amz-SignedHeaders に content-type と content-length と host が入る**', async () => {
     // 実測: PutObjectCommand に ContentType を渡すだけでは SignedHeaders は host だけになり、
     // **content type は署名に一切入らない**。getSignedUrl に signableHeaders を渡して初めて
@@ -59,9 +59,8 @@ describe('署名対象のヘッダ（本 step の核心）', () => {
   });
 
   it('**requiredHeaders に実際の content type と size が入る**', async () => {
-    // SignedHeaders を見るだけでは足りない。signableHeaders に 'content-type' を入れつつ
-    // PutObjectCommand に ContentType を渡し忘れても、SignedHeaders には content-type が
-    // 載る（＝ 空の content type が署名される）。何を送るべきかを API 側から明示する。
+    // SignedHeaders を見るだけでは足りない（空の content type も載る）。何を送るべきかを
+    // API 側から明示する。署名そのものの照合は下の「署名が宣言どおりの値を含んでいる」。
     const result = await presign({ contentType: 'image/webp', size: 4096 });
     expect(result.requiredHeaders).toEqual({
       'content-type': 'image/webp',
@@ -153,8 +152,7 @@ describe('サイズの検証', () => {
 
 describe('生成されるキー', () => {
   it('MEDIA_KEY_PREFIX が infra の MEDIA_PATH_PATTERN から導出できる形である', () => {
-    // '/media/*' -> 'media/'。CloudFront のビヘイビア・S3 のキー空間・
-    // IAM のリソース ARN の 3 つが揃っていないと動かない。
+    // '/media/*' -> 'media/'。3 つが揃っていないと動かない理由は冒頭のコメント。
     expect(MEDIA_PATH_PATTERN).toBe('/media/*');
     expect(MEDIA_KEY_PREFIX).toBe('media/');
     expect(`/${MEDIA_KEY_PREFIX}*`).toBe(MEDIA_PATH_PATTERN);
@@ -320,7 +318,7 @@ const recomputeSignature = (
   return createHmac('sha256', kSigning).update(stringToSign, 'utf8').digest('hex');
 };
 
-describe('署名が宣言どおりの値を含んでいる（自前で SigV4 を再計算して照合）', () => {
+describe('署名が宣言どおりの値を含んでいる', () => {
   it.each([
     ['image/png', 1024],
     ['image/jpeg', 1],

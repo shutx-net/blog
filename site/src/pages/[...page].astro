@@ -12,11 +12,11 @@ import {
 } from "../lib/posts.ts";
 import { SITE_DESCRIPTION, SITE_NAME } from "../lib/site-meta.ts";
 
-// Replaces the old index.astro rather than sitting beside it. Keeping both makes
+// This route owns '/' as well as '/2/'. A separate index.astro beside it makes
 // astro warn `Could not render '' from route '/[...page]' as it conflicts with
-// higher priority route '/'` and then exit 0 anyway, leaving '/' on the old
-// unpaginated listing with only '/2/' paginated -- and test/setup/build-site.ts
-// runs at logLevel "error", so that warning is never printed.
+// higher priority route '/'` and then exit 0 anyway, leaving '/' unpaginated with
+// only '/2/' paginated -- and test/setup/build-site.ts runs at logLevel "error",
+// so that warning is never printed.
 export const getStaticPaths = (async ({ paginate }) => {
   const posts = (await getCollection("posts", isPublished)).sort(byPubDateDesc);
 
@@ -48,8 +48,7 @@ const { page } = Astro.props;
           </a>
           {
             /* description is required by postSchema. Printing it here is what makes
-               that requirement pay for itself -- before this the field was written
-               for every post and shown nowhere. */
+               that requirement pay for itself. */
           }
           <p class="post-list__summary">{post.data.description}</p>
           {

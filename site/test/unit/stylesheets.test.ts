@@ -44,9 +44,8 @@ describe("stylesheet build configuration", () => {
     expect(config.build?.assetsPrefix).toBeUndefined();
   });
 
-  // The two assertions above are doubled by a text scan on the infra side, which
-  // reads site/astro.config.mjs and pins the literal '/_astro/*' against it.
-  // Neither subsumes the other: these read the value the module actually exports
-  // (so a `build` block assembled or spread in still resolves), while the scan is
-  // what ties the CDN's declaration to this config at all.
+  // The two assertions above are doubled by a text scan on the infra side
+  // (infra/test/distribution-assets-behavior.test.ts, whose JSDoc explains why
+  // neither side subsumes the other): these read the value the module exports, that
+  // one ties the CDN's literal '/_astro/*' to this config at all.
 });

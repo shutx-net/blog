@@ -73,39 +73,11 @@ export const API_PATH_PATTERN = '/api/*';
  * 論理 ID 集合が落とす（機構は `siteOrigin` の宣言のコメント）。**ビヘイビアは 1 本増えるが
  * オリジンは増えない**という形を保つこと。
  *
- * # 懸念していた故障モードは起きない: 存在しない `/_astro/*` の 404 は `no-cache`
- *
- * `CustomErrorResponses` はディストリビューション全体に効く（ビヘイビア単位ではない）ので、
- * 消えたファイル名への要求にも `/404.html` の中身が返る。**そこで `immutable` が付くと、
- * `aws s3 sync --delete` と invalidation の間に古い HTML を受け取った閲覧者が、消えた旧 CSS の
- * URL を最大 1 年ぶん「無い」と覚えうる** — 当初はそれを新しい故障モードとして書いていた。
- * **デプロイ後に測った結果、そうはならない。**
- *
- * 実測（2026-10-03、デプロイ後の本番）:
- *
- * ```sh
- * curl -sI https://blog.shutx.net/_astro/does-not-exist.css
- * # => HTTP/2 404 / content-type: text/html / cache-control: no-cache
- * curl -sI https://blog.shutx.net/media/   # 対照: /media/* に一致するが鍵が無い
- * # => HTTP/2 404 / content-type: text/html / cache-control: no-cache
- * ```
- *
- * 理由は `/404.html` の出所である。**CloudFront はエラーページの差し替えに、要求が一致した
- * ビヘイビアのポリシーではなくデフォルトビヘイビアの ResponseHeadersPolicy を当てる。**
- * `/404.html` は `MEDIA_PATH_PATTERN` にもこのパターンにも一致しない（上のコメント）ので
- * デフォルトビヘイビア＝配信用バケットから返り、ヘッダもそちらの `SITE_CACHE_CONTROL`
- * （`no-cache`）に従う。`ErrorCachingMinTTL` の 10 秒はエッジのキャッシュ期間であって
- * 閲覧者に渡るヘッダではないが、**閲覧者に渡る値がそもそも `no-cache` なので救いは要らない。**
- *
- * したがって残るのは `/media/*` が今日すでに持っている性質と同じもので、1 パス増えただけ —
- * 存在しない資産には HTML の 404 が返り、その 1 回の表示が素のままになる。HTML は `no-cache`
- * なので次のナビゲーションで検証が走り、新しいファイル名を取りに行って自然に治る。
- *
- * **これはテンプレートからは読み取れない**（`CustomErrorResponses` にヘッダの話は書かれて
- * いない）ので、固定しているのはテストではなく上の 1 回の観測だけである。CloudFront が
- * この当て方を変えれば黙って元の懸念に戻るので、**ヘッダの付き方を触る変更を入れるときは
- * 同じ `curl` を打ち直すこと。** 同じ内容は `infra/README.md` の
- * 「`/_astro/*` は immutable、`/admin/assets/*` は no-cache」にも書いてある。
+ * 存在しない `/_astro/*` の 404 は `immutable` ではなく `no-cache` で返る。エラーページは
+ * 一致したビヘイビアではなく**デフォルトビヘイビアの ResponseHeadersPolicy** を取るためで、
+ * これはテンプレートからは読み取れない（固定しているのはテストではなく 1 回の観測だけ。
+ * `curl` の実測と理由は `infra/docs/cloudfront-caching.md`）。**ヘッダの付き方を触る変更を
+ * 入れるときは同じ `curl` を打ち直すこと。**
  */
 export const ASTRO_ASSETS_PATH_PATTERN = '/_astro/*';
 
@@ -165,10 +137,11 @@ export const SITE_CERTIFICATE_REGION: SiteCertificateRegion = 'us-east-1';
  *
  * ARN にはアカウント ID が入り、**このリポジトリは public である。** 同じ規律が既に
  * 3 箇所に明文で書かれている — `.github/workflows/deploy.yml` が role ARN を variable に
- * 逃がす理由、`ADMIN_LOGIN_DOMAIN_PREFIX` の JSDoc、`infra/README.md` の
- * 「アカウント ID をマスクして貼る」。だから ARN は `Stack.formatArn` が
- * `AWS::Partition` / `AWS::AccountId` から組み立て、**コードに載るのはこの UUID と
- * `'us-east-1'` だけ**にする。フル ARN の定数 1 本に替えたいなら 1 行で済むが、
+ * 逃がす理由、`ADMIN_LOGIN_DOMAIN_PREFIX` の JSDoc、`infra/docs/stacks.md` の
+ * 「アカウント ID をマスクして」（同文が `infra/docs/custom-domain.md` にもある）。だから
+ * ARN は `Stack.formatArn` が `AWS::Partition` / `AWS::AccountId` から組み立て、
+ * **コードに載るのはこの UUID と `'us-east-1'` だけ**にする。
+ * フル ARN の定数 1 本に替えたいなら 1 行で済むが、
  * そのときはアカウント ID が public に載ることを承知の上で行うこと。
  *
  * **証明書は帯域外で手で作る。** `new acm.Certificate` も `DnsValidatedCertificate` も
@@ -237,14 +210,13 @@ export const SITE_ORIGIN = CUSTOM_ORIGIN;
  *
  * **順序を入れ替えないこと。** 機能は変わらないが、テンプレートには配列として描画されるので
  * 並べ替えただけで `cdk diff` に差分が出る（CORS と Cognito の 2 リソースが更新される）。
- * **先頭は正のオリジンではない。** ここは追加順のままで、`SITE_ORIGIN` が `CUSTOM_ORIGIN` に
- * 移ったあとも `CLOUDFRONT_ORIGIN` が先頭に残っている。「正を先頭に」と並べ替えたくなるが、
+ * **配列は追加順で、先頭は正のオリジンではない。** 「正を先頭に」と並べ替えたくなるが、
  * 得られるのは `describe-user-pool-client` を目で見たときの見た目だけで、代わりに意味の無い
  * 差分と deploy が 1 回要る。`test/site-origins.test.ts` が期待値をリテラルの順序付き配列で
  * 固定しているので、並べ替えるとそこが落ちる。
  *
  * 配信ドメインが変わったときは `describe-stacks` の Output `DistributionDomainName` と
- * 突き合わせること（手順は infra/README.md）。
+ * 突き合わせること（手順は `infra/docs/cdk-structure.md` の「`SITE_ORIGIN` 定数」）。
  */
 export const SITE_ORIGINS: readonly string[] = [CLOUDFRONT_ORIGIN, CUSTOM_ORIGIN];
 
@@ -255,7 +227,7 @@ export const SITE_ORIGINS: readonly string[] = [CLOUDFRONT_ORIGIN, CUSTOM_ORIGIN
  * 意図的な例外になる。秘密ではないし、他アカウントに取られていれば `cdk deploy` が
  * 明示的なエラーで落ちるだけなので静かには壊れない。
  *
- * **アカウント ID を混ぜて一意性を上げる案は採らない** — hosted UI の URL は
+ * **アカウント ID を混ぜて一意性を上げる案は採らない** — Managed Login の URL は
  * 利用者のブラウザに表示されるので、そこに AWS アカウント ID を載せたくない。
  */
 export const ADMIN_LOGIN_DOMAIN_PREFIX = 'shutx-blog-admin';
@@ -264,8 +236,8 @@ export const ADMIN_LOGIN_DOMAIN_PREFIX = 'shutx-blog-admin';
  * 投稿を許可する唯一の Cognito ユーザ名。
  *
  * **`@` を含めないこと。** メールアドレスを入れても、`usernameAttributes` を設定して
- * いないこのプールでは `cognito:username` に一致しない。public リポジトリに個人の
- * メールアドレスを書かないという方針とも合う（AGENTS.md）。
+ * いないこのプールでは `cognito:username` に一致しない。public リポジトリなので
+ * 個人のメールアドレスを書かない、という理由とも合う。
  *
  * ユーザの作成は帯域外（`aws cognito-idp admin-create-user`）。CDK は作らない。
  */
@@ -276,7 +248,7 @@ export const ADMIN_USERNAME = 'shutx';
  *
  * **秘密ではない。** GitHub は app ID / client ID を公開識別子として扱う。秘密は秘密鍵だけで、
  * それは Secrets Manager にある（CDK は空のシークレットを作るだけで値を持たない。
- * DEVELOPERS.md の手順で運用者が CLI から入れる）。
+ * `docs/aws-ops.md` の「GitHub App の秘密鍵」の手順で運用者が CLI から入れる）。
  *
  * ここが間違っていると GitHub は App JWT を 401 で拒否する。症状は「鍵は読めているのに GitHub
  * 呼び出しだけ失敗する」で鍵の問題と紛らわしい（`/api/health/github-app` は鍵の有無しか見ない）。
@@ -305,7 +277,7 @@ export class SiteStack extends Stack {
   /** `aws s3 sync` の宛先。CicdStack がデプロイロールの権限をここに絞る。 */
   readonly siteBucket: s3.Bucket;
 
-  /** 記事の画像。CI からは一切触らせない（設計判断5）。 */
+  /** 記事の画像。CI からは一切触らせない（AGENTS.md「サイト配信用とメディア用で S3 バケットを分ける」）。 */
   readonly mediaBucket: s3.Bucket;
 
   /** CicdStack がキャッシュ無効化の権限をここに絞る。 */
@@ -317,7 +289,7 @@ export class SiteStack extends Stack {
   constructor(scope: Construct, id: string, props?: SiteStackProps) {
     super(scope, id, props);
 
-    // 配信対象は CloudFront の OAC 経由でのみ読ませる。バケット自体は完全に非公開。
+    // 配信対象は CloudFront の OAC 経由でのみ読ませる。
     // bucketName は指定しない（物理名をハードコードしない）。実名は CfnOutput で出す。
     const siteBucket = new s3.Bucket(this, 'SiteBucket', {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
@@ -329,13 +301,14 @@ export class SiteStack extends Stack {
 
     // メディアは配信用と別バケットにする。同居させると sync --delete が巻き込んで消す。
     // 別 Stack ではなく Construct なのは、別 Stack だと synth が DependencyCycle で落ちるため
-    // （media-bucket.ts のコメントと README を参照）。
+    // （media-bucket.ts のコメントと infra/docs/cdk-structure.md の
+    // 「メディアバケットを別 Stack にできない」を参照）。
     // **siteOrigins に distribution.distributionDomainName を渡してはいけない** — 循環参照になる
     // （SITE_ORIGINS の定義のコメントを参照）。
     const media = new MediaBucket(this, 'MediaBucket', { siteOrigins: SITE_ORIGINS });
     this.mediaBucket = media.bucket;
 
-    // 管理画面のログイン（単一著者の Cognito ユーザプール）。Stack ではなく Construct
+    // Stack ではなく Construct
     // （CloudFront に紐づくものを別 Stack にすると DependencyCycle になる、という実測に揃える）。
     const adminAuth = new AdminAuth(this, 'AdminAuth', {
       domainPrefix: ADMIN_LOGIN_DOMAIN_PREFIX,
@@ -343,14 +316,12 @@ export class SiteStack extends Stack {
     });
     this.adminAuth = adminAuth;
 
-    // 投稿 API。Stack ではなく Construct（理由は README と posting-api.ts のコメント）。
+    // 投稿 API。Stack ではなく Construct（理由は infra/docs/cdk-structure.md の
+    // 「投稿 API も別 Stack にできない」と posting-api.ts のコメント）。
     // Distribution が functionUrl を参照するのでここで先に作る。
     const postingApi = new PostingApi(this, 'PostingApi', {
       bundleDir: props?.apiBundleDir,
       mediaBucket: this.mediaBucket,
-      // 型が判別可能ユニオンなので、userPool / userPoolClient / allowedUsername を揃えずに
-      // mode: 'cognito' にすることはできない。
-      //
       // **切り戻しは `{ mode: 'deny-all' }` に戻して deploy し直すだけ。** Cognito のリソースは
       // 消えない（deletionProtection + RemovalPolicy.RETAIN）し、api 側の deny-all は COGNITO_* を
       // 1 つも読まないので、**壊れた Cognito 設定を抱えたまま安全側に倒せる。**
@@ -370,8 +341,6 @@ export class SiteStack extends Stack {
       // **記事が別リポジトリに移ったので push ではデプロイが走らない。** dispatch が唯一の
       // 起動経路である。
       deployWorkflowFile: 'deploy.yml',
-      // GitHub App の client ID。**秘密ではない**ので public リポジトリに置いてよい。
-      // 秘密は秘密鍵のほうだけで、そちらは Secrets Manager にあり CDK は値を持たない。
       githubAppClientId: GITHUB_APP_CLIENT_ID,
     });
 
@@ -410,9 +379,7 @@ export class SiteStack extends Stack {
       // （AWS が配る配信ドメインを手で打つ人は居ないので、そこでは実質何も守っていなかった）。
       //
       // **それでも includeSubdomains も preload も付けない**（理由 3 つは
-      // `HSTS_MAX_AGE_SECONDS` の JSDoc）。要点だけ: `blog.shutx.net` の下にホストが無いので
-      // includeSubDomains には守る対象が無く、将来そこに平文のホストを置いた日に
-      // max-age の残りだけ到達不能にする。親の `shutx.net` はこのスタックの管理外。
+      // `HSTS_MAX_AGE_SECONDS` の JSDoc。要点: 下にホストが無く、親の `shutx.net` は管理外）。
       strictTransportSecurity: {
         accessControlMaxAge: Duration.seconds(HSTS_MAX_AGE_SECONDS),
         includeSubdomains: false,
@@ -440,14 +407,12 @@ export class SiteStack extends Stack {
 
     // メディア用。セキュリティヘッダは上と同一で、Cache-Control だけが違う。
     //
-    // **`/admin/assets/*` は引き続きデフォルトビヘイビア経由の `no-cache` である。**
-    // Vite のハッシュ付きファイル（実測 391 個、shiki の文法定義）なので中身は不変だが、
-    // `admin/vite.config.ts` が `base: '/admin/'` を宣言するので下の `/_astro/*` には
-    // 一致しない。**それでよしとする** — 利用者は 1 人、遅延ロードで実際に読むのは数本、
-    // CloudFront にキャッシュがあるので 304 が返り S3 には行かない。
+    // **`/admin/assets/*` は引き続きデフォルトビヘイビア経由の `no-cache` である**
+    // （Vite のハッシュ付き 391 ファイル＝shiki の文法定義。下の `/_astro/*` に一致しない理由は
+    // `ASTRO_ASSETS_PATH_PATTERN` の JSDoc）。**それでよしとする** — 利用者は 1 人、
+    // 遅延ロードで実際に読むのは数本、CloudFront にキャッシュがあるので 304 が返り S3 には行かない。
     //
-    // **伸ばしたくなったら専用ビヘイビアを足すこと。`aws s3 sync --cache-control` は使わない**
-    // （以前このコメントはそちらを勧めていた。AGENTS.md が明文で禁じているものだった）。
+    // **伸ばしたくなったら専用ビヘイビアを足すこと。`aws s3 sync --cache-control` は使わない。**
     // sync の比較はサイズと更新時刻だけで**メタデータを見ない**ので、内容が変わっていない
     // オブジェクトは古いヘッダのまま取り残される。加えて Cache-Control の定義が S3 と CDK の
     // 2 箇所に分かれる（同じ理由が `SITE_CACHE_CONTROL` の JSDoc にも書いてある）。
@@ -537,48 +502,11 @@ export class SiteStack extends Stack {
       // `test/distribution-behavior.test.ts` がテンプレート上の値を `'http2and3'` で
       // リテラル固定している。
       //
-      // 描画先は `DistributionConfig.HttpVersion` の 1 行だけで、**ビヘイビアもオリジンも OAC も
-      // 1 文字も動かない**（実測。`cdk diff` は Distribution の in-place 更新 1 件、置換は無い）。
-      // 効くのは**ビューアとの接続だけ**で、CloudFront からオリジンへの接続には関係しない。
+      // **判断を変えるなら 3 箇所を一緒に直す**: この行 / そのテストのリテラル /
+      // `infra/docs/cloudfront-caching.md` の「HTTP/3 を有効にする」。得たもの（握手 1 往復）と
+      // 反対側の実測（Lighthouse の Lantern が h3 を非多重化として扱う）はそこにある。
       //
-      // 得るもの: QUIC は TCP の 3-way と TLS の握手を畳んで 2 RTT を 1 RTT にする。実測
-      // （2026-10-03、国内から本番）の握手は connect 34 ms / tls 56 ms なので、**取れるのは
-      // 握手 1 往復ぶんだけ**で転送そのものは速くならない。`HTTP3` 単独ではなく `HTTP2_AND_3`
-      // なので退路は常にある — CloudFront の HTTP/3 は TLS1.3 と SNI を話せるビューアにだけ
-      // 使われ、話せないビューアや UDP/443 が塞がれている経路は h2 のまま通る。
-      //
-      // 効いたかどうかの見方: 有効なら応答に `alt-svc: h3=":443"; ma=86400` が付く。
-      // **有効化前の `blog.shutx.net` には無かった**ことを実測済み（2026-10-03）。正の対照は
-      // h3 が有効な CloudFront である `d1.awsstatic.com` で、あちらはこのヘッダを返す。
-      //
-      // **反対側の実測（見込みが崩れたら判断を見直すこと）。** PSI mobile のスコアを作る
-      // Lighthouse の Lantern は **h3 をモデル化していない** — `ConnectionPool.js:46` が
-      // `request.protocol === 'h2'` とリテラル比較しており、`'h3'` は非多重化（1 オリジン
-      // 6 本の HTTP/1.1 相当）として扱われる。同じ `TCPConnection` を rtt 150 ms / 1.6 Mbps で
-      // 走らせた実測では、同一オリジン 2 本目の CSS 1846 B は h2 なら **0 ms**、h2 扱いされないと
-      // **150 ms**。**PSI が h3 を記録したら、シミュレートされる FCP / LCP が 150 ms 悪化しうる。**
-      //
-      // そうならないと見込んだ根拠は 2 つあった。**うち 1 つは有効化後に崩れた。**
-      // (a) PSI は毎回クリーンプロファイルなので `alt-svc` のキャッシュを持たない — これは今も有効。
-      // (b) CloudFront の DNS HTTPS(SVCB) RR が h3 を広告していない — **これは崩れた。**
-      //
-      // RR は `d8gsxbwzr6ft8.cloudfront.net` に付いていて **TTL 60 秒**で、有効化の前後で
-      // こう動いた（実測）:
-      //
-      //   有効化前（2026-10-03 22:49）        1 . alpn="h2"
-      //   デプロイ直後（23:35）                1 . alpn="h2"      <- まだ切り替わっていない
-      //   約 25 分後（翌 00:0x）               1 . alpn="h2,h3"   <- system / 1.1.1.1 / 8.8.8.8 で一致
-      //
-      // **Chrome は HTTPS(SVCB) の `alpn` を見て初回接続から QUIC を試すので、PSI が h3 を
-      // 記録しうる状態になった = 上の 150 ms の下振れは仮定ではなく現実の可能性である。**
-      // （RR を書き換える AWS 側の規則は観測できていない。値の変化だけを測った。）
-      //
-      // **したがって次にやることは PSI の FCP / LCP の実測である。** 悪化していたら
-      // `HTTP2` に戻す — 直すのはこの行、`test/distribution-behavior.test.ts` の
-      // `'http2and3'` のリテラル、README の「HTTP/3 を有効にする」の 3 箇所。
-      // 悪化していなければ、Lantern の挙動がこのサイトの構成（リクエスト 2 本・
-      // 合計 2582 B で初期輻輳ウィンドウに収まる）では効いていないということなので、
-      // その実測値を README に足して判断を確定させる。
+      // **未了の宿題: PSI mobile の FCP / LCP を有効化前と比べる実測がまだ無い。**
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       // **この 3 つは `DistributionConfig` 直下の `Aliases` と `ViewerCertificate` にしか
       // 描画されない。** `renderOrigins()` も `additionalBehaviors` も通らないので、
@@ -593,9 +521,7 @@ export class SiteStack extends Stack {
       // cdk.json の `@aws-cdk/aws-cloudfront:defaultSecurityPolicyTLSv1.2_2021` で既定も
       // 同値になるが **明示する** — あのフラグを外した日に黙って TLSv1.2_2019 へ落ちる。
       // **既定の `*.cloudfront.net` 証明書のままだと `ViewerCertificate` ごと描画されない**
-      // ので、この指定が効くのは証明書を付ける今日から（それまで README の TODO に
-      // 「TLS 最低バージョンを上げられない」として残っていた。経緯は README の
-      // 「カスタムドメイン blog.shutx.net」の「付随して閉じた宿題」）。
+      // ので、この指定が効くのは証明書を付けてから。
       minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
       // `sslSupportMethod` は書かない。既定が `sni-only` で、`vip`（専用 IP）は
       // 月 600 USD 付く。SNI を話せないクライアントは相手にしない。

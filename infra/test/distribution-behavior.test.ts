@@ -80,12 +80,9 @@ describe('CloudFront Function の結線とビヘイビア', () => {
   });
 
   it('**どのビヘイビアも Lambda@Edge を使っていない**（CloudFront Functions で代替）', () => {
-    // Phase 2 まではデフォルトビヘイビアしか見ていなかった。Phase 3 で追加ビヘイビアが
-    // 2 件に増え、**しかもこのスタックに初めて実 Lambda が入った**ので、
-    // 誤結線の危険が実在するようになった。全ビヘイビアを走査する形に広げる。
-    //
-    // **その後 /_astro/* が増えて追加ビヘイビアは 3 件になった。** 走査する形にしてあるので
-    // ループ自体は無変更で新しいビヘイビアもカバーしている。下の件数だけを現状に合わせる。
+    // **全ビヘイビアを走査する。** このスタックには実 Lambda が入っているので誤結線の
+    // 危険が実在し、デフォルトビヘイビアだけを見る形では取り逃がす。走査なので追加
+    // ビヘイビアが増えてもループは無変更で済む（下の件数だけを現状に合わせる）。
     //
     // 「そもそも何も結線していないから通った」を防ぐため、Function 結線を先に主張する。
     expect(functionAssociations()).toHaveLength(1);
@@ -131,7 +128,8 @@ describe('CloudFront Function の結線とビヘイビア', () => {
     //
     // 有効化の根拠と**反対側の実測**（Lighthouse の Lantern は h3 を非多重化として扱い、
     // 同一オリジン 2 本目に 150 ms が付く）は `site-stack.ts` の `httpVersion` のコメントと
-    // `infra/README.md` の「HTTP/3 を有効にする」にある。**判断を変えるなら 3 箇所を一緒に直す。**
+    // `infra/docs/cloudfront-caching.md` の「HTTP/3 を有効にする」にある。
+    // **判断を変えるなら 3 箇所を一緒に直す。**
     expect(distributionConfig().HttpVersion).toBe('http2and3');
   });
 });

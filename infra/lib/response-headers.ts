@@ -18,18 +18,8 @@
  *
  * **CSP はレスポンスヘッダなので、3 つの一致証明のどれにも触れない。**
  *
- * 実測した 4 つのベクタのうち、`<img src=x onerror="alert(1)">` と `<svg onload=alert(1)>`
- * （インラインイベントハンドラ）と `[click](javascript:alert(1))`（navigation 時の inline check）は
- * `script-src` に `'unsafe-inline'` が無いことで止まる。前者は `script-src-attr 'none'` で
- * 二重化している。`<script>alert(2)</script>` は `innerHTML` 経由では HTML 仕様上実行されない。
- *
- * 残るのは `<meta http-equiv="refresh">` によるリダイレクト（CSP に該当ディレクティブが無い）、
- * プレビュー枠内の表示なりすまし、CSS による情報抜き出し（`style-src-attr 'unsafe-inline'` を
- * 許す以上ゼロにはできない。`<style>` ブロックは `style-src 'self'` が禁じるので、
- * 経路は `style` 属性だけに狭まった）。いずれもスクリプト実行を伴わないので、守っている資産である
- * トークンには届かない。送出口は `img-src 'self'` と `connect-src` の限定で塞がっており、
- * `'unsafe-inline'` は外部 URL を許可しないので `@import url(https://evil/...)` も弾かれる
- * （そもそも `@import` は属性には書けない）。
+ * ベクタごとに何が止まり何が残るかは `admin/src/auth/THREAT-MODEL.md` の
+ * 「CSP が塞がないもの（正直に）」と `infra/docs/security-headers.md`。
  *
  * # `<meta http-equiv>` では配らない
  *
@@ -52,8 +42,8 @@ export interface CspOrigins {
    * メディアバケットのオリジン（`https://<bucket>.s3.<region>.amazonaws.com`）。
    *
    * 無いと画像アップロードが壊れる。presigned PUT は別オリジンへの `fetch` である。
-   * **物理名を書かず `bucketRegionalDomainName` から導出すること**
-   * （AGENTS.md「物理名をハードコードしない」）。
+   * **物理名を書かず `bucketRegionalDomainName` から導出すること** — 直書きすると
+   * 片方だけ変わった日に「画像だけ上がらない」壊れ方をする。
    */
   readonly mediaOrigin: string;
 }
@@ -84,8 +74,9 @@ export const REFERRER_POLICY = 'same-origin';
  *   3. `preload` はリストから外す申請が通っても、それがブラウザのリリースに乗るまで
  *      効かない。個人ブログに対して**解除コストだけ**が残る。
  *
- * この 3 つは `infra/README.md` の同名の節にも書いてあり、`infra/test/toolchain.test.ts` が
- * **節を切り出して本文を固定している。** 判断を変えるならテストも一緒に直すことになる。
+ * この 3 つは `infra/docs/security-headers.md` の同名の節にも書いてあり、
+ * `infra/test/toolchain.test.ts` が **節を切り出して本文を固定している。**
+ * 判断を変えるならテストも一緒に直すことになる。
  */
 export const HSTS_MAX_AGE_SECONDS = 31_536_000;
 
@@ -105,10 +96,6 @@ export const HSTS_MAX_AGE_SECONDS = 31_536_000;
  *
  * # ResponseHeadersPolicy で付ける。S3 のメタデータではなく
  *
- * AWS は「response headers policy で付けた `Cache-Control` は **viewer response にのみ**
- * 付き、CloudFront がオブジェクトをどうキャッシュするかには影響しない」と明記している。
- * CDN は DefaultTTL 86400 のままで、更新はこれまでどおり invalidation が担う。
- *
  * **S3 のオブジェクトメタデータに `no-cache` を書いてはいけない。** 現行のキャッシュポリシー
  * （Managed-CachingOptimized）は MinTTL が 1 で 0 より大きく、AWS の表は「MinTTL > 0 のとき
  * `no-cache` / `no-store` / `private` を無視して MinTTL 分キャッシュする」と明記している。
@@ -117,6 +104,9 @@ export const HSTS_MAX_AGE_SECONDS = 31_536_000;
  * `aws s3 sync --cache-control` も使わない。sync の比較はサイズと更新時刻だけで
  * **メタデータを見ない**ので内容が変わっていないオブジェクトが取り残されるうえ、
  * 定義が S3 と CDK の 2 箇所に分かれる。
+ *
+ * ここで付けた値が CloudFront のキャッシュ挙動に影響しないことは AGENTS.md の
+ * 「Cache-Control」と `infra/docs/cloudfront-caching.md`。
  */
 export const SITE_CACHE_CONTROL = 'no-cache';
 

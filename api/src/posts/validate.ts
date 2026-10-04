@@ -50,8 +50,7 @@ const requireTrimmedString = (raw: Record<string, unknown>, field: string): stri
  * 上書きの意思を読む。**記事の中身ではないので ValidatedPost には入れない。**
  *
  * **既定は必ず false。** 省略・null・文字列・数値のいずれも「上書きしない」に倒れる。
- * `draft` と同じく **'"false"' を true と解釈しない** — 曖昧な強制で公開済みの記事を
- * 踏み潰すのは、下書きを誤って公開するのと同じ種類の事故である。
+ * `'"false"'` を true と解釈しない（`draft` と同じ立場）。公開済みの記事を踏み潰させない。
  *
  * boolean 以外を黙って false に畳まず 400 にするのは、呼び出し側の綴り間違い
  * （`overwrite: 'true'`）が「拒否され続ける理由の分からない 409」に化けるのを防ぐため。
@@ -110,11 +109,9 @@ export const validatePost = (raw: Record<string, unknown>, nowMs: number): Valid
     pubDate = new Date(nowMs).toISOString();
   } else {
     if (typeof rawPubDate !== 'string') throw new PostValidationError('pubDate', 'must be a string');
-    // **オフセットの無い日時を黙って推測しない。**
-    //
-    // `Date.parse('2026-09-08T05:40:01')` はホストの TZ で解釈するので、同じ入力から
-    // ブラウザ（著者の TZ）と Lambda（UTC）で違う瞬間ができ、**公開先の URL が著者の
-    // 居場所で変わる**（RSS の guid も変わる。取り消せない）。
+    // **オフセットの無い日時を黙って推測しない。** 推測すると**公開先の URL が著者の
+    // 居場所で変わる**（RSS の guid も変わる。取り消せない）。TZ ごとの実測は
+    // `slug.ts` の `hasExplicitOffset`。
     //
     // 著者の壁時計時刻を JST として送るのは呼び出し側の責任にする
     // （`admin` は `jstWallClockToInstant` を通す）。`slug` を 400 にしたのと同じ立場。
@@ -169,12 +166,11 @@ export interface ValidatedUpdate {
  *
  * # `sha` は省略できない
  *
- * 省略を許すと**楽観的並行制御を外して呼べる経路**ができる。
+ * **楽観的並行制御を外して呼べる経路**を作らない（`deps.ts` の `UpdateInput`）。
  *
  * # `overwrite` は送れない
  *
- * 更新は常に差し替えなので意味を持たない。黙って捨てると呼び出し側の思い違いが
- * 無言で通る（`slug` を 400 にしているのと同じ立場）。
+ * 更新では意味を持たない。黙って捨てず 400 にする（`slug` と同じ立場）。
  *
  * @param nowMs `validatePost` に渡すクロック。**更新では使われない**
  *   （pubDate の省略は下で 400 になるため）が、規則を共有するために通す。

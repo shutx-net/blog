@@ -46,10 +46,8 @@ const { posts } = Astro.props;
     }
   </ul>
   {
-    /* This page used to be a dead end -- the post page has had a back link since
-       it was styled, and only the browser's own button led out of here. Both
-       destinations are offered because a reader who arrived from a post's chip
-       wants the listing, and one who arrived from the index wants the index. */
+    /* Two destinations, because a reader who arrived from a post's chip wants the
+       listing and one who arrived from the index wants the index. */
   }
   <nav class="post__back">
     <a href="/">記事一覧へ戻る</a>

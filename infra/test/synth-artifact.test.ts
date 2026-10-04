@@ -7,9 +7,8 @@ import { describe, expect, it } from 'vitest';
  * Template.fromStack ではなく、cdk synth がディスクに書いた実ファイルを検査する。
  * アサーションが実際の synth 出力と乖離していないことを確かめるのが目的。
  *
- * 特に本フェーズは cdk.json の context に
- * `@aws-cdk/core:defaultCrossStackReferences` を足しており、**この context は
- * cdk CLI 経由の合成にしか効かない**（vitest から new App() したときは既定値のまま）。
+ * とくに cdk.json の context にある `@aws-cdk/core:defaultCrossStackReferences` は、
+ * **cdk CLI 経由の合成にしか効かない**（vitest から new App() したときは既定値のまま）。
  * 実ファイルを読むテストがあることで、両者の差が出たときに気づける。
  */
 const templatePath = (stackName: string): string =>
@@ -277,8 +276,8 @@ describe('cdk synth が出力した実テンプレート: BlogSiteStack 固有',
 /**
  * **アセットという新しい乖離源。**
  *
- * Phase 3 でテンプレートは api/dist の内容ハッシュを S3Key に埋めるようになった。
- * つまり **api をビルドせずに synth するとテンプレートは通るのに中身が古い**。
+ * テンプレートは api/dist の内容ハッシュを S3Key に埋めるので、
+ * **api をビルドせずに synth するとテンプレートは通るのに中身が古い**。
  * assets.json と実ファイルの突き合わせがその防波堤になる。
  */
 describe('Lambda のアセットが実在する', () => {

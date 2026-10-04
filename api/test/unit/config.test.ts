@@ -106,13 +106,13 @@ describe('AUTH_MODE の検証', () => {
     'cognito\n',
   ])('AUTH_MODE=%o は大文字小文字も空白も寛容に扱わず例外を投げる', (value) => {
     // 寛容な正規化を入れると「意図した値」と「たまたま通った値」の区別が消える。
-    // **cognito についても同じ厳しさを固定する**（Phase 3 は deny-all しか見ていなかった）。
+    // **cognito についても deny-all と同じ厳しさを固定する。**
     expect(() => loadConfig({ ...cognitoEnv(), AUTH_MODE: value })).toThrow(/AUTH_MODE/);
   });
 
   it('**未知の値では COGNITO_* が揃っていても例外を投げる**（黙って書き込みを許さない）', () => {
-    // 本フェーズで一番危険な失敗の仕方が「不明な AUTH_MODE が黙って通る」ことなので、
-    // 他の変数が完璧に揃っている状態でも落ちることを名指しで固定する。
+    // 一番危険な失敗の仕方は「不明な AUTH_MODE が黙って通る」こと。他の変数が
+    // 完璧に揃っている状態でも落ちることを名指しで固定する。
     expect(() => loadConfig({ ...cognitoEnv(), AUTH_MODE: 'allow-all' })).toThrow(/AUTH_MODE/);
     expect(() => loadConfig({ ...cognitoEnv(), AUTH_MODE: '' })).toThrow(/AUTH_MODE/);
     const env = cognitoEnv();
@@ -175,8 +175,8 @@ describe('その他の必須設定', () => {
   });
 
   it('**DEPLOY_WORKFLOW_FILE は任意で、未設定なら undefined**', () => {
-    // 未設定 = dispatch しない、という opt-in をここで固定する。
-    // 既定で dispatch すると、push 起点のデプロイと二重に走る。
+    // 未設定 = dispatch しない、という opt-in をここで固定する
+    // （`api/src/config.ts` の `deployWorkflowFile` の JSDoc）。
     const env = baseEnv();
     expect(env['DEPLOY_WORKFLOW_FILE']).toBeUndefined();
     expect(loadConfig(env).deployWorkflowFile).toBeUndefined();
@@ -194,7 +194,7 @@ describe('その他の必須設定', () => {
   });
 
   it('秘密の値を環境変数から読まない', () => {
-    // 設計判断8: CDK に秘密を書かない。秘密鍵は Secrets Manager からしか来ない。
+    // AGENTS.md「CDK に秘密の値を書かない」。秘密鍵は Secrets Manager からしか来ない。
     // 設定オブジェクトに PEM やトークンを載せる経路を作らないことを構造で固定する。
     const config = loadConfig({ ...baseEnv(), GITHUB_APP_PRIVATE_KEY: '-----BEGIN RSA PRIVATE KEY-----' });
     expect(JSON.stringify(config)).not.toContain('-----BEGIN');

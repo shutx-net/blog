@@ -134,7 +134,8 @@ describe('resolveRedirectUri — **オリジンから導出する**', () => {
 
   it('ローカル開発のオリジンでも導出できる（Cognito 側が拒否するのは正しい失敗）', () => {
     // CallbackURLs に入っていないので実測で redirect_mismatch になる。
-    // **それは正しい失敗**であり、infra 側の hand-off（DEVELOPERS.md）。
+    // **それは正しい失敗**であり、infra 側の hand-off
+    // （`docs/aws-ops.md` の「ローカル開発ではログインできない」）。
     expect(resolveRedirectUri('http://localhost:5173')).toBe('http://localhost:5173/admin/');
   });
 

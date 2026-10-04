@@ -31,8 +31,8 @@ describe('deny-all の Authorizer', () => {
     ['x-amz-security-token', 'anything'],
     ['x-forwarded-user', 'admin'],
   ])('%s ヘッダを付けても拒否される', async (name, value) => {
-    // **どんなヘッダも deny-all を開けられないこと。** エンドユーザ認証は本フェーズの
-    // 範囲外なので、「それらしいヘッダがあれば通す」という抜け道を作らない。
+    // **どんなヘッダも deny-all を開けられないこと。**
+    // 「それらしいヘッダがあれば通す」という抜け道を作らない。
     const result = await denyAllAuthorizer.authorize(request({ headers: { [name]: value } }));
     expect(result.ok).toBe(false);
   });
@@ -67,8 +67,8 @@ describe('createAuthorizer', () => {
   it.each(['off', 'none', '', 'allow-all', 'Cognito', 'COGNITO', ' cognito', 'cognito '])(
     '未知のモード %o では例外を投げる',
     (mode) => {
-      // **大文字小文字と空白を寛容に扱わない。** Phase 3 は deny-all についてしか
-      // 見ていなかったので、新しいモードについても同じ厳しさを固定する。
+      // **大文字小文字と空白を寛容に扱わない。** deny-all だけでなく、
+      // すべてのモードについて同じ厳しさを固定する。
       expect(() => createAuthorizer({ mode } as never, deps)).toThrow(/AUTH_MODE/);
     },
   );
@@ -107,9 +107,9 @@ describe('拒否理由から HTTP への写像', () => {
   );
 
   it.each([...AUTH_FAILURE_REASONS])('%s: **403 を返さない**', (reason) => {
-    // CloudFront の CustomErrorResponses は **origin の 403 も** /404.html の HTML に
-    // 差し替える（実測: GET /api/nope -> 404 / text/html / x-cache: Error from cloudfront）。
-    // 403 を使うと admin から「エンドポイントが無い」と区別が付かなくなる。
+    // CloudFront が origin の 403 を /404.html の HTML に差し替えるので、admin から
+    // 「エンドポイントが無い」と区別が付かなくなる。実測と全文は
+    // `infra/docs/api-auth.md` の「認証の拒否に 403 と 404 を使わない」。
     expect(AUTH_FAILURE_RESPONSES[reason].statusCode).not.toBe(403);
   });
 
@@ -127,9 +127,9 @@ describe('拒否理由から HTTP への写像', () => {
     expect(AUTH_FAILURE_RESPONSES[reason]).toEqual({ statusCode, error });
   });
 
-  it('**not-authorized は 403 ではなく 401 である**（意味論的な妥協。理由はコメント参照）', () => {
-    // 本来 403 が素直だが、CloudFront に食われるので使えない。妥協する代わりに
-    // 機械可読な error コード（not_authorized）で admin 側が区別できるようにしてある。
+  it('**not-authorized は 403 ではなく 401 である**（意味論的な妥協）', () => {
+    // 本来 403 が素直だが CloudFront に食われるので使えない（`infra/docs/api-auth.md`）。
+    // 妥協の代わりに機械可読な error コードで admin 側が区別できるようにしてある。
     // **「素直に 403 にしよう」と直さないこと。**
     expect(AUTH_FAILURE_RESPONSES['not-authorized'].statusCode).toBe(401);
     expect(AUTH_FAILURE_RESPONSES['not-authorized'].error).toBe('not_authorized');

@@ -16,7 +16,6 @@ import { describe, expect, it } from 'vitest';
  * 「一部だけ ignore」だけ**なので、そこにだけ床を置く。
  *
  * この repo は「テストは緑なのに実物が壊れている」を 7 回踏んでいる。
- * リンタを入れた初日に同じ形を作らないための主張。
  */
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));

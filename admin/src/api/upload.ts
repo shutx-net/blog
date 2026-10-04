@@ -17,7 +17,8 @@ import type { ApiClient, ApiOperation } from './client.ts';
  * CORS が要る。`infra/lib/media-bucket.ts` が配信オリジンだけを `AllowedOrigins` に置いて
  * おり、**`localhost` は入っていないので dev サーバからのアップロードは動かない。**
  * **このファイルのテストは注入した関数を呼ぶだけなので CORS の欠落に影響されない** —
- * 設定が壊れても全部緑のままで、実アップロードの確認は手動（DEVELOPERS.md）。
+ * 設定が壊れても全部緑のままで、実アップロードの確認は手動
+ * （`docs/aws-ops.md` の「ブラウザでしか確かめられないこと」）。
  */
 
 /** api/src/router.ts の presign 経路。API_OPERATIONS と同じ形。 */

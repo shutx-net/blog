@@ -15,8 +15,8 @@ interface PolicyStatement {
  * デプロイロールに与える権限の完全な集合。
  *
  * **ソートして完全一致で比較する。増えても減っても落ちる。** 実デプロイで
- * AccessDenied が出て権限を足すときは、この配列と infra/README.md を同時に
- * 更新すること（こっそり広げると必ずここが落ちて気づける設計）。
+ * AccessDenied が出て権限を足すときは、この配列と infra/docs/stacks.md の
+ * 「BlogCicdStack」を同時に更新すること（こっそり広げると必ずここが落ちて気づける設計）。
  */
 const EXPECTED_ACTIONS = [
   'cloudfront:CreateInvalidation',
@@ -117,8 +117,9 @@ describe('デプロイロールの権限（最小権限）', () => {
   });
 
   it('テンプレート全文に "MediaBucket" が 1 度も現れない（CI からメディアに触れない）', () => {
-    // 設計判断5 の目的そのもの。バケットを分けても CI にメディアへの権限を
-    // 渡したら意味が無い。空振り防止に、権限が非空であることを先に主張する。
+    // AGENTS.md「サイト配信用とメディア用で S3 バケットを分ける」の目的そのもの。
+    // 分けても CI にメディアへの権限を渡したら意味が無い。
+    // 空振り防止に、権限が非空であることを先に主張する。
     expect(allActions().length).toBeGreaterThan(0);
     expect(templateJson).not.toContain('MediaBucket');
   });
@@ -139,7 +140,7 @@ describe('デプロイロールの権限（最小権限）', () => {
   });
 
   it('IAM ユーザもアクセスキーも 0 個（長期認証情報を作らない）', () => {
-    // 設計判断8: このリポジトリは public。
+    // AGENTS.md「このリポジトリは public」—「AWS のアクセスキーを置く選択肢はない」。
     template.resourceCountIs('AWS::IAM::User', 0);
     template.resourceCountIs('AWS::IAM::AccessKey', 0);
   });

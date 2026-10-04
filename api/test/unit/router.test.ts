@@ -231,7 +231,7 @@ describe('AUTH_MODE=deny-all のとき書き込み経路に到達できない', 
   });
 });
 
-describe('拒否テストが空虚でないことの対照（同じ入力を許可すると到達する）', () => {
+describe('拒否テストが空虚でないことの対照', () => {
   // **これが無いと「呼び出し回数 0」は無意味になる。** ルートが壊れていて 404 に
   // なっているだけでも 0 件は達成できてしまう。許可した場合に **実際に呼ばれる**
   // ことを示して初めて、0 件が「認可で止めた」ことの証拠になる。
@@ -492,17 +492,9 @@ describe('レスポンスの共通ヘッダ', () => {
 });
 
 /**
- * **本フェーズで一番機械的に効くテスト。**
- *
- * CloudFront の CustomErrorResponses は DistributionConfig 直下にあり、
- * **ビヘイビア単位では外せない**。origin が返した 403 / 404 も /404.html の HTML に
- * 差し替えられる（実測: `GET /api/nope` -> 404 / text/html / server: AmazonS3 /
- * x-cache: Error from cloudfront）。
- *
- * したがって認証の拒否に 403 を使うと、admin からは
- * 「トークンを出し直せ」「あなたは別のユーザだ」「経路が無い」の 3 つが
- * **全部同じ HTML 404** になり区別が付かない。**直すべきは CloudFront ではなく
- * API 側のステータス選択である。**
+ * `infra/docs/api-auth.md` の「認証の拒否に 403 と 404 を使わない」を実際に確かめる。
+ * CloudFront の `CustomErrorResponses` はビヘイビア単位で外せないので、origin が
+ * 返した 403 / 404 は /404.html の HTML に化け、admin から区別が付かなくなる。
  */
 describe('認証の拒否は 401 と 503 だけ（403 と 404 を絶対に返さない）', () => {
   const rejecting = (reason: AuthFailureReason): Authorizer => ({
@@ -521,7 +513,8 @@ describe('認証の拒否は 401 と 503 だけ（403 と 404 を絶対に返さ
   );
 
   it('走査対象が空でない（15 通り = 5 理由 x 3 経路）', () => {
-    // 非空ガード。ループが 0 件でも通ってしまう事故を防ぐ（infra/README.md の型 1）。
+    // 非空ガード。ループが 0 件でも通ってしまう事故を防ぐ
+    // （infra/docs/test-patterns.md の型 1）。
     expect(combinations).toHaveLength(15);
   });
 
@@ -581,7 +574,7 @@ describe('認証の拒否は 401 と 503 だけ（403 と 404 を絶対に返さ
     expect(response.headers['content-type']).toBe('application/json');
   });
 
-  it('**未知の経路が 404 を返すこと自体は変えない**（ただし CloudFront で HTML に化ける）', async () => {
+  it('**未知の経路が 404 を返すこと自体は変えない**', async () => {
     // これは認証の失敗ではないので 404 のままでよい。admin 側の切り分けとしては
     // 「HTML の 404 が返ってきたら、認証の失敗ではなく署名の問題か経路の問題」となる。
     const { deps } = spyDeps(allowAuthorizer);
@@ -600,8 +593,8 @@ describe('公開後のデプロイ起動', () => {
     });
 
   it('**deployDispatcher が未設定なら dispatch せず、deployTriggered も返さない**', async () => {
-    // Phase 2 の既定。push 起点のデプロイが既に走っているので、
-    // ここで dispatch すると同じコミットに対してデプロイが 2 本走る。
+    // `deployWorkflowFile` 未設定なら dispatch しない、という opt-in の既定
+    // （`api/src/config.ts` の `deployWorkflowFile` の JSDoc）。
     const { deps } = spyDeps(allowAuthorizer);
     expect(deps.deployDispatcher).toBeUndefined();
 

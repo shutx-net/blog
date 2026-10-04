@@ -45,12 +45,15 @@ const { Content } = await render(page);
      subject. The constraint that does still hold is the other direction:
      nothing may be added inside the post page's <article>.
 
-     No scoped <style> block here, on this page or any other. The CSP is
-     `style-src 'self'`, while build.inlineStylesheets defaults to "auto" and
-     inlines anything under vite's 4KB limit -- so a handful of page-scoped rules
-     would ship as an inline <style>, be blocked in production, and leave this one
-     page unstyled with nothing failing anywhere else. Rules go in global.css, and
-     admin/test/build/output.test.ts scans all of site/dist for the zero. */
+     No scoped <style> block here, on this page or any other. Rules go in
+     global.css. Under this project's build.inlineStylesheets: "never" a scoped
+     block does not go inline -- measured: it is emitted as a *second* external
+     stylesheet (_astro/about.*.css), inline <style> stays at zero, and the
+     admin guard that counts inline blocks passes. So the test that catches it
+     is site/test/build/output.test.ts's `emits exactly one stylesheet`, which
+     went red on exactly that mutation. What a second sheet costs is a second
+     render-blocking request on one page, and it splits what is currently one
+     shared cached file. */
 }
 <Layout title={page.data.title} description={page.data.description}>
   <article>

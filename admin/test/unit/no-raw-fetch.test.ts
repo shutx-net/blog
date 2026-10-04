@@ -24,9 +24,7 @@ const FIXTURE_DIR = fileURLToPath(new URL('../fixtures/scan/', import.meta.url))
  *                              `credentials: 'omit'`。
  *
  * **3 本とも規則が違うので、4 本目が生えれば必ずどれかを取り違える。**
- * Phase 4 のコメントは「規則が正反対の 2 本」と書いていた。Phase 5 で 3 本目が
- * 生えたので、3 つを並べて書いてある。**増やさないのではなく、増やしたぶん
- * 機械的に縛る**（下の「3 本目の規則」を参照）。
+ * **増やさないのではなく、増やしたぶん機械的に縛る**（下の「3 本目の規則」を参照）。
  */
 const ALLOWED = ['api/client.ts', 'api/upload.ts', 'auth/token-endpoint.ts'];
 

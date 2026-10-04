@@ -9,8 +9,7 @@ import { POSTS_PER_PAGE } from "../../src/lib/posts.ts";
 import { postsDirUrl } from "../../src/posts-dir.ts";
 import { resolveSiteUrl } from "../../src/site-url.ts";
 
-// dist/ is produced once by test/setup/build-site.ts (globalSetup). These tests
-// only read it -- they never trigger a build of their own.
+// Reads dist/, built once by test/setup/build-site.ts (globalSetup).
 const distDir = fileURLToPath(new URL("../../dist/", import.meta.url));
 
 const readDist = (relativePath: string): string =>
@@ -118,9 +117,8 @@ describe("shared layout", () => {
 });
 
 describe("social card metadata", () => {
-  // Before this, pasting a URL anywhere produced a bare link: no title, no
-  // description. Both values already existed on every page as <title> and the
-  // meta description; only the og:/twitter: names were missing.
+  // The og:/twitter: names carry values every page already has as its <title> and
+  // meta description; without them a pasted URL is a bare link.
   it.each([
     ["index.html", ""],
     ["posts/2026/08/01/090000/index.html", "posts/2026/08/01/090000/"],
@@ -243,15 +241,14 @@ describe("tag index", () => {
     expect(index()).not.toContain("draft-only");
   });
 
-  it("offers a way back to the listing", () => {
+  it("offers a way back to the listing from the tag index", () => {
     expect(index()).toContain('href="/"');
   });
 });
 
 describe("tag page furniture", () => {
-  // The post page has had a back link since it was styled; the tag page was the
-  // one dead end left in the site.
-  it("offers a way back to the listing", () => {
+  // Without this the tag page is a dead end.
+  it("offers a way back to the listing from a tag page", () => {
     expect(readDist("tags/astro/index.html")).toContain('<nav class="post__back"><a href="/">');
   });
 
@@ -297,14 +294,14 @@ describe("pagination", () => {
 
   // Prev/next alone do not say where the reader is. expectedPages is derived from
   // the fixtures, so this keeps saying the truth when a post is added.
-  it("says which page of how many the reader is on", () => {
+  it("prints the position as N / total", () => {
     expect(readDist("index.html")).toContain(`1 / ${expectedPages}`);
     expect(readDist("2/index.html")).toContain(`2 / ${expectedPages}`);
   });
 
   // The position is for the reader, and the reader is told it by the surrounding
   // prose -- "1 / 2" on its own is not a sentence a screen reader can place.
-  it("labels the position for assistive technology", () => {
+  it("gives the pager an aria-label", () => {
     expect(readDist("index.html")).toContain('aria-label="ページ送り"');
   });
 
@@ -327,7 +324,7 @@ describe("draft leakage", () => {
   // returns [] and reports success. "has output to scan" does not catch it --
   // it only requires that pages exist, not that any of them had a draft to
   // exclude. So the corpus is pinned from the input side, twice.
-  it("has a draft in the corpus to keep out", () => {
+  it("has at least one draft in the corpus", () => {
     expect(draftCount, `${postsDir} has no draft; the leak scan below cannot fail`)
       .toBeGreaterThan(0);
   });

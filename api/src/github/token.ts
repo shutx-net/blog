@@ -71,7 +71,8 @@ const statusError = (what: string, status: number): Error =>
  * **キャッシュはクロージャに閉じ込める。** モジュールスコープのミュータブル変数に
  * すると、テスト間で状態が漏れるうえ「provider ごとに独立」を主張できない。
  * Lambda の実行環境が生きている間だけ残り、環境が破棄されれば消える
- * ＝ 設計判断9 の「token は保管しない」。ディスクにも環境変数にも書かない。
+ * ＝ installation access token は保管しない（AGENTS.md の `### 認証情報`）。
+ * ディスクにも環境変数にも書かない。
  */
 export const createTokenProvider = (deps: TokenProviderDeps): InstallationTokenProvider => {
   let cached: CachedToken | undefined;

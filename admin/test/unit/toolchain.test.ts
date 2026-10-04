@@ -44,7 +44,7 @@ const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
  *       推移依存の少なさより上位に置いている。
  * - @testing-library/* : UI フレームワークを入れないので不要。
  *
- * ## Phase 5（ログイン）で不採用にした 10 件
+ * ## ログインのために検討して不採用にした 10 件
  *
  * すべて 2026-08-31 に `npm view` / `gh api` で実測した値。**AGENTS.md の即不採用条件
  * （archived / deprecated / 12 ヶ月以上リリース無し）に当たるものは 1 つも無い。**
@@ -110,7 +110,7 @@ const FORBIDDEN_PACKAGES = [
   'happy-dom',
   '@testing-library/react',
   '@testing-library/dom',
-  // ---- Phase 5（ログイン）で不採用にしたもの ----
+  // ---- ログインのために検討して不採用にしたもの ----
   'oidc-client-ts',
   'amazon-cognito-identity-js',
   '@aws-amplify/auth',
@@ -233,9 +233,9 @@ describe('入れないと決めたパッケージ', () => {
     expect(FORBIDDEN_PACKAGES.length).toBeGreaterThan(0);
   });
 
-  it('**禁止パッケージ表が 27 件以上ある**（Phase 5 の 10 件が消えていない）', () => {
+  it('**禁止パッケージ表が 27 件以上ある**', () => {
     // it.each は表が縮んでも緑のままになる。**件数を別に固定する。**
-    // Phase 4 までの 17 件 + Phase 5 で判断した OIDC / Cognito 系 10 件 = 27 件。
+    // 表の上半分 17 件 + 下半分の OIDC / Cognito 系 10 件 = 27 件。
     // ここを緩めるのは、どれかを「やっぱり入れる」と決めたときだけであり、
     // そのときは計画の toolchain.rationale に実測値つきで理由を書くこと。
     expect(FORBIDDEN_PACKAGES.length).toBeGreaterThanOrEqual(27);
@@ -268,13 +268,11 @@ describe('admin/tsconfig.json', () => {
     //
     // 5.9.3 では「ルート node_modules/@types を暗黙に全部拾わせない柵」だった。
     // **TS 7 は types の既定を [] にしたので、柵として守る対象がもう無い。**
-    // 7.0.2 実測で、types を消してもエラー 0 件・`tsc --listFiles` の出力も一致する。
+    // 7.0.2 実測で、types を消してもエラー 0 件・`tsc --listFiles` の出力も一致し、
+    // 変異（["node","chai"] に広げる）でも tsc は rc=0 のまま。**赤くなるのは
+    // 3 ワークスペースのこのテストだけ**で、「緑だから守られている」ではない。
     // 消さないのは 5.x へ戻す道を塞がないため（後退先の 6.0.3 / 5.9.3 では本当に効く）。
     // 測定の全文は infra/test/toolchain.test.ts の同名テストにある。
-    //
-    // **型検査はもうこの値を見ていない**（変異で確認済み: ["node","chai"] に広げても
-    // tsc は rc=0 のまま。赤くなるのは 3 ワークスペースのこのテストだけ）。
-    // **「緑だから守られている」ではなく「テストだけが見ている」と読むこと。**
     //
     // なお **@types/node を admin では宣言しない**（ルートの 1 本を使う）。
     // 2 本入ると types:["node"] が重複定義で落ちる。この制約は TS 7 でも変わらない。
