@@ -81,9 +81,22 @@ curl -s -X POST "$LOGIN/oauth2/token" \
 
 #### 管理画面からログインする
 
-`/admin/` を開いて「ログイン」を押すだけ。**起動しただけでは何も起きない**
-（自動リダイレクトはしない）。実装の詳細は `admin/src/auth/` と
-`admin/src/auth/THREAT-MODEL.md` にある。
+**セッションが無いタブで `/admin/` を開くと、そのままログイン画面へ飛ぶ**
+（判定は `admin/src/auth/auto-sign-in.ts`、遷移は `admin/src/main.ts`）。
+飛ばないのは次の 4 つだけ。
+
+- **サインアウト直後。** `/logout` の戻り先が `/admin/` なので、ここで飛ばすと
+  サインアウトした画面を一度も見られない（= サインアウトできない）
+- **認可サーバから戻った読み込み。** エラーの表示を読む機会が要る
+- **同じタブで既に 1 度飛んでいるとき。** 抑止印はタブの寿命まで残り、
+  **セッションを持った読み込みが来たときだけ**消える
+- **`http://` のオリジン**（ローカルの dev server。下の「ローカル開発ではログインできない」）
+
+抑止されている間は「ログイン」ボタンが入口になる。**開始そのものが失敗した場合
+（`crypto.subtle` が無い等）も抑止印は残り、そのタブはもう自動では飛ばない**
+（理由は `admin/src/auth/auto-sign-in.ts` の `startAutoSignIn`）。
+
+実装の詳細は `admin/src/auth/` と `admin/src/auth/THREAT-MODEL.md` にある。
 
     ブラウザ -> /oauth2/authorize (PKCE S256 + state) -> Managed Login
             -> /admin/?code=... -> /oauth2/token で交換 -> sessionStorage
@@ -114,6 +127,7 @@ npm run -w admin auth-smoke
    どちらも secure context に入るはずだが、ブラウザでしか確かめられない。
 3. **`sessionStorage` がタブの寿命に紐づき、Cognito への全画面遷移と復帰を越えて保持されること。**
    **PKCE の verifier と下書きの両方がこの性質に依存している。**
+   **自動サインインの抑止印も同じ性質に依存している**（だから別タブには効かない）。
 4. **タブ間の `storage` イベント。** jsdom では発火 0 件（実測）。タブ間同期は scope 外。
 5. **Managed Login（`ManagedLoginVersion: 2`）の実画面。** `ManagedLoginBranding` が
    未作成で、`/login` の直叩きは 403 とともに既定の HTML を返す（実測）。
@@ -121,26 +135,95 @@ npm run -w admin auth-smoke
 6. **CSP が実際にスクリプトを止めること。** 実測で **jsdom は CSP を一切強制しない**
    （`script-src-attr 'none'` を与えても `<div onclick>` は発火する）。
    **「CSP が onerror を止めた」という緑のテストは書けない。**
+7. **起動時の自動遷移そのもの。** 上の 1 と同じ理由で jsdom の `location.assign` は
+   何もしないので、「自動で飛ぶ」ことは人間しか確かめられない。テストが見ているのは
+   **注入した偽の `signIn` が呼ばれたかどうかと、呼ばれた時点の store の中身**だけである。
+   加えて `insecure_origin` のガードがあるので **`npm run -w admin dev`（http）では起きない**
+   — 確かめられるのは**本番の https オリジンだけ。**
 
 ##### 手順（ユーザを作ったあとに 1 度だけ）
 
-1. `/admin/` を開く。**自動で Cognito に飛ばないこと。**
-2. 何か入力する。
-3. 「ログイン」を押す -> Cognito の画面に飛ぶ。
-4. 戻ってきて **入力が残っていること**（= 上の 3 の確認）。
-5. アドレスバーに `?code=` が残っていないこと。
-6. 投稿できること。
-7. サインアウト -> 再訪で未認証になること。**下書きは消えていないこと。**
-8. devtools のコンソールに **CSP 違反が 1 件も出ていないこと**。
-9. コードフェンス入りの記事で **シンタックスハイライトに色が付くこと**
-   （付かなければ CSP が `'wasm-unsafe-eval'` を落として wasm を止めている）。
-10. **画像アップロードが通ること**（`connect-src` にメディアバケットが入っているか）。
+1. **新しいタブで** `/admin/` を開く。**自動で Cognito のログイン画面に飛ぶこと。**
+2. ログインする -> `/admin/` に戻り、アドレスバーに `?code=` が残っていないこと。
+3. 何か入力する。
+4. 投稿できること。**新規投稿の成功時は下書きが消える**（`app.ts` が成功でだけ捨てる）
+   ので、次の手順のためにもう一度何か入力しておく。
+5. サインアウト -> `/admin/` に戻ったとき、**ログイン画面に飛ばされず未認証のエディタが
+   見えること**（抑止印が効いている）。**入力が残っていること。**
+6. その画面で F5 -> **まだ飛ばされないこと**（抑止はタブの寿命まで残る）。
+7. 「ログイン」を押す -> ログイン画面 -> 戻ったとき **入力が残っていること**
+   （下書きが全画面遷移を越える = `sessionStorage` のタブ性質）。
+8. **別のタブで `/admin/` を開く -> 自動で飛ぶこと**（抑止印はタブ単位なので効かない）。
+   認可サーバ側のセッションが残っていればログイン画面を見ずに戻ってくるが、
+   アドレスバーの往復で「飛んだ」ことは分かる。
+9. devtools のコンソールに **CSP 違反が 1 件も出ていないこと**。
+10. コードフェンス入りの記事で **シンタックスハイライトに色が付くこと**
+    （付かなければ CSP が `'wasm-unsafe-eval'` を落として wasm を止めている）。
+11. **画像アップロードが通ること**（`connect-src` にメディアバケットが入っているか）。
+
+#### セキュリティ監査が残した未確認項目（2026-10-11）
+
+静的解析と synth 出力では**原理的に答えが出ない**項目。**テンプレートはソースの意図で
+あって実体ではない**ので、下は「所見が確定するか反証されるか」を分ける確認である。
+
+**実行時の状態（テンプレートに現れない）**
+
+```sh
+POOL_ID=$(aws cloudformation describe-stacks --profile blog --stack-name BlogSiteStack \
+  --query "Stacks[0].Outputs[?ends_with(OutputKey,'AdminUserPoolId')].OutputValue" --output text)
+
+# (1) TOTP が実際に登録されているか。空なら「パスワード 1 つが書き込み全権を守っている」
+aws cognito-idp admin-get-user --profile blog --user-pool-id "$POOL_ID" --username shutx \
+  --query '{MFA:UserMFASettingList,Preferred:PreferredMfaSetting}'
+
+# (2) 検証済みメールを持つか。無いと MFA を ON にするとロックアウトの単一障害点になる
+aws cognito-idp admin-get-user --profile blog --user-pool-id "$POOL_ID" --username shutx \
+  --query 'UserAttributes[?Name==`email_verified`]'
+
+# (3) プールのアカウント数。2 件以上なら誰が admin-create-user したのか確認が要る
+aws cognito-idp list-users --profile blog --user-pool-id "$POOL_ID" \
+  --query 'Users[].{u:Username,s:UserStatus,e:Enabled}' --output table
+```
+
+`MfaConfiguration` は **`OPTIONAL`**（`ON` ではない。値は `infra/test/cognito.test.ts` が
+固定している）。復旧手段は `verified_email` 1 本だけなので、**(2) を先に閉じないと
+(1) は直せない。** 上の「ユーザを作る（初回だけ）」の手順は
+`--user-attributes` を含んでいないので、**手順どおりに作ったユーザはメールを持たない。**
+
+**配信されている実体（資格情報は要らない）**
+
+```sh
+curl -sSI https://blog.shutx.net/admin/            # CSP 13 ディレクティブ / cache-control: no-cache
+curl -sSI https://blog.shutx.net/api/health        # x-content-type-options が「無い」ことの確認
+```
+
+**ブラウザでしか測れない 2 件**
+
+- 記事の本文に `<img src=x onerror="alert(1)">` を貼る → **アラートが出ないこと。**
+  出たら「プレビュー経由でトークンに届かない」という結論が崩れるので、最優先で扱うこと
+  （`infra/docs/security-headers.md` の 2026-08-31 の観測の再確認でもある）。
+- 本文に `<meta http-equiv="refresh" content="5;url=https://example.com">` を貼る →
+  遷移するかどうか。CSP に `navigate-to` は無い（仕様から失効済み）ので**止まらない見込み**。
+  スクリプトを伴わないのでトークンには届かないが、挙動は記録しておく価値がある。
+
+**認可サーバの挙動（1 件）**
+
+`code_challenge` 付きで発行した `code` を `code_verifier` 無しで `/oauth2/token` に出したとき、
+**実際に拒否されるか。** `admin/src/auth/pkce.ts` は「拒否されるとしても交換の時点」と
+記録しているが未確認。**200 でトークンが返るなら PKCE が実質無効**で、`code` の漏洩が
+そのまま資産に届くことになる。`npm run -w admin auth-smoke` か手動ログインの往復で測れる。
 
 #### ローカル開発ではログインできない
 
-`CallbackURLs` は `https://<distribution-domain>/admin/` の 1 本だけで、
-`http://localhost:5173/admin/` は入っていない。実測で不一致は `redirect_mismatch` になり、
+`CallbackURLs` は **https の 2 本**（`SITE_ORIGINS` の配信ドメインと独自ドメイン）だけで、
+`http://localhost:5173/admin/` は入っていない（`infra/test/cognito.test.ts` がリテラルで
+完全一致固定している）。実測で不一致は `redirect_mismatch` になり、
 Cognito 自身の `/error` に飛ぶ（**攻撃者の URL には飛ばない**）。
+
+**だから `http://` のオリジンでは自動サインインしない**（`admin/src/auth/auto-sign-in.ts` の
+`insecure_origin`。飛ばしても `redirect_mismatch` になるだけで、**dev server でエディタが
+一度も開けなくなる**）。手動の「ログイン」ボタンは残してあるので挙動は見られる。
+**`callbackUrls` に localhost を足すなら、この判定も一緒に見直すこと。**
 
 `npm run -w admin dev` でエディタとプレビューは動くが、**ログインと投稿は試せない。**
 `redirect_uri` はオリジンから導出しているので、infra 側で `callbackUrls` に

@@ -29,6 +29,20 @@ Cognito の **ID トークン（有効 60 分）** と **refresh トークン（
 **被害は可視・可逆である**（記事リポジトリは private だが、公開サイトに出るので気づける）。
 これが「保持方式の選択に過剰な代償を払わない」判断の土台になる。
 
+### サインアウトは盗まれた ID トークンの窓を縮めない
+
+`src/auth/sign-out.ts` が `/oauth2/revoke` に出すのは **refresh トークンだけ**。
+ID トークンは JWT で、api 側は署名と `exp` だけを見る（`api/src/auth/cognito.ts`。
+失効リストは引かない）。**したがって既に盗まれた ID トークンは、サインアウトしても
+自分の `exp` まで `/api/*` に通る。** 上限は 60 分（`IdTokenValidity: 60` / 単位 `minutes`。
+synth 済みテンプレートの実測値）。
+
+revoke が効くのは「そこから先の発行」に対してであり、これは小さくない —
+refresh トークンは **1440 分 = 24 時間**（同じく実測。単位は `days` ではなく `minutes`）
+有効で rotation が無く、public client なので交換に secret が要らない。
+**保存先を 1 度読まれれば、最大 24 時間にわたって 60 分トークンを発行し続けられる。**
+それを止める唯一の手段がサインアウトである。
+
 ## 攻撃者 A: admin オリジンでの XSS（**主敵。仮想の話ではない**）
 
 実測: `admin/src/preview/pipeline.ts` の実パイプラインは Markdown 中の生 HTML を
@@ -90,6 +104,25 @@ preflight の `Origin` を検証せず、`https://evil.example.com` を送って
 **だからこそ PKCE と `state` が唯一の防御になる。**
 「CORS があるから安全」という推論をコードにもコメントにも書かないこと。
 
+### `nonce` を送っていない（意図）
+
+OIDC の `nonce` を authorize 要求に載せていない。`id_token` のリプレイ・注入に対して
+効いているのは次の 3 つで、**`nonce` が埋める隙間がこの構成には無い**:
+
+1. **認可コードフロー**だけを使う（`AllowedOAuthFlows: ["code"]`。implicit は配列に無い）。
+   ID トークンは `/oauth2/token` の応答本文でだけ受け取るので、
+   **URL・fragment から ID トークンを読む経路が存在しない。**
+2. **PKCE S256** — code を奪っても verifier が無ければ交換できない。
+3. **`state` と verifier を 1 レコード・1 キーで束ね、単回使用にしている**
+   （`pending-login.ts`）。「攻撃者の state + 被害者の verifier」の組み合わせが作れない。
+
+加えて api 側は `aud`（= このアプリクライアント）と `iss` と `token_use: 'id'` を
+`aws-jwt-verify` で検証し、`cognito:username` の完全一致まで見る。
+
+**それでもこれは「要らない」ではなく「この構成では効果が重複している」である。**
+implicit を有効にした日、あるいは ID トークンを URL 経由で受け取る経路を作った日には
+**`nonce` が必須になる。** その 2 つを変えるときはここに戻ってくること。
+
 ## 攻撃者 C: 端末を共有する第三者・ブラウザ拡張
 
 ブラウザ拡張はどの保存先も読める。共有端末に対しては
@@ -129,3 +162,49 @@ Cognito の refresh トークンは不透明文字列で `exp` を持たない�
 
 編集中に失効を踏んだときは**自動リダイレクトしない**。下書きを保全して、
 明示的な再ログインを促す（`src/auth/refresh.ts` と `src/editor/app.ts`）。
+
+**起動時（ページ読み込み時）だけは別で、セッションが無ければログイン画面へ 1 回だけ送る**
+（判定は `src/auth/auto-sign-in.ts`、遷移は `src/main.ts`）。編集中に飛ばさないことと両立する
+— 判断するのは起動時の 1 回だけで、`refresh.ts` も `app.ts` も**自分から遷移を起こさない**
+（`app.ts` が呼ぶのはクリックで渡された注入関数だけ）。
+機械化されているのは**綴りの走査**だけで、`test/unit/auth-seam.test.ts` の走査規則 5 が
+3 綴りを `main.ts` ちょうど 1 本に限り、`test/unit/auth-refresh.test.ts` が `refresh.ts` に
+`redirect` も含めた 4 綴りが現れないことを見ている。**その限界（別の手段で遷移するコードは
+捕まえない）はその走査規則のコメントに書いてある。**
+
+### 自動サインインが作った攻撃面（攻撃者視点）
+
+自動化によって**利用者の操作なしに認可要求が飛ぶ**ようになった。
+被害者のブラウザで `/admin/` を開かせるだけで `/oauth2/authorize` への往復が始まる。
+実測で、それによって新しく可能になったのは次の 2 つ**だけ**である:
+
+1. **固定 1 ホストへの無ジェスチャ遷移。** 攻撃者が influence できる唯一の入力
+   （`location.search` 経由の `returnTo`）を 8 通り通しても、**生成される authorize URL は
+   1 種類しかない**（ホストは `auth/config.ts` の定数 1 つ、パラメータは 7 個で固定、
+   `response_type=code` と `code_challenge_method=S256` も不変）。
+   **汎用リダイレクタにはなっていない。**
+2. **保存先への 2 キーの書き込み**（pending-login レコードと抑止印）。
+
+成立しないもの:
+
+- **ログイン CSRF** — 単一著者プールで `selfSignUpEnabled: false` なので、
+  攻撃者が「自分のアカウントで被害者をログインさせる」ために使えるアカウントを持てない。
+- **攻撃者が先に state + verifier を置く** — 書き手は `beginPendingLogin` だけで、
+  呼ぶには同一オリジンの JS が要る。それを持つ相手は既にトークンを読める。
+- **増幅** — 同じ要求は `/oauth2/authorize` を直接叩いて作れる（URL が公開定数と乱数だけ）。
+  `/admin/` を経由する利点が攻撃者側に無い。
+
+**残っている面は 1 つ: `startAutoSignIn` はトップレベル文書かどうかを見ない。**
+`top` / `self` / `parent` / `frameElement` / `ancestorOrigins` の綴りが
+`auto-sign-in.ts` と `main.ts` に 1 つも無く、**iframe の中でも走る。**
+止めているのは**エッジのヘッダだけ**（`frame-ancestors 'none'` と `X-Frame-Options: DENY`。
+`/admin/` はデフォルトビヘイビア経由なので `SecurityHeaders` が付く）。
+**この 2 つのどちらかを外すと、admin を枠に入れて無ジェスチャでログイン往復を
+走らせる経路が開く。**
+
+**`insecure_origin` ガードはスキームしか見ない**（`origin.startsWith('https://')`）。
+`https://evil.example` でも `sign_in` を返す — 実効的な番人はガードではなく
+Cognito の `CallbackURLs`（https の 2 本にリテラル固定）であり、
+不一致は `redirect_mismatch` で Cognito 自身の `/error` に落ちる。
+ガードの目的は**ローカルの dev server（http）でエディタが開けなくなるのを避けること**で、
+セキュリティ境界ではない。

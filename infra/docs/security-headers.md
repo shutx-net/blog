@@ -68,6 +68,50 @@ admin のプレビューには**実在する XSS 経路**がある。実測で�
 **ディレクティブ名の完全一致**で引くこと（`script-src` を探して `script-src-attr` を
 巻き込まないこと）。この落とし穴自体もテストにしてある。
 
+### `form-action 'self'` を「冗長だから」と外さないこと
+
+`#preview` は `<form id="post-form">` の**子孫**にある（祖先鎖は
+`article#preview < div#panel-preview < div < form#post-form`）。プレビューに注入された
+`<form>` 自体は HTML 断片パーサが落とすが、**中身の部品は残り、本物のフォームに属する。**
+jsdom で実測した: 注入後にフォームの部品数が 11 → 15 に増え、
+`#evil-submit.form === #post-form` が `true` になる。
+
+つまり `formaction` を持つ submit 部品をプレビュー経由で生やされ、それが押されると
+**`title` / `description` / `pubDate` / `tags` / `draft` / `body`、すなわち未公開の下書き全文**が
+攻撃者の URL へ POST されかける。止めているのは 2 つだけ:
+
+1. **`form-action 'self'`** — 送信先を同一オリジンに限る
+2. `admin/src/editor/app.ts` の送信ハンドラの `event.preventDefault()`
+
+**スクリプトは 1 行も要らない経路**なので、`script-src` 系のディレクティブはどれも効かない。
+`style-src` のような「見た目だけ」の話でもない。**外すと下書きが流出する経路が開く。**
+
+### `/api/*` にはこのポリシーが付いていない（意図。ただし `nosniff` だけは実際に欠ける）
+
+ビヘイビアは 4 本で、ResponseHeadersPolicy は 3 本。**`/api/*` には 1 つも付いていない。**
+落ちるヘッダを 1 件ずつ評価した結果、実害が残るのは **`X-Content-Type-Options: nosniff`
+ちょうど 1 つ**だった（他は個別に無害: CSP と `Referrer-Policy` は JSON 応答が文書として
+描画されないので効く先が無い、HSTS はホスト単位で同ホストの他パスが 1 年分を返す、
+`X-Frame-Options` は JSON を frame しても得るものが無い、`Cache-Control` は
+`CACHING_DISABLED` と Lambda 自身の `no-store` で二重化されている）。
+
+`nosniff` が無いと、`<script src="/api/...">` が実行されるかは
+**「本文が JS として構文解析できるか」だけ**で決まる。実測では塞がっている:
+
+- 本物の `jsonResponse` / `errorResponse` / `AUTH_FAILURE_RESPONSES` の応答 **12 種すべてが
+  `SyntaxError`**（どれも `{"..":".."}` の形なので `:` で落ちる）
+- 無認証で到達できるルートは **`GET /api/health` ちょうど 1 本**（他 7 本は `requiresAuth: true` で、
+  `<script src>` はカスタムヘッダ `x-blog-authorization` を付けられない）
+
+**つまり塞いでいるのは応答本文の形という偶然寄りの性質で、ヘッダではない。**
+将来 `/api/*` がテキストや JSONP ふうの応答を返すようになったら、この前提は消える。
+
+**付けるなら 4 本目を新設すること。既存 3 本の流用は不可** — `customHeadersBehavior` の
+`Cache-Control` は `Override: true` なので、`SecurityHeaders` を流用すると api 自身の
+`no-store` が `no-cache` に**差し替わる**（「保存するな」から「毎回検証」に緩む）。
+`MediaHeaders` / `AssetsHeaders` を流用すると `public, max-age=31536000, immutable` が
+認証済み JSON に付く。
+
 ### `'wasm-unsafe-eval'` を消さないこと
 
 admin のバンドルは **shiki** の oniguruma **WebAssembly** を base64 で JS チャンクに埋め込み
