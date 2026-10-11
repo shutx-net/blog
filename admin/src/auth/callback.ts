@@ -48,7 +48,10 @@ export type CallbackFailureReason =
   | 'unacceptable_token';
 
 export type CallbackResult =
-  /** `/admin/` を普通に開いただけ。**何も起きない。** */
+  /**
+   * `/admin/` を普通に開いただけ。**callback の処理としては何も起きない。**
+   * なお起動時の自動サインインが動くのはこの種別のときだけである（`auto-sign-in.ts`）。
+   */
   | { kind: 'no_callback' }
   | { kind: 'signed_in'; returnTo: string }
   /**

@@ -22,6 +22,9 @@ const one = (type: string): CfnResource => {
 const props = (type: string): Record<string, unknown> => one(type).Properties ?? {};
 
 describe('ユーザプール', () => {
+  const policies = (): Record<string, unknown> =>
+    props('AWS::Cognito::UserPool')['Policies'] as Record<string, unknown>;
+
   it('AWS::Cognito::UserPool がちょうど 1 個', () => {
     template.resourceCountIs('AWS::Cognito::UserPool', 1);
   });
@@ -66,11 +69,56 @@ describe('ユーザプール', () => {
     expect(policy['RequireSymbols']).toBe(true);
   });
 
+  it('**TemporaryPasswordValidityDays が 1**（仮パスワードが生きている窓）', () => {
+    // 上の `MinimumLength` は **下限だけ**の主張なので、この項目は独立して固定する。
+    // `admin-create-user` は `--message-action SUPPRESS` でも仮パスワードを発行し、
+    // ユーザは FORCE_CHANGE_PASSWORD で待つ。**この日数がその口が開いている期間**なので、
+    // 伸ばす変更（`Duration.days(30)` など）は緩みである。
+    expect(
+      (policies()['PasswordPolicy'] as Record<string, unknown>)['TemporaryPasswordValidityDays'],
+    ).toBe(1);
+  });
+
   it('**EnabledMfas が SOFTWARE_TOKEN_MFA ちょうど 1 つ**（SMS を含まない）', () => {
     // SMS を有効にすると aws-cdk-lib が smsRole を自動生成する（IAM ロールが 1 個増える）。
     // TOTP なら追加のロールもコストも発生しない。
     expect(props('AWS::Cognito::UserPool')['EnabledMfas']).toEqual(['SOFTWARE_TOKEN_MFA']);
     expect(props('AWS::Cognito::UserPool')['MfaConfiguration']).toBe('OPTIONAL');
+  });
+
+  it('**AccountRecoverySetting が verified_email ただ 1 つ**（電話番号を含まない）', () => {
+    // **`accountRecovery:` の 1 行を消すと電話番号が第 1 の復旧手段になる。**
+    // aws-cdk-lib 2.267.0 は
+    //   const accountRecovery = props.accountRecovery ?? AccountRecovery.PHONE_WITHOUT_MFA_AND_EMAIL
+    // で、既定は `[{verified_phone_number,1},{verified_email,2}]` を描画する（実測）。
+    // そうなると **SIM スワップと SMS 傍受が blog-content への書き込み全権への経路**になる。
+    // `EnabledMfas` から SMS を外してあっても復旧経路は別物なので、ここで独立に主張する。
+    const pool = props('AWS::Cognito::UserPool');
+    expect(pool['AccountRecoverySetting']).toEqual({
+      RecoveryMechanisms: [{ Name: 'verified_email', Priority: 1 }],
+    });
+    // 完全一致とは別に名指しで禁止する（`AllowedOAuthFlows` の implicit と同じ形）。
+    expect(JSON.stringify(pool['AccountRecoverySetting'])).not.toContain('phone');
+  });
+
+  it.each(['LambdaConfig', 'DeviceConfiguration'])('**%s を持ち込んでいない**', (key) => {
+    // `LambdaConfig` = Cognito トリガ。pre-token-generation で claim を注入すると
+    // `cognito:username` の完全一致（api/src/auth/cognito.ts）を欺ける経路になる。
+    // **同一スタックに Lambda を作る形なら下の「AWS::Lambda::Function が 1 個」が
+    // 捕まえるが、既存の ARN を参照する形は捕まえない。** だからキー名で主張する。
+    //
+    // `DeviceConfiguration` = 記憶デバイス。MFA を `ON` にしたあと
+    // 「このデバイスを記憶する」で第 2 要素を省略させるつまみになる。
+    expect(props('AWS::Cognito::UserPool')[key]).toBeUndefined();
+  });
+
+  it('**Policies.SignInPolicy を持ち込んでいない**（第 1 要素はパスワードだけ）', () => {
+    // `AllowedFirstAuthFactors` に `EMAIL_OTP` / `WEB_AUTHN` / `SMS_OTP` を足すと
+    // **パスワードを知らなくても第 1 要素を満たせる経路**が増える。未描画 = AWS 側の既定。
+    // **`Policies` の中にネストしているので、最上位キーの走査には出てこない。**
+    const all = policies();
+    expect(all, 'Policies ごと消えるとパスワードポリシーの主張も空振りする').toBeDefined();
+    expect(all['SignInPolicy']).toBeUndefined();
   });
 
   it('**AliasAttributes も UsernameAttributes も設定されていない**', () => {

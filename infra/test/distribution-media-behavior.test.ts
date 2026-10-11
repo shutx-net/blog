@@ -13,6 +13,8 @@ interface CacheBehavior {
   TargetOriginId?: string;
   ViewerProtocolPolicy?: string;
   FunctionAssociations?: unknown;
+  TrustedKeyGroups?: unknown;
+  TrustedSigners?: unknown;
 }
 
 interface DistributionConfig {
@@ -94,6 +96,25 @@ describe('/media/* の追加ビヘイビア', () => {
     // URI 書き換え Function は拡張子の無いパスに /index.html を足す。
     // メディアのキーに適用してはいけない。
     expect(mediaBehavior().FunctionAssociations).toBeUndefined();
+  });
+
+  it('**/media/* に TrustedKeyGroups も TrustedSigners も無い**（無認証で配信するのが意図）', () => {
+    // **「無いこと」を見落としではなく選択として固定する主張である。**
+    //
+    // signed URL / signed cookie（`TrustedKeyGroups` が新方式、`TrustedSigners` が
+    // CloudFront キーペアの旧方式）を付けると、閲覧者は署名が無いと 403 になる。
+    // 付けていないので **`/media/*` は URL を知る者が誰でも読める** — 下書きに貼った画像も
+    // 同じで、秘匿はキーの推測困難性（`api/src/media/presign.ts` の乱数 24 文字 hex =
+    // 96 ビット）**だけ**に乗っている（`infra/lib/response-headers.ts` の
+    // `MEDIA_CACHE_CONTROL` の JSDoc と `AGENTS.md`）。
+    //
+    // 逆向きに読むと: ここが赤くなったら「署名を要求する配信に変えた」という意図的な変更の
+    // はずで、そのとき admin のエディタが挿す `![alt](/media/...)` は署名を持たないので
+    // **本文の画像が全部 403 になる**。片方だけ直した状態で本番に出ないように、両方のキーを
+    // 名指しで固定しておく。
+    const behavior = mediaBehavior();
+    expect(behavior.TrustedKeyGroups).toBeUndefined();
+    expect(behavior.TrustedSigners).toBeUndefined();
   });
 });
 

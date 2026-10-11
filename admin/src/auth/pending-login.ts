@@ -50,8 +50,11 @@ const ADMIN_PATH = '/admin/';
  * `pathname + search` だけを取り、`/admin/` 配下でなければ `/admin/` に落とす。
  * オリジンは必ず捨てるので、絶対 URL を渡されても外部には飛ばない。
  */
-const normalizeReturnTo = (candidate: string | undefined): string => {
-  if (candidate === undefined || candidate.length === 0) return ADMIN_PATH;
+const normalizeReturnTo = (candidate: unknown): string => {
+  // **`string` 以外も投げずに受ける。** 引数が `unknown` なのは、正規化が全入力に対して
+  // 全域であるべきだからで、**下の型ガードを通らない値がここに来ないことには頼らない。**
+  // 読めないものは `/admin/` に倒す。
+  if (typeof candidate !== 'string' || candidate.length === 0) return ADMIN_PATH;
   try {
     const url = new URL(candidate, 'https://placeholder.invalid/');
     const path = `${url.pathname}${url.search}`;
@@ -117,7 +120,15 @@ const isPendingLogin = (value: unknown): value is PendingLogin =>
   (value as PendingLogin).state.length > 0 &&
   typeof (value as PendingLogin).verifier === 'string' &&
   (value as PendingLogin).verifier.length > 0 &&
-  typeof (value as PendingLogin).createdAt === 'number';
+  typeof (value as PendingLogin).createdAt === 'number' &&
+  // **`NaN` を弾く。** `now() - NaN > TTL` は常に false なので、無いと期限切れを
+  // 検出できないレコードが作れる（`isStoredSession` は `Number.isFinite` で揃えてある）。
+  // 実際の保存先（`storage/session-store.ts`）は JSON 往復で `NaN` を `null` に潰すので
+  // その経路では到達しないが、**到達しない理由に頼らず型として閉じる。**
+  Number.isFinite((value as PendingLogin).createdAt) &&
+  // **4 フィールド全部を検査する。** `returnTo` を落とすと壊れたレコードが正規化まで
+  // 届く（`test/unit/auth-pending-login.test.ts`）。
+  typeof (value as PendingLogin).returnTo === 'string';
 
 /**
  * レコードを**単回使用**で取り出す。

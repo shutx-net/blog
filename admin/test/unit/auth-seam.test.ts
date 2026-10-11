@@ -282,6 +282,26 @@ const SEAM_RULES: SeamRule[] = [
     violating: "headers['Authorization'] = 'Bearer ' + token;",
     clean: "body.set('grant_type', 'authorization_code');",
   },
+  {
+    name: 'ブラウザの遷移と履歴',
+    // **これは綴りの規則であって「遷移の禁止」ではない。** 見ているのは `location` /
+    // `history` / `assign(` の 3 綴りだけなので、`window.open(` / `form.submit()` /
+    // `<a>` のクリック / `<meta http-equiv="refresh">` は**捕まえない。** 言えるのは
+    // 「今日存在する綴りについては main.ts 1 本に閉じている」までで、
+    // 「editor/ も auth/ も遷移する手段を持たない」は**この走査の結論ではない。**
+    // それでも「未認証の状態を人間が観測できる」と「編集中・描画中に書きかけが飛ばない」の
+    // 裏づけにはなる（注入した偽 `redirect` が呼ばれないことの、実装側からの補強）。
+    // **副作用: 走査は src 配下の .ts の全行が対象なのでコメントも見る。** ラテン文字で
+    // 綴りを書くだけで赤くなる（実際に app.ts のコメントで踏んだ）ので、src 側では
+    // 日本語に言い換えること。
+    // `auth-refresh.test.ts` が refresh.ts 1 本に掛けている綴り走査の一般化であり、
+    // **あちらは消さない** — `redirect` の綴りも見ているので、この規則の上位集合ではない。
+    pattern: /\b(?:location|history)\b|\bassign\s*\(/,
+    allows: (relative) => relative === 'main.ts',
+    mustDetect: ['main.ts'],
+    violating: 'location.assign(url);',
+    clean: 'deps.redirect(url);',
+  },
 ];
 
 describe('**走査規則そのものが機能する**', () => {
@@ -379,6 +399,13 @@ describe('**認証の知識が src/auth/ の外に漏れていない**', () => {
     expect(detectedIn(rule as SeamRule)).toEqual(['storage/session-store.ts']);
   });
 
+  it('**ブラウザの遷移と履歴に触るファイルがちょうど 1 本（main.ts）**', () => {
+    // 上の offenders は「許可された場所以外に無い」を見ている。ここは逆向きに
+    // 「触っているのが main.ts ちょうど 1 本」を見る（自動サインインを足しても変わらない）。
+    const rule = SEAM_RULES.find((candidate) => candidate.name === 'ブラウザの遷移と履歴');
+    expect(detectedIn(rule as SeamRule)).toEqual(['main.ts']);
+  });
+
   it.each(['editor/', 'api/', 'preview/', 'storage/'])(
     'src/%s の下に Cognito の綴りが 1 つも無い',
     (directory) => {
@@ -398,7 +425,15 @@ describe('**認証の知識が src/auth/ の外に漏れていない**', () => {
 describe('**main.ts に判断を置かない**', () => {
   const source = (): string => readFileSync(`${SRC_DIR}main.ts`, 'utf8');
 
-  /** コメントと import 文を落とした「実際に走るコード」だけを見る。 */
+  /**
+   * **コメント行だけを落とした**「実際に走るコード」。
+   *
+   * import 文は落としていない。落とすと「判断を置かない」の主張がその分弱くなるので、
+   * 落とさないままにしてある。**今日は無症状だが、`main.ts:1` は `import './styles.css';`
+   * なので、誰かが vite のクエリ付き import（`?inline` / `?raw`）を書いた日に下の
+   * 「三項演算子…が現れない」が存在しない三項演算子を理由に赤くなる。** そうなったら
+   * import 行を一律に除くのではなく、除外をその指定子だけに絞ること。
+   */
   const code = (): string =>
     source()
       .split('\n')
@@ -433,7 +468,7 @@ describe('**main.ts に判断を置かない**', () => {
     expect(source()).not.toContain('createStubAuthTransport');
   });
 
-  it.each(['completeCallback', 'beginSignIn', 'signOut', 'createSessionStore'])(
+  it.each(['completeCallback', 'beginSignIn', 'signOut', 'createSessionStore', 'startAutoSignIn'])(
     '%s を繋いでいる',
     (name) => {
       expect(source()).toContain(name);
@@ -442,7 +477,49 @@ describe('**main.ts に判断を置かない**', () => {
 
   it('**main.ts だけがブラウザのアドレス情報と履歴 API に触る**', () => {
     // 遷移と URL の書き換えはここに閉じている。jsdom で検証できない唯一の部分。
+    // **ここが見ているのは存在だけ。** 「だけ」の部分（排他）は上の走査規則
+    // 『ブラウザの遷移と履歴』が見ている。
     expect(source()).toMatch(/\blocation\b/);
     expect(source()).toMatch(/replaceState/);
+  });
+
+  /** 順序の主張が空振りしていないことの確認用。**3 つとも実在しなければならない。** */
+  const ORDER_NEEDLES = ['await completeCallback(', 'await startAutoSignIn(', 'createApp({'];
+
+  it('順序を主張する 3 つの綴りが実在する（空振りしていない）', () => {
+    // indexOf が -1 同士だと「順序が正しい」ように見えてしまう組み合わせがある。
+    const text = code();
+    for (const needle of ORDER_NEEDLES) expect(text.indexOf(needle)).not.toBe(-1);
+  });
+
+  it('**createApp より先に startAutoSignIn を await する**（UI を描く前に判定する）', () => {
+    // main.ts はブラウザ無しでは実行できないので、**「UI を描く前に判定する」を
+    // 機械化する手段はテキストの順序だけ**である。先に createApp を呼ぶと、
+    // 未認証の画面を描いてから遷移することになる。
+    const text = code();
+    expect(text.indexOf('await startAutoSignIn(')).toBeGreaterThan(
+      text.indexOf('await completeCallback('),
+    );
+    expect(text.indexOf('await startAutoSignIn(')).toBeLessThan(text.indexOf('createApp({'));
+  });
+
+  /** `createApp({ ... })` に渡している引数の本文。閉じ括弧は列 0 の `})`。 */
+  const createAppArgs = (text: string): string | undefined =>
+    /createApp\(\{([\s\S]*?)\n\}\)/.exec(text)?.[1];
+
+  it('createApp の引数を切り出す規則そのものが機能する', () => {
+    expect(createAppArgs('createApp({\n  root,\n  autoSignIn,\n});')).toMatch(/\bautoSignIn\b/);
+    expect(createAppArgs('createApp({\n  root,\n});')).not.toMatch(/\bautoSignIn\b/);
+    expect(createAppArgs('const x = 1;')).toBeUndefined();
+  });
+
+  it('**自動サインインの判定結果を createApp に渡している**（繋ぎ忘れの検出）', () => {
+    // 判定だけして**結果を捨てる**と、遷移中の読み込みでも app.ts は未認証向けの文を出す。
+    //
+    // **実測: `autoSignIn,` の 1 行を落としても他のテストは 1 件も落ちず、tsc も通る**
+    // （`AppDeps.autoSignIn` は省略可能なので、渡さない呼び出しは正当である）。落ちるのは
+    // `npm run lint` だけで、しかも「束縛が未使用になった」からにすぎず、
+    // **`createApp({ ...base, autoSignIn })` のような形に変われば黙る。**
+    expect(createAppArgs(source())).toMatch(/\bautoSignIn\b/);
   });
 });

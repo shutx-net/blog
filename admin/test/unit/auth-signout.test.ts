@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { utf8Bytes } from '../../src/api/sha256.ts';
+import { AUTO_SIGN_IN_SUPPRESSED_KEY } from '../../src/auth/auto-sign-in.ts';
 import { base64UrlEncode } from '../../src/auth/base64url.ts';
 import { AUTH_CONFIG } from '../../src/auth/config.ts';
 import { PENDING_LOGIN_KEY, beginPendingLogin } from '../../src/auth/pending-login.ts';
@@ -51,7 +52,7 @@ interface Scene {
   revokeCalls: Array<{ url: string; body: URLSearchParams }>;
   redirects: string[];
   /** `redirect` が呼ばれた瞬間の store の中身。**順序を観測で固定するための窓。** */
-  seenAtRedirect: { session: unknown; pending: unknown; draft: unknown } | undefined;
+  seenAtRedirect: { session: unknown; pending: unknown; draft: unknown; suppressed: unknown } | undefined;
   run(): Promise<void>;
 }
 
@@ -86,6 +87,7 @@ const scene = (options: { refreshToken?: string; revoke?: () => Response } = {})
             session: store.get(SESSION_KEY),
             pending: store.get(PENDING_LOGIN_KEY),
             draft: store.get('draft'),
+            suppressed: store.get(AUTO_SIGN_IN_SUPPRESSED_KEY),
           };
         },
         fetchImpl: async (input, init) => {
@@ -155,10 +157,27 @@ describe('**順序: 消去 -> リダイレクト**', () => {
     expect(s.seenAtRedirect?.draft).toEqual({ title: '書きかけ', body: '本文' });
   });
 
-  it('サインアウト後に残るキーが下書きと無関係のものだけである', async () => {
+  it('**redirect の時点で自動サインインの抑止印が既に store に入っている**', async () => {
+    // **印が無いまま `/admin/` に戻ると、起動判定がそれを初回訪問と読んでログイン画面へ
+    // 送る = サインアウトできない。** 遷移のあとに置いた処理は、遷移が成立した時点で
+    // 以降の task が走らないので取りこぼす。上の 3 本と同じ観測窓で固定する。
     const s = scene();
     await s.run();
-    expect([...s.entries.keys()].sort()).toEqual(['blog.admin.draft', 'blog.admin.unrelated']);
+
+    expect(s.redirects).toHaveLength(1);
+    expect(s.seenAtRedirect?.suppressed).toBe(true);
+  });
+
+  it('サインアウト後に残る実キーが 3 つちょうど（下書き・無関係のもの・抑止印）である', async () => {
+    // **完全一致のまま。** セッションと pending が残る事故・抑止印が書かれない事故・
+    // 余計なキーが増える事故を同時に捕まえる。
+    const s = scene();
+    await s.run();
+    expect([...s.entries.keys()].sort()).toEqual([
+      'blog.admin.auto-sign-in-suppressed',
+      'blog.admin.draft',
+      'blog.admin.unrelated',
+    ]);
   });
 });
 

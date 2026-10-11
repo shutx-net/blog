@@ -249,11 +249,61 @@ describe('壊れたレコード', () => {
     ['verifier が無い', { state: 's'.repeat(43), createdAt: AT, returnTo: '/admin/' }],
     ['createdAt が数値でない', { state: 's', verifier: 'v', createdAt: 'x', returnTo: '/admin/' }],
     ['空オブジェクト', {}],
+    // `returnTo: null` は型ガードが `returnTo` を見ていなかった頃、`normalizeReturnTo` が
+    // `candidate.length` を try の外で読んで **TypeError で reject していた。**
+    ['returnTo が null', { state: 's'.repeat(43), verifier: 'v'.repeat(43), createdAt: AT, returnTo: null }],
+    ['returnTo が無い', { state: 's'.repeat(43), verifier: 'v'.repeat(43), createdAt: AT }],
+    // **`createdAt: NaN` をここに置かないこと。** `store.set` は `JSON.stringify` を通すので
+    // `NaN` は `null` に潰れ、**`Number.isFinite` の有無に関わらず緑**になって何も固定しない
+    // （実測）。JSON を経由しない store を刺す専用のテストが下にある。
   ])('%s は no_pending_login（投げない）', (_label, record) => {
     const store = newStore();
     store.set(PENDING_LOGIN_KEY, record);
     expect(() => consumePendingLogin(store, 's'.repeat(43), clock(AT))).not.toThrow();
     expect(consumePendingLogin(store, 's'.repeat(43), clock(AT))).toEqual({
+      ok: false,
+      reason: 'no_pending_login',
+    });
+  });
+
+  it('**`returnTo: null` のレコードで投げない**（型ガードが 4 フィールド全部を見ている）', () => {
+    // 回帰の名指し。上の it.each に畳まれているが、**この 1 件だけは独立に残す** —
+    // `isPendingLogin` から `returnTo` の行を消すと、ここが
+    // `TypeError: Cannot read properties of null (reading 'length')` で落ちる。
+    const store = newStore();
+    store.set(PENDING_LOGIN_KEY, {
+      state: 's'.repeat(43),
+      verifier: 'v'.repeat(43),
+      createdAt: AT,
+      returnTo: null,
+    });
+
+    expect(() => consumePendingLogin(store, 's'.repeat(43), clock(AT))).not.toThrow();
+  });
+
+  it('**`createdAt: NaN` が TTL をすり抜けない**（JSON を経由しない store）', () => {
+    // `NaN` との比較は常に false なので、弾かないと「期限切れを永久に検出できない
+    // レコード」になる（state が一致すれば成功として消費される）。
+    //
+    // **`createSessionStore` 経由では試せない。** あちらは `JSON.stringify` を通すので
+    // `NaN` が `null` になり、別の理由で弾かれて**変異させても緑のまま**になる。
+    // `SessionStore` は interface で、JSON 往復を契約に含めていない — 値をそのまま
+    // 保持する実装に差し替えた日に効くのがこのガードなので、その形で駆動する。
+    const record: unknown = {
+      state: 's'.repeat(43),
+      verifier: 'v'.repeat(43),
+      createdAt: NaN,
+      returnTo: '/admin/',
+    };
+    const rawStore: SessionStore = {
+      get: <T>() => record as T,
+      set: () => {},
+      remove: () => {},
+    };
+
+    // 十分に未来の時計でも expired にすらならない（NaN との比較が false）ので、
+    // **型ガードで弾かれていること**が唯一の防御になる。
+    expect(consumePendingLogin(rawStore, 's'.repeat(43), clock(AT + PENDING_LOGIN_TTL_MS * 10))).toEqual({
       ok: false,
       reason: 'no_pending_login',
     });

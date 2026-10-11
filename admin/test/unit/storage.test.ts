@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import { AUTO_SIGN_IN_SUPPRESSED_KEY } from '../../src/auth/auto-sign-in.ts';
+import { PENDING_LOGIN_KEY } from '../../src/auth/pending-login.ts';
+import { SESSION_KEY } from '../../src/auth/session-state.ts';
+import { DRAFT_KEY } from '../../src/editor/draft-persistence.ts';
 import { STORAGE_NAMESPACE, createSessionStore } from '../../src/storage/session-store.ts';
 import type { WebStorageLike } from '../../src/storage/session-store.ts';
 
@@ -59,6 +63,26 @@ describe('名前空間つきのキー', () => {
     store.remove('a');
     expect(store.get('a')).toBeUndefined();
     expect(store.get('b')).toEqual({ v: 'second' });
+  });
+});
+
+describe('**用途ごとのキーが互いに衝突しない**', () => {
+  /**
+   * store に入る 4 つの用途。**この store は名前空間を足すだけで衝突を検出しない**ので、
+   * 衝突すると `auth/sign-out.ts` が抑止印を書いた瞬間に、同じ実キーの下書きか
+   * セッションを**黙って踏み潰す**。定数は 4 つのモジュールに分かれて住んでいるので、
+   * 非衝突を主張できる場所は実キーを知っているこの層しかない。
+   */
+  const KEYS = [SESSION_KEY, PENDING_LOGIN_KEY, DRAFT_KEY, AUTO_SIGN_IN_SUPPRESSED_KEY];
+
+  it('4 つの用途のキーが全部別で、実キーも 4 つの綴りと完全一致する', () => {
+    expect(new Set(KEYS).size).toBe(4);
+    expect(KEYS.map((key) => `${STORAGE_NAMESPACE}${key}`).sort()).toEqual([
+      'blog.admin.auto-sign-in-suppressed',
+      'blog.admin.draft',
+      'blog.admin.pending-login',
+      'blog.admin.session',
+    ]);
   });
 });
 

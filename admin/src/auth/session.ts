@@ -183,6 +183,14 @@ export { signOut } from './sign-out.ts';
 export type { SignOutDeps } from './sign-out.ts';
 
 /**
+ * 起動時の自動サインインの判定と駆動。実装は `auto-sign-in.ts`。
+ * **名前を集めるだけで `session.ts` 自身は呼ばない**（向きは
+ * `test/unit/auth-auto-sign-in.test.ts` の「循環 import を作らない」が固定している）。
+ */
+export { startAutoSignIn } from './auto-sign-in.ts';
+export type { AutoSignInDecision, StartAutoSignInDeps } from './auto-sign-in.ts';
+
+/**
  * 輸送の契約。**api/src/auth/transport.ts が唯一の出所。**
  * ここで再 export しておくと、綴りを書き写す経路が構造的に無くなる。
  */
