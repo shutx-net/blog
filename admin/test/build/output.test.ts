@@ -176,6 +176,57 @@ describe('生成物の衛生', () => {
     expect(indexHtml()).not.toMatch(/(?:href|src)\s*=\s*["']\s*javascript:/i);
   });
 
+  /**
+   * **ソースマップを 2 本のアサーションで固定する。**
+   *
+   * `deploy.yml` は `admin/dist` を `s3 sync --delete` で**中身ごと全部上げる**（除外
+   * パターンが無い）。つまり dist に出たものはそのまま匿名で取得できる。
+   *
+   * vite の `build.sourcemap` には 3 つの値があり、**出るものが違う**:
+   *
+   * | 値 | `*.map` ファイル | `sourceMappingURL` 注記 |
+   * | --- | --- | --- |
+   * | `true` | 出る | 出る |
+   * | `'hidden'` | **出る** | 出ない |
+   * | `'inline'` | 出ない | **出る**（data: URI に全文が載る） |
+   *
+   * **どちらか片方のアサーションでは 3 つを覆えない。** だから 2 本に分けてある。
+   * 実測（3 値それぞれで実際にビルドして数えた）:
+   *
+   * - `'inline'` … `*.map` は 0 件なので **注記の側だけ**が赤くなる
+   * - `'hidden'` … 注記はどの JS にも付かないので **`*.map` の側だけ**が確実に赤くなる
+   * - `true` … 両方が赤くなる（`*.map` 310 件 / 注記 311 件）
+   *
+   * **`'hidden'` でいま注記の側も赤くなるが、それに頼ってはいけない。** 赤くなるのは
+   * 吐かれた `*.map` の `sourcesContent` に上流パッケージ（entities）自身の
+   * `//# sourceMappingURL=decode.js.map` が**文字列として埋まっている**からで、
+   * 配信される JS に注記が付いたからではない（実測: `'hidden'` で注記を含むのは
+   * `assets/*.js.map` の 1 件だけ、JS は 0 件）。偶然の一致なので、
+   * **`'hidden'` を捕まえるのは `*.map` の側である**と考えること。
+   */
+  const distFiles = (): string[] => {
+    const files = allFiles(DIST);
+    // 非空ガード。空だと下の filter が 0 周で緑になる。
+    expect(files.length, 'dist の走査が空振りしている').toBeGreaterThan(0);
+    return files;
+  };
+
+  it('**sourceMappingURL の注記が dist に 1 件も無い**', () => {
+    // **`'inline'` を捕まえるのはこちら。** `*.map` が 1 つも出ないまま JS の末尾に
+    // `//# sourceMappingURL=data:...base64,...` としてソース全文が載るので、
+    // ファイル名の走査では捕まらない。
+    const annotated = distFiles().filter((relative) =>
+      readFileSync(DIST + relative, 'utf8').includes('sourceMappingURL'),
+    );
+    expect(annotated).toEqual([]);
+  });
+
+  it('**ソースマップファイル（*.map）が dist に 1 件も無い**', () => {
+    // **`'hidden'` を捕まえるのはこちら**（上の JSDoc の最後の段）。ブラウザは読まないが、
+    // dist に残った `*.map` は誰でも取得できる。
+    expect(distFiles().filter((relative) => relative.endsWith('.map'))).toEqual([]);
+  });
+
   it('index.html に noindex が入っている', () => {
     // 認証が入るまで /admin/ の外殻は公開状態で見える。
     // robots.txt への Disallow は site 側への hand-off。
