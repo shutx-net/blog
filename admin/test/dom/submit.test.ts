@@ -246,6 +246,38 @@ describe('応答の読み替え', () => {
     });
   });
 
+  it('**プレビューに注入された id="problems" に乗っ取られない**（DOM clobbering）', async () => {
+    // プレビューは生の markup をそのまま `#preview` に入れる設計なので、著者が
+    // `id="problems"` を含む本文を貼ると**文書順で後ろにあるこの id が乗っ取れる**
+    // （XSS にはならないが、API の指摘が隠れたタブに消える。全文は app.ts の problemList）。
+    const root = mount();
+    const fetchSpy = queueFetch([json(400, { error: 'invalid_post', field: 'slug' })]);
+    start(root, fetchSpy.impl);
+
+    fillValid(root);
+
+    // **プレビューが落ち着いてから生やす。** `renderPreview` は打鍵ごとに
+    // `#preview` を書き換えるので、先に入れると消される。
+    const preview = root.querySelector('#preview');
+    if (preview === null) throw new Error('#preview が無い');
+    await vi.waitFor(() => {
+      expect(preview.innerHTML).toContain('preview');
+    });
+    preview.innerHTML = '<ul id="problems" data-decoy="1"></ul>';
+
+    submit(root);
+
+    await vi.waitFor(() => {
+      expect(statusText(root)).not.toBe('送信中…');
+    });
+
+    // **本物に入り、偽物は空のまま。**
+    const decoy = root.querySelector('#preview [data-decoy="1"]');
+    expect(decoy?.children.length ?? -1).toBe(0);
+    const real = root.querySelector('#problems:not([data-decoy]) li[data-field="slug"]');
+    expect(real).not.toBeNull();
+  });
+
   it('送信が終われば再び送信できる', async () => {
     const root = mount();
     const fetchSpy = queueFetch([json(503, { error: 'auth_not_configured' })]);
