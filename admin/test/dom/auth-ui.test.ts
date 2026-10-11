@@ -106,9 +106,13 @@ describe('**未認証で起動したとき**', () => {
     expect(statusText(root)).not.toContain('deny-all');
   });
 
-  it('**起動時に redirect が 1 度も呼ばれない**', () => {
-    // 自動化すると (a) 設定ミスでリダイレクトループになり、
-    // (b) 未認証状態が観測できなくなり、(c) 開いただけで書きかけが飛ぶ。
+  it('**createApp は起動時に遷移を起こさない**（遷移の判断は auth/auto-sign-in.ts にあり、main.ts から 1 回だけ呼ばれる）', () => {
+    // (a) ループ (b) 未認証状態の観測 (c) 書きかけの保全 は
+    // test/unit/auth-auto-sign-in.test.ts が固定している（抑止印の不変条件 /
+    // skip:suppressed・skip:callback・skip:insecure_origin /
+    // 「signIn が呼ばれた時点で下書きは残っている」）。
+    // **createApp 自身が遷移を持たないことは今も要件である**（下の
+    // 「autoSignIn を渡しても onSignIn を呼ばない」が新しい入力についても同じことを見る）。
     const redirects: string[] = [];
     const root = mount();
     createApp({
@@ -122,6 +126,96 @@ describe('**未認証で起動したとき**', () => {
     });
 
     expect(redirects).toEqual([]);
+  });
+
+  it('**autoSignIn を渡しても createApp は onSignIn を呼ばない**', () => {
+    // 新しい入力が遷移の経路を作っていないことの固定。`createApp` が受け取るのは
+    // **既に決まった結果**であって引き金ではない（綴りの側は auth-seam.test.ts の走査規則 5）。
+    const redirects: string[] = [];
+    const root = mount();
+    createApp({
+      root,
+      auth: fakeAuth(() => false),
+      renderPreview: noPreview,
+      now: NOW,
+      autoSignIn: { kind: 'sign_in' },
+      onSignIn: () => {
+        redirects.push('should not happen');
+      },
+    });
+
+    expect(redirects).toEqual([]);
+  });
+
+  it('**autoSignIn が sign_in なら状態表示が「移動する」旨になる**', () => {
+    // この文は実際に数百ミリ秒見える（理由と実測は src/main.ts の JSDoc）。
+    //
+    // **2 つの文はどちらも「ログイン」を含む**ので `toContain('ログイン')` では
+    // 区別できない。「書くことはできる」の有無で見る。
+    const root = mount();
+    createApp({
+      root,
+      auth: fakeAuth(() => false),
+      renderPreview: noPreview,
+      now: NOW,
+      autoSignIn: { kind: 'sign_in' },
+    });
+
+    expect(statusText(root)).toContain('移動する');
+    expect(statusText(root)).not.toContain('書くことはできる');
+  });
+
+  it('**autoSignIn が skip なら従来の未認証メッセージのまま**', () => {
+    // 抑止された読み込み（サインアウト直後がこれ）では遷移が起きないので「移動する」と
+    // 言ってはいけない。見ているのは文言の出し分けだけ（判定は auth-auto-sign-in.test.ts）。
+    const root = mount();
+    createApp({
+      root,
+      auth: fakeAuth(() => false),
+      renderPreview: noPreview,
+      now: NOW,
+      autoSignIn: { kind: 'skip', reason: 'suppressed' },
+    });
+
+    expect(statusText(root)).toContain('書くことはできる');
+    expect(statusText(root)).not.toContain('移動する');
+  });
+
+  it('**sign_in のときは #signin を disabled にする**（押せる窓を閉じる）', () => {
+    // 押せる窓が残っていると `pending-login` の単一スロットが新しい state で上書きされ、
+    // 戻りが `state_mismatch` になる（全文は src/editor/app.ts の signinButton.disabled）。
+    const root = mount();
+    createApp({
+      root,
+      auth: fakeAuth(() => false),
+      renderPreview: noPreview,
+      now: NOW,
+      autoSignIn: { kind: 'sign_in' },
+    });
+
+    expect(el(root, '#signin').hidden).toBe(false);
+    expect(el<HTMLButtonElement>(root, '#signin').disabled).toBe(true);
+  });
+
+  it.each([
+    ['skip を渡したとき', { kind: 'skip', reason: 'suppressed' } as const],
+    ['sign_in_failed を渡したとき', { kind: 'skip', reason: 'sign_in_failed' } as const],
+  ])('**%s は #signin が押せるままである**', (_label, autoSignIn) => {
+    // **抑止中の唯一の入口を塞がないこと。** サインアウト直後（suppressed）と
+    // 遷移を予約できなかったとき（sign_in_failed）は遷移が起きないので、
+    // ここで disabled にすると**ログインする手段が無くなる。**
+    const root = mount();
+    createApp({ root, auth: fakeAuth(() => false), renderPreview: noPreview, now: NOW, autoSignIn });
+
+    expect(el<HTMLButtonElement>(root, '#signin').disabled).toBe(false);
+  });
+
+  it('**autoSignIn を渡さない呼び出しでは #signin が押せるままである**', () => {
+    // 既存の DOM テスト 36 箇所がこの形。省略時の既定が変わっていないことの固定。
+    const root = mount();
+    createApp({ root, auth: fakeAuth(() => false), renderPreview: noPreview, now: NOW });
+
+    expect(el<HTMLButtonElement>(root, '#signin').disabled).toBe(false);
   });
 
   it('**未認証でも編集とプレビューは動く**', async () => {

@@ -245,7 +245,10 @@ describe('beginSignIn', () => {
 });
 
 describe('completeCallback', () => {
-  it('code も error も無ければ no_callback（**起動しただけでは何も起きない**）', async () => {
+  // 見ているのは「認可の往復でなければ callback 処理は何もしない」だけ。**起動そのものは
+  // 「何も起きない」ではない** — その `no_callback` が自動サインインの前提条件であり、
+  // セッションが無ければ `auth/auto-sign-in.ts` がログイン画面へ送る。
+  it('code も error も無ければ no_callback（**callback 処理そのものは何もしない**）', async () => {
     await expect(
       completeCallback({
         search: '',

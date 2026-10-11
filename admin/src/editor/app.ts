@@ -8,6 +8,7 @@ import {
   presignMedia,
   uploadToPresignedUrl,
 } from '../api/upload.ts';
+import type { AutoSignInDecision } from '../auth/auto-sign-in.ts';
 import type { CallbackResult } from '../auth/callback.ts';
 import type { AuthTransport } from '../auth/session.ts';
 import type { SessionStore } from '../storage/session-store.ts';
@@ -72,6 +73,17 @@ export interface AppDeps {
    * DOM テストから駆動できる。
    */
   callback?: CallbackResult;
+  /**
+   * 起動時の自動サインインの判定結果。
+   *
+   * **省略可能**で、渡さない呼び出し（既存の全 DOM テストがこれ）は何も変わらない。
+   *
+   * **`createApp` はこれを受けても遷移しない。** 全画面遷移を持っているのは `main.ts` で、
+   * ここに来るのは**既に決まった結果**であって、判断でも引き金でもない。機械化されている
+   * のは**綴り**だけで、その限界と「このコメント自体が走査対象である」という副作用は
+   * `test/unit/auth-seam.test.ts` の走査規則『ブラウザの遷移と履歴』に書いてある。
+   */
+  autoSignIn?: AutoSignInDecision;
 }
 
 /**
@@ -204,6 +216,23 @@ const describeFailure = (error: unknown): string => {
 const SIGNED_OUT_MESSAGE = 'ログインしていない。書くことはできるが、送信するにはログインが要る';
 
 /**
+ * 自動サインインが始まった読み込みの文言。
+ *
+ * **この文は実際に数百ミリ秒見える**（理由と実測は `main.ts` の JSDoc）。だから
+ * 「遷移するから画面は見えない」は偽であり、**見える文を正しくすること自体が目的**である。
+ *
+ * **`SIGNED_OUT_MESSAGE` を出せない理由。** あちらは「書くことはできる」と言うが、
+ * この読み込みはこれから捨てられるので、書いた内容は画面に残らない。
+ * 下書き（`draft-persistence.ts`）は store に残るので失われはしないが、
+ * **いま書けと誘う文は嘘に近い。**
+ *
+ * **逆に「書けない」とも書かない。** 遷移は予約が成立しなければ起きない
+ * （`signIn` が投げれば `skip:sign_in_failed` になり、この文はそもそも出ない）し、
+ * 出たあとに遷移が成立しなければ**エディタはそのまま使える**。
+ */
+const SIGNING_IN_MESSAGE = 'ログイン画面に移動する…';
+
+/**
  * 起動時の callback 処理の結果を文にする。
  *
  * **`description` は認可サーバが返す任意文字列である。** ここで作った文字列は
@@ -290,6 +319,13 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
   const pubDateInput = deps.root.querySelector<HTMLInputElement>('#pubDate');
   const submitButton = deps.root.querySelector<HTMLButtonElement>('#submit');
   const newPostButton = deps.root.querySelector<HTMLButtonElement>('#new-post');
+  // **`#problems` もここで 1 度だけ引く。** プレビューは生の markup をそのまま `#preview`
+  // に入れる設計なので、`id="problems"` を含む本文を貼られると、**文書順で `#preview` より
+  // 後ろにあるこの id だけが乗っ取れる**（実行時に id で引き直す箇所を全件数えた結果、
+  // 該当するのはこれ 1 つ）。乗っ取られても入るのは `textContent` なので XSS にはならないが、
+  // API の指摘が隠れたタブの中に消える。**bind 時の参照を持てば、あとから生えた要素は
+  // 勝てない。**
+  const problemList = deps.root.querySelector<HTMLElement>('#problems');
   if (form === null) throw new Error('admin app: #post-form が見つからない');
   if (imageInput === null) throw new Error('admin app: #image が見つからない');
   if (signinButton === null) throw new Error('admin app: #signin が見つからない');
@@ -300,6 +336,7 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
   if (pubDateInput === null) throw new Error('admin app: #pubDate が見つからない');
   if (submitButton === null) throw new Error('admin app: #submit が見つからない');
   if (newPostButton === null) throw new Error('admin app: #new-post が見つからない');
+  if (problemList === null) throw new Error('admin app: #problems が見つからない');
 
   /** **二重送信の防止はここ 1 箇所。** ボタンの disabled は表示にすぎない。 */
   let inFlight = false;
@@ -388,7 +425,14 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
    * `busy || problems.length > 0` に再計算する）。横から書いても次の打鍵で戻るので、
    * `setBusy` 経由で伝える。**未認証は「いま送信できない状態」**なので意味も合う。
    *
-   * **ここでリダイレクトしない。** 未認証は正常な状態のひとつである。
+   * **ここでリダイレクトしない。** この関数は毎 update 呼ばれるので、ここにブラウザの
+   * 全画面遷移を置くと、編集中にも送信を拒否されたあとにも飛ぶことになる。
+   * **起動時にセッションが無いときに送るかどうかは `auth/auto-sign-in.ts` が 1 回だけ
+   * 決める。**
+   *
+   * **未認証は正常な状態のひとつである。** サインアウト直後・認可サーバのエラーで戻った
+   * 直後・自動サインインが抑止されている読み込みでは、この状態が正しく見えていなければ
+   * ならない。
    */
   const renderAuthState = (): void => {
     const signedIn = deps.auth.isAuthenticated();
@@ -577,11 +621,11 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
         editor.setStatus(describeFailure(error), 'error');
         if (error instanceof ApiError && error.field !== undefined) {
           // API が指したフィールドを、クライアント側の指摘と同じ場所に出す。
-          const list = deps.root.querySelector('#problems');
+          // **参照は bind 時に取ったもの**（上の `problemList` の理由を参照）。
           const item = document.createElement('li');
           item.dataset['field'] = error.field;
           item.textContent = `${error.field}: API に拒否された`;
-          list?.appendChild(item);
+          problemList.appendChild(item);
         }
       })
       .finally(() => {
@@ -655,8 +699,20 @@ export const createApp = (deps: AppDeps): { destroy(): void } => {
   if (callbackMessage !== undefined) {
     editor.setStatus(callbackMessage, deps.callback?.kind === 'signed_in' ? 'ok' : 'error');
   } else if (!deps.auth.isAuthenticated()) {
-    editor.setStatus(SIGNED_OUT_MESSAGE);
+    // **callback の文が優先される既存の順序は変えない。** `kind === 'sign_in'` は
+    // callback が `no_callback` のときだけ起きる（`decideAutoSignIn` の段 2）ので、
+    // ここで衝突することはない。
+    editor.setStatus(deps.autoSignIn?.kind === 'sign_in' ? SIGNING_IN_MESSAGE : SIGNED_OUT_MESSAGE);
   }
+
+  // **遷移が予約できた読み込みでは「ログイン」を押させない。** `kind === 'sign_in'` は
+  // `signIn()` が解決したあと = 遷移が**既に予約されている**ときだけ返る。それでも数百ミリ秒
+  // 押せるので、押されると `pending-login` の単一スロットが新しい state で上書きされ、先に
+  // 予約した側の戻りが `state_mismatch` になる（下書きもセッションも失われないが、理由の
+  // 分からないエラーが 1 回出る）。**隠さず disabled にする**のは、何が起きているかを文
+  // （`SIGNING_IN_MESSAGE`）とボタンの状態の両方で言うため。`renderAuthState` は `hidden` と
+  // `setBusy` しか触らないので、ここで 1 度倒せば戻らない。
+  if (deps.autoSignIn?.kind === 'sign_in') signinButton.disabled = true;
 
   return {
     destroy: () => {
